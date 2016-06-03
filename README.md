@@ -1,4 +1,4 @@
-== Introduction ==
+## Introduction
 NewsReap is a library written to wrap around the NNTP protocol. It simplifies
 a lot of development. But it also comes with a standalone script that can allow
 you interface with your Usenet providers.
@@ -14,7 +14,7 @@ Some under the hood stuff that developers should appreciate about NewsReap are:
 * It's backend is based on SQLAlchemy making it really easy to adapt to your own projects.
 * It's front-end CLI is built using Click which allows anyone to extend it to their likings.
 
-== Installation ==
+## Installation
 ```bash
 # Initialize the database
 nr db init
@@ -35,7 +35,7 @@ nr alias add alt.binaries.sounds sounds
 
 ```
 
-== Search Usage ==
+## Search Usage
 Once the database is set up and being populated, it looks after
 generating you're configuration
 ```bash
@@ -66,7 +66,7 @@ nr search sintel -porn +720p
 nr search \+\+\+
 ```
 
-== Index Usage ==
+## Index Usage
 Indexing will iterate over the watched groups (or the ones specified)
 and build NZBFiles from content that can be grouped together.
 
@@ -87,7 +87,7 @@ cat << _EOF > /etc/cron.d/nzbindex
 _EOF
 ```
 
-== Downloading Usage ==
+## Downloading Usage
 If you know the article-id/Message-ID of the item in question, the following
 will retrieve it for you and save it based on your downloading configuration
 defined in your cofiguration file.
@@ -116,7 +116,7 @@ nr get /path/to/nzbfile.nzb
 nr get /path/to/nzbfile.nzb /another/path/to/nzbfile.nzb
 ```
 
-== Developers ==
+## Developers
 The core of this tool wraps around it's framework it provides
 
 ```python
