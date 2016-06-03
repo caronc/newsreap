@@ -1,0 +1,423 @@
+yEncode - A quick and dirty encoding for binaries
+---------------------------------------------------------------------------
+Version 1.2 - 28-Feb-2002 - by Juergen Helbing
+
+
+Revisions:
+v1.0, 31-Jul-2001 - Juergen Helbing (juergen@helbing.de)
+v1.1, 17-Feb-2002 - Steve Blinch (yenc32@esitemedia.com)
+v1.2, 28-Feb-2002 - Juergen Helbing (juergen@helbing.de)
+v1.3, 05-Mar-2002 - Juergen Helbing (juergen@helbing.de)
+
+Introduction
+---------------------------------------------------------------------------
+This document describes a mechanism for encoding arbitrary binary
+information for transmission by electronic mail and newsgroups.  Unlike
+similar encoding schemes, yEncode takes advantage of the entire 8-bit
+character set, rendering output only 1-2% larger than the original binary
+source.  
+
+
+Motivation
+---------------------------------------------------------------------------
+Existing mechanisms for transmission of binary information by electronic
+mail and newsgroups make use of only 7-bit ASCII text.  The resulting
+encoded data are up to 40% larger than the original binary information.
+
+yEncode intends to reduce the additional overhead of existing encoding
+schemes by taking advantage of the full 8-bit character set, which has
+become widely used and acceptable in Internet newsgroups.  Special
+consideration is provided for specific reserved ASCII control characters to
+avoid interference with existing message transfer protocols.
+
+The overhead of yEncoded binary data can be as little as 1-2%.  
+
+
+Encoding Principle
+---------------------------------------------------------------------------
+The encoding process represents each octet of input data with a single
+corresponding encoded output character.  The ASCII value of each output
+character is derived by the following simple formula:
+
+O = (I+42) % 256
+
+That is, the output value is equal to the ASCII value of each input
+character plus 42, all modulo 256.  This reduces overhead by reducing the
+number of NULL characters (ASCII 00) that would otherwise have had needed
+to be escaped, since many binaries contain a disproportionately large
+number of NULLs).
+
+Under special circumstances, a single escape character (ASCII 3Dh, "=") is
+used to indicate that the following output character is "critical", and
+requires special handling.
+
+Critical characters include the following:
+
+ASCII 00h (NULL)
+ASCII 0Ah (LF)
+ASCII 0Dh (CR)
+ASCII 3Dh (=)
+
+> ASCII 09h (TAB)  -- removed in version (1.2)
+
+These characters should always be escaped.  Additionally, technique used to
+encode critical characters (described in the next section) provides for any
+character to be escaped; yDecoder implementations should be capable of
+decoding any character following an escape sequence.
+
+The probability of occurance of these 4 characters in binary input data is
+approximately 0.4%.  On average, escape sequences cause approximately 1.6%
+overhead when only these 4 characters are escaped.
+
+The carriage return/linefeed overhead for every line depends on the
+developer-defined line length.  Header and trailer lines are relatively
+small, and cause negligible impact on output size.  
+
+>(1.2) Careful writers of encoders will encode TAB (09h) SPACES (20h)
+>if they would appear in the first or last column of a line.
+>Implementors who write directly to a TCP stream will care about the
+doubling of dots in the first column - or also encode a DOT in the 
+first column.
+
+
+Encoding Technique
+---------------------------------------------------------------------------
+A typical encoding process might look something like this:
+
+
+ 1. Fetch a character from the input stream.  
+ 2. Increment the character's ASCII value by 42, modulo 256 
+ 3. If the result is a critical character (as defined in the previous
+    section), write the escape character to the output stream and increment
+    character's ASCII value by 64, modulo 256.  
+ 4. Output the character to the output stream.  
+ 5. Repeat from start.  
+
+
+To facilitate transmission via existing standard protocols (most notably
+NNTP), carriage return/linefeed pairs should be written to the output
+stream after every n characters, where n is the desired line length.  
+Typical values for n are 128 and 256.
+>(1.2) See additional experience information
+
+If a critical character appears in the nth position of a line, both the
+escape character and the encoded critical character must be written to the
+same line, before the carriage return/linefeed.  In this event, the actual
+number of  characters in the line is equal to n+1.  Effectively, this means
+that a line cannot end with an escape character, and that a line with n+1
+characters must end with an encoded critical character.  
+
+
+Headers and Trailers
+---------------------------------------------------------------------------
+Similar to other binary encoding mechanisms, yEncode makes use of special
+keyword lines to mark the beginning and end of encoded data blocks.  These
+blocks may be embedded in any standard 8-bit ASCII text file.  yDecoder
+implementations must ignore any text outside the header/trailer blocks.
+
+All keyword lines must begin with an escape character ('='), followed by an
+ASCII 79h ('y').  This '=y' combination uniquely identifies a line as a
+keyword line, since 'y' is not a valid encoded critical character.
+
+Header and trailer keyword lines always begin with an escape character,
+followed by a keyword indicating the line type, followed by any keywords
+appropriate for that particular line type.
+
+A typical header line should look similar to this:
+
+
+=ybegin line=128 size=123456 name=mybinary.dat
+
+
+>(1.2) Future versions of yEnc (if any) might use a different keyword
+> than =ybegin. Perhaps "=ybegin2". Decoders should scan for "=ybegin "
+> - with a SPACE behind =ybegin.
+
+>(1.2) If the parameters "line=" "size=" "name=" are not present then
+>the =ybegin might be part of a text-message with a discussion about
+>yEnc. In such cases the decoder should assume that there is no binary. 
+
+
+Header lines must always begin with the "ybegin" keyword, and contain the
+typical line length, the size of the original unencoded binary (in bytes),
+and the name of the original binary file.
+
+The filename must always be the last item on the header line.  This ensures
+that all characters and character sequences may be included in the filename
+without interfering with other keywords.  Although quotes (ASCII 22h, '"')
+are technically permitted, they are not recommended for use in filenames.
+
+> (1.2): Leading and trailing spaces will be cut by decoders!
+> (1.2): See additional experience information
+> Implementors of decoders should be careful about the filename.
+> It can contain non-US-ASCII-characters (80h-FFh), control-characters
+> (01h..1Fh), and characters which conflict with the current platform:
+> / \  < | > : ? * @  
+> It can be a very long parameter (up to 256 characters).
+ 
+
+A typical trailer line should look similar to this:
+
+
+=yend size=123456
+		
+
+Trailer lines must always begin with the "yend" keyword, and must contain
+the size of the original unencoded binary (in bytes).
+
+The size of the original binary must be repeated in the trailer for
+redundancy checking.  yDecoder implementations should compare the header
+size value with both the trailer size value and the actual size of the
+resulting decoded binary.  If any of these three values differ then the
+attachment is corrupt, and a warning must be issued; the resulting decoded
+binary must be discarded.  (1.2) See additional experience information
+
+
+Verifying Integrity
+---------------------------------------------------------------------------
+yEncoded documents may also include a 32-bit Cyclic Redundancy Check (CRC)
+value, to assist in verifying the integrity of the encoded binary data.
+
+A CRC32 value, if present, should be included as a "crc32" keyword in the
+trailer line.  Such a trailer line might look similar to this:
+
+
+=yend size=123456 crc32=abcdef12
+		
+
+It should be noted that CRC32 values are not mandatory, but should, if
+possible, be processed if present.  
+
+>(1.2) See additional experience information
+
+Sample yEncoded File Part
+---------------------------------------------------------------------------
+The following is an excerpt from an actual yEncoded file block:
+
+
+=ybegin line=128 size=111401 name=al_larsonbw030_ball.jpg 
+)_)=J*:tpsp*++++V+V**)_*m*0./0/.00/011024:44334>896:A>....
+....
+....
+....R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴
+´R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴Rͩ)_
+=yend size=111401 
+
+
+Complete yEncoded file samples are also available at www.yenc.org.  
+
+
+Multi-part Encoded Binaries
+---------------------------------------------------------------------------
+It is frequently desirable to split large binary files into multiple parts
+for transmissio n over the Internet.  Such binaries are often rendered
+unusable by missing parts and/or data corruption.
+
+To address these problems, yEncode defines an additional keyword line,
+"ypart", and several additional keywords to handle multipart binaries.
+
+Each individual file part begins with a standard "ybegin" header line, but
+an additional keyword, "part", is added to specify the part number and
+identify the file as a multipart binary.
+
+When the "part" keyword is included in a header line, the following line
+must be a "ypart" keyword line which specifies information about the part. 
+The "ypart" keyword line requires a "begin" and "end" keyword; these
+specify the starting and ending points, in bytes, of the block in the
+original file.
+
+The file part must end with a slightly modified "ypart" trailer line.  An
+additional keyword, "part", is added to specify the part number.  This part
+number must match the part number found in the header line.
+
+> (1.2) An additional keyword "total" should be also added.
+> This total number must match the total number of parts found in the header 
+> line. First implementation of yEnc do NOT include this parameter.
+
+The trailer line must also contain a "pcrc32" keyword representing the
+CRC32 of the preceeding encoded part.  As always, it is also desirable (but
+not required) to include a "crc32" keyword representing the CRC32 of the
+entire encoded binary.
+
+Unlike single-part yEncoded documents, the "size" keyword in the trailer
+lines of multipart encoded binaries must represent the size of the file
+part, not the size of the entire file.  To verify integrity, a decoder
+implementation must recompute the expected part size from the "begin" and
+"end" keyword values in the "ypart" line.  If the expected part size
+differs from the part size specified in the "yend" line, the file is
+corrupt.
+
+A sample multipart encoded binary might look similar to this:
+
+
+> (1.1) =ybegin part=1          line=128 size=500000 name=mybinary.dat
+> (1.2) =ybegin part=1 total=10 line=128 size=500000 name=mybinary.dat
+=ypart begin=1 end=100000
+.... data
+=yend size=100000 part=1 pcrc32=abcdef12 
+
+
+=ybegin part=5 line=128 size=500000 name=mybinary.dat
+=ypart begin=400001 end=500000 
+.... data
+=yend size=100000 part=10 pcrc32=12a45c78 crc32=abcdef12 
+		
+
+It should be noted that if a decoder does not implement multipart support,
+or fails to detect a multipart encoded binary, then it will not
+successfully decode the individual file parts because the "size" keyword in
+the "ybegin" line will differ from the "size" keyword in the "yend" line.
+
+Multipart binaries are usually quite sensitive to corruption.  Transferring
+hundreds of megabytes in vain, simply because a corrupt part cannot be
+identified is a significant waste of bandwidth.
+
+Using the "begin" and "end" keywords, yEncode allows decoders to identify
+the position of an individual part in a larger file, which allows parts to
+be combined from several different sources regardless of the part size. 
+This feature is unique to yEncode, and is very easy to include in an
+encoder implementation.  
+
+
+Subject Line Conventions
+---------------------------------------------------------------------------
+Standard single-part yEncoded binaries require no special conventions for
+the subject line.  It is recommended, however, that yEncoded binaries be
+specifically identified as such, until the yEncode encoding format becomes
+more widely implemented.
+
+The suggested format for subject lines for single-part binaries is:
+
+[Comment1] "filename" 12345 yEnc bytes [Comment2]
+
+[Comment1] and [Comment2] are optional.  The filename should always be
+enclosed in quotes; this allows for easy detection, even when the filename 
+includes spaces or other special characters.  The word "yEnc" should be
+placed in between the file size and the word "bytes".
+> (1.2) see additional experience information
+> Placing the word "yEnc" between filename+bytes or bytes+comment2
+> is acceptable.
+
+Multi-part archives should always be identified as such.  As with
+single-part binaries, they should also be identified as yEncoded until
+yEncoding becomes more mainstream.
+
+The (strongly) recommended format for subject lines for multi-part binaries
+is:
+
+[Comment1] "filename" yEnc (partnum/numparts) [size] [Comment2]
+
+Again, [Comment1] and [Comment2] are optional.  The [size] value is also
+optional here.  The filename must be included, in quotes.  The keyword
+"yEnc" is mandatory, and must appear between the filename and the size (or
+Comment2, if size is omitted).  Future revisions of the draft may specify
+additional information may be inserted between the "yEnc" keyword and the
+opening parenthesis of the part number.  
+> (1.2) see additional experience information
+> Placing the word "yEnc" between (#/#)+size or size+comment2
+> is acceptable.
+
+
+>(1.2) Handling of corrupt messages
+>(1.2) -------------------------------------------------------------------
+
+Decoders should use error-detection whenever possible.
+The user should be notified about corrupt messages.
+If warnings are disabled then it is strongly recommended to store
+binaries with an error-text in the filename. Examples:
+
+picture(size-error).jpg
+homemovie(crc32-error).avi
+document(line-error).rtf
+longmusic(missing-parts).mp3
+
+It is acceptable to store also corrupt binaries
+(some might be even partially usable).
+But it is _not_ acceptable to hide detected errors from the user entirely.
+
+yEnc has the design target to _detect_ corruption.
+Advanced newsreaders might fetch corrupt messages even from other sources.
+
+
+
+Protection and Copyright
+---------------------------------------------------------------------------
+The yEncode encoding method is released into the public domain.  Everyone
+is permitted to copy it, to use it, and to implement it.
+
+Neither this document nor the yEncode encoding method may be patented,
+protected, or restricted in any way.  Everyone should benefit from it, and
+its predecessors.
+
+This document may be freely distributed, as long as credit remains with the
+original author(s).  Do not claim that it's your own work!
+
+Public domain example software is also available at www.yenc.org.  
+
+
+Credits
+---------------------------------------------------------------------------
+This document has been created based on my [Juergen Helbing] own personal
+experience, and help and input from a few Usenet activists.  Thanks to:
+
+Jeremy Nixon
+Curt Welch
+Ed
+Andrew
+Stuart
+JBerg
+Marco d'Itri
+The Meowbot
+Jan Ingvoldstat
+The UseFor taskforce
+(others - please remind me!)
+....
+
+Draft revised (02/17/02) by Steve Blinch 
+Draft extended (02/28/02) by Juergen Helbing
+
+
+Conclusion
+---------------------------------------------------------------------------
+This is an informal proposal, not an RFC.  Your input is greatly
+appreciated.  The author is just a poor programmer - with a few years of
+binary experience.
+
+Thanks for reading.
+
+Juergen Helbing (yenc@infostar.de) 
+
+
+
+----------------------- 
+Changes from 1.1 -> 1.2
+-----------------------
+
+The "total=" parameter has been added to =ybegin
+
+TAB is no longer a critical character
+No. of critical characters is now 4 (old: 5)
+
+Leading TABs & SPACEs, Trailing TABs and SPACEs and leading DOTs 
+may be encoded as critical characters.
+
+Additional hints for filenames
+Additional hints for corrupted by size-value
+Additional hints for position of "yEnc" keyword
+Additional  hints for line sizes
+
+Scanning for the keword =ybegin should scan for "=ybegin " with
+a SPACE at the end - for avoiding conflicts with successor versions
+of yEnc "=ybegin2 ".
+Missing parameters behind =ybegin  
+
+Handling of corrupt messages.
+Mailbox changed
+
+
+Changes from 1.2 -> 1.3
+-----------------------
+"the proceeding character" --> "the following character" (N.R.)
+"modulo 255" -> "modulo 256"  (J.H.)
+"should be encoded" -> "may be encoded" (J.B.)
+

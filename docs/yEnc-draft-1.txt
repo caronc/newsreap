@@ -1,0 +1,257 @@
+yEncode - A quick and dirty encoding for binaries
+--------------------------------------------------
+Version 1.0 - 31-July-2001 - by Juergen@Helbing.de
+
+
+   Motivation
+   ---------
+Transporting binaries by eMail or Usenet is done today with 7-bit encodings which 
+add a lot of overhead and require up to 40% of more bandwidth than necessary. 
+UUencode, base64, binhex, ......
+
+yEncode is a quick approach to introduce an encoding which uses the fact that 
+8-bit transmission is now widely used and acceptable - but respects the fact 
+that some special binary codes are reserved.
+
+The overhead of a yEncoded binary can be 1-2% - so it is worth the effort.
+
+
+   Principle
+   --------
+The principle of encoding is really simple: A few special characters are reserved 
+from the 8-bit-charset, one character is used as escape character to encode the 
+'critical' ones.
+Critical characters are usually: NULL, TAB, CR, LF.
+  (The list could be easily extended - if necessary)
+As escape character we use the '=' equal sign.
+
+A lot of binaries are using a lot of NULL characters - so the entire character 
+table is rotated by 42:  0-> 42, 1->43, .... 255 -> 41
+So just a few exotic bytes will be encoded with the escape character. 
+And these 'exotic' codes have usually a probability of 0.4%.
+With 5 'critical' characters up to 2% of overhead are produced.
+The CRLF-overhead for every line depends on the (flexible) line size and would 
+be another 1-2%. The 'lean-in' and 'lead-out' lines are tiny in a large binary.
+
+
+   Inner encoding loop
+   -------------------
+So the 'inner loop encoding' is:
+* Fetch the character
+* Add 42
+* Check for NULL, TAB(ascii 9), LF(ascii 10), CR (ascii 13) and '='
+* If one of the critical chars encounters then write '=' as escape
+  character to the output stream followed by the critical+64.
+  (NULL -> =@,   TAB --> =I,  LF --> =J,  CR --> =M,  '=' --> =}
+
+
+For allowing proper transport we will create only 128/129 or 256/257 characters 
+in the output stream. Then a CRLF is added to terminate a line. This adds 
+redundancy - but still allows to view such a file
+with regular tools and ascii-editors. Of course the last line is shorter.
+
+The 128/129 line length happens because the escape charcter is never wrapped 
+to a new line - but always combined with its predecessor.
+So a line with 128 bytes cannot end with '=' and a line with 129 bytes MUST 
+end with an escape-sequence.
+(Ths makes encoders & decoders & environmental information far easier).
+
+   Headers and Trailers
+   --------------------
+It might be possible to embedd such an encoding into the MIME standard 
+- but this takes a long time - and that standard does not add value. 
+So most q&d programmers do not implement it.
+(Whoever wants to define the MIME types and add them to the standard is 
+invited to do/try - the author is programmer, not a chair).
+
+For making things as EASY as possible the yEncoding is introduced in a 
+similar way to UUencoding. A 'keyword line' starts the yEncoded part, 
+another 'keyword line' stops it. So it is again possible to add an yEncoded 
+to a normal 8-bit-Text-stream and decode it from there. Any kind of text 
+file on every computer system can be created or decoded.
+
+The header line:   =ybegin line=128 size=123456 name=mybinary.dat
+
+=ybegin is so special, that you wont find it 'by mistake'.
+(This is similar to 'begin 644 ' from UUencoding)
+
+yEncode adds ALWAYS the typical size of a line, the size of the 
+attached binary and - at the end - the name of the file.
+Because _name= cannot be used elsewhere the name can include all possible 
+charcters - and is easy to find. However quotes are not recommended (")!
+
+
+The trailer line:   =yend size=123456
+
+=yend is again similar to UUencode (end).
+The combination =y at the line start cannot occur elsewhere
+- because '=' is the escape char and 'Ctrl+Y' is not an escaped character.
+
+The repeated size is _mandantory_ for redundancy checks.
+Every decoder should compare the value in the =ybegin line with the value 
+in the =yend line AND the really found bytes.
+If any of these three values is different, then the attachment is corrupt 
+- and a warning to the user must be issued - the resulting, decoded binary 
+file must not stay on the harddisk in this case.
+
+
+   Options
+   -------
+There are options to the header/trailer lines:
+
+* CRC-32-Value - to guarantee data integrity
+
+Example:  =yend size=123456 crc32=abcdef12
+The CRC value _can_ be used in the trailer line to improve data integrity.
+
+
+   Example for a 'simple' real yEncoded part:
+   ------------------------------------------
+
+=ybegin line=128 size=111401 name=al_larsonbw030_ball.jpg 
+)_)=J*:tpsp*++++V+V**)_*m*0./0/.00/011024:44334>896:A>....
+....
+....
+R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R....
+�R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R̴R��)_
+=yend size=111401 
+
+
+
+
+
+
+   Multi part splitting
+   --------------------
+A common problem today are very long binaries which are splitted into parts. 
+The problems are incompleteness and corruption of parts.
+yEncode offers a method to verify the validity of a splitted message:
+
+All message-parts are collected from the input source (Mail, News, ...) They 
+can be identified by a counter in the message-subject-line (001/123)   (002/123) ... (123/123).
+
+The single messages are yEncoded as usually. So _every_ message contains a  
+=ybegin  and  =yend  line (for one part). But an additional line is used:
+
+Example:
+
+=ybegin part=1 line=128 size=500000 name=mybinary.dat
+=ypart begin=1 end=100000
+.... data
+=yend size=100000 part=1 pcrc32=abcdef12 
+
+
+=ybegin part=5 line=128 size=500000 name=mybinary.dat
+=ypart begin=400001 end=500000 
+.... data
+=yend size=100000 part=10 pcrc32=12a45c78 crc32=abcdef12 
+
+If the keyword 'part=' occurs in the  =ybegin  line then a multi part message 
+is expected and the next line MUST specify that part.
+The specification of the part is the position of the first and the last byte 
+of the part which is encoded in this message.
+
+In these cases the =yend line is also extended. It MUST contain the same 
+part number - and it MUST contain also a computed crc32 value for the range 
+in this part (pcrc=). Again there should be also a crc-value for the entire post. 
+But this is not a must - especially if the sending is done on several days.
+You should noticy that the SIZE= in the ?yend line is the line of one part, 
+not of the entire file. It must be recomputed from the first and last position 
+in the =ypart line. If a decoder fails to detect the multiparts (because they 
+are not implemented), then he will not decode single parts because the sizes 
+are different !
+
+Multipart binaries are usually very sensitive to corruption and transporting 
+hundreds of Megabytes in vain just because nobody can identify which part is 
+defective is a giantic waste of bandwidth (and nerves).
+The strategy to identify the position of a multi part in a larger file permits 
+the decoder even to collect binary information from several posts - even with 
+different part sizes !
+No other binary encoding supports such features - and they are so easy to implement 
+(during sending ;-).
+
+The 'more formal' description for multipart encoding is:
+
+If a binary is sent in multiple splitted parts, then the =ybegin line is extended 
+by a 'part=' keyword. If the 'part=' appears there, then the next line defines 
+the position of the part in the file:
+=ypart begin=#### end=#####
+For multi parts the =yend line must also contain the same part number plus a 
+calculated crc32 value (pcrc32=xxxxxxxx).
+A regular crc32 value for the entire binary file is recommended in the last 
+part's =yend line.
+
+
+   Subject line conventions
+   ------------------------
+Normal 'single part' yEncoded binaries need no special conventions for the 
+subject line. However because they will be unusual in the first time - and 
+perhaps some providers cannot carry them - they should be marked also. 
+So this is only a recommendation:
+
+Subject: [Comment1]  "filename" 123456 yEnc bytes  [Comment2]
+
+The [comments] are optional.
+The filename should be enclosed into quotes. This allows easy detection of 
+filenames - even with spaces in them.
+The string  yEnc  should be placed between the filesize and the word bytes 
+- which are following the filename.
+
+
+Multipart binaries should _always_ be marked!
+Downloading one GigaByte first and seeing it was senseless is extremely frustrating!
+
+Subject: [Comment1] "filename" yEnc (1/512) [size] [Comment2]
+
+Again the comments are both optional. The [size] is also optional here. 
+The Filename _must_ be included into quotes and the keyword 'yEnc' is mandantory.
+Additional information for later implementation will be inserted between 
+yEnc and the '('.
+
+
+   Protection and Copyright
+   ------------------------
+This encoding method is released to the public domain.
+Everybody is permitted to copy it, to use it, to implement it.
+Public domain example software is also available.
+It is not possible to create a patent or protect it in any way.
+Everybody should benefit from it... and its predecessors.
+This document can be freely distributed. But please dont claim that it would 
+be your own work!
+
+
+   Credits
+   -------
+This document has been created based on my own experience and the help and 
+input from a few Usenet activists. Thanks to:
+   Jeremy Nixon
+   Curt Welch
+   Ed
+   Andrew
+   Stuart
+   JBerg
+   Marco d'Itri
+   The Meowbot
+   Jan Ingvoldstat
+   The UseFor taskforce
+   nn (Please remind me)
+   .... 
+
+
+   Conclusion
+   ----------
+This is a proposal - not a draft and no rfc.
+Your input is highly appreciated.
+The author is just a poor programmer 
+- with a few years of binary experince.
+
+Thanks for reading.
+
+Juergen Helbing
+-------------------------------
+archiver@i3w.com (The Archiver)
+
+-----------------------------------------------------------------
+Disclaimer: English is not my native language. This text contains mistakes 
+in spelling, grammer and style. And it is a poor translation for my intentions.
+
