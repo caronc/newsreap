@@ -14,6 +14,8 @@ Some under the hood stuff that developers should appreciate about NewsReap are:
 * It's backend is based on SQLAlchemy making it really easy to adapt to your own projects.
 * It's front-end CLI is built using Click which allows anyone to extend it to their likings.
 
+__Note:__ This is a work in progress; a lot of what is documented here is what the final solution will be.  But it is definitely not there yet!  The backend is in good shape, but the CLI tool is what needs to be worked on next.
+
 ## Installation
 ```bash
 # Initialize the database
