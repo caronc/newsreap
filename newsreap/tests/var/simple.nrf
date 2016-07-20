@@ -1,0 +1,35 @@
+# NRF files stand for NewsReap Filters and provide up to 3 kinds of filters:
+#     B: Blacklist
+#     W: Whitelist
+#     S: Scorelist
+#
+# Scorelist (S) entries additionally requires a score as part of their type
+# If no score is specified, then it is assumed to be assumed to be 100 (or +100)
+#
+# You can freely use hashtags to comment out entries in these files for
+# documentation purposes.
+#
+# The second part of the code identifies what the regular expression should be
+# applied against.
+#
+#  - The common 
+#     S: Subject (default)
+#     P: Poster
+#
+#  - The following are for whitelists and blacklists only:
+#     >: Score Greater Than
+#     <: Score Greater Than
+#     =: Score Equals
+
+# Scores are always applied first; since scoring doesn't directly impact the
+# article itself, every score entry specified is applied.
+#
+# Blacklist any malicious content
+BS            .*          .*\.(exe|sc(f|r)|vb(e|s)?|pif|application|gadget|ms(c|h|i|p)|hta|jar|bat|c(md|om|pl)|jse?|ws(f|c|h)?|lnk|inf|reg|psc?(1|2)(xml)?|ms(h(1|2)(xml)?|1|2|))[\s"\'].*
+
+# Score media files
+SS+25         alt.bin.*    .*\.(avi|m(p(4|eg|g)|kv|ov)|asf|ogg|iso|rm)(\.[0-9]{3})?[\s"\'].*
+SS+15         alt.bin.*    .*\.(jpe?g|png|bmp|gif)[\s"\'].*
+SS+25         alt.bin.*    .*\.(r(ar|[0-9]{2})|7z|z(ip|[0-9]{2})|tgz|tar\.gz)(\.[0-9]{3})?[\s"\'].*
+SS+10         alt.bin.*    .*\.(par2?)[\s"\'].*
+SS+5          alt.bin.*    .*\.(txt|nfo)[\s"\'].*
