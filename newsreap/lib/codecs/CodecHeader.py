@@ -241,6 +241,11 @@ class CodecHeader(CodecBase):
         """
         return repr(self)
 
+    def __len__(self):
+        """
+        Returns the dictionary length
+        """
+        return len(self.decoded)
 
     def __repr__(self):
         """
