@@ -167,11 +167,22 @@ class SocketBase(object):
         self.bytes_in = 0
         self.bytes_out = 0
 
-    def __del__(self):
+    def get_ssl_context(self):
         """
-        Handle object destruction be closing off any open connections
+        Returns an SSL Context Object while handling the many
+        supported protocols
         """
-        self.close()
+        while self.secure_protocol_idx < len(SECURE_PROTOCOL_PRIORITY):
+            try:
+                return SSL.Context(
+                    SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][0],
+                )
+            except ValueError:
+                # Invalid Protocol Type; try another
+                self.secure_protocol_idx += 1
+
+        # If we reach here, we had a problem
+        raise SocketException('There were no secure protocols left to try.')
 
     def can_read(self, timeout=0.0):
         """
@@ -280,7 +291,8 @@ class SocketBase(object):
 
     def bind(self, timeout=None, retries=3, retry_wait=10.0):
         """
-          Perform socket binding if nessisary
+          Perform socket binding if nessisary but otherwise this
+          performs the connection itself
         """
 
         # Ensure we are not connected
@@ -297,9 +309,7 @@ class SocketBase(object):
             elif self.mode == ConnectionType.SECURE_CONNECT:
                 # Create & Secure a new socket
                 self.socket = SSL.Connection(
-                    SSL.Context(
-                        SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][0],
-                    ),
+                    self.get_ssl_context(),
                     socket.socket(
                         socket.AF_INET,
                         socket.SOCK_STREAM,
@@ -774,6 +784,11 @@ class SocketBase(object):
 
         return tot_bytes
 
+    def __del__(self):
+        """
+        Handle object destruction be closing off any open connections
+        """
+        self.close()
 
     def __str__(self):
         if self.mode == ConnectionType.SECURE_CONNECT:
