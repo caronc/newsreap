@@ -1,9 +1,9 @@
 
-=== Linux Distribution ===
+## Linux Distribution
 If you're using a mainstream Linux distribution then there
 isn't a whole lot needed to get you all set up.
 
-==== Red Hat / CentOS 6 & 7 ====
+### Red Hat / CentOS 6 & 7
 This is my personal favorite choice; the OS is usually always a bit outdated, but with it comes so much stability.
 ```bash
 # Install the nessisary dependencies; feel free to
@@ -20,8 +20,7 @@ sudo yum --enablerepo=nuxref* --best install \
 
 # You're done; go ahead and use the newsreap tools
 ```
-Fedora 22
-==========
+### Fedora 22
 ```bash
 # Install the nessisary dependencies; feel free to
 # connect to the repository on nuxref for them if they
@@ -39,14 +38,14 @@ sudo dnf --enablerepo=nuxref* --best install \
 # You're done; go ahead and use the newsreap tools
 ```
 
-=== Virtualenv ===
+### Virtualenv
 Python Virtual Environments are kind of handy to have but are a little trickier to work with.  Explaining these here is probably a bit overkill. They are
 maybe only needed for that hardcore developer who's working on newsreap as
 well as other apps and doesn't want my python dependencies colliding with
 there other ones. This is more advanced and not for everyone.
 
-==== Step 1: The Environment Setup ====
-===== Red Hat / CentOS 6 & 7 =====
+#### Step 1: The Environment Setup
+##### Red Hat / CentOS 6 & 7
 ```bash
 sudo yum install python-virtualenv python-pip curl \
              python-virtualenvwrapper gcc
@@ -58,8 +57,7 @@ sudo yum install python-virtualenv python-pip curl \
 # Create a new newsreap virtualenv
 mkvirtualenv -p python2.7 newsreap
 ```
-
-===== Fedora 22+ =====
+##### Fedora 22+
 ```bash
 sudo dnf install python-virtualenv python-pip curl \
              python-virtualenvwrapper gcc
@@ -72,8 +70,7 @@ sudo dnf install python-virtualenv python-pip curl \
 # Create a new newsreap virtualenv
 mkvirtualenv -p python2.7 newsreap
 ```
-
-===== Ubuntu & Debian =====
+##### Ubuntu & Debian
 ```
 sudo apt-get install virtualenv \
         python-pip unzip gcc
@@ -91,8 +88,7 @@ source /etc/bash_completion.d/virtualenvwrapper
 # Create a new newsreap virtualenv
 mkvirtualenv -p python2.7 newsreap
 ```
-
-===== Windows =====
+##### Windows
 ```bash
 # make sure pip is installed (it comes with python when you
 # download it and install it:
@@ -103,7 +99,7 @@ pip install virtualenvwrapper-win
 mkvirtualenv -p python2.7 newsreap
 ```
 
-==== Step 2: The Environment Acess ====
+#### Step 2: The Environment
 Once you've got your virtual environment set up, you
 can interact with it at anytime:
 ```bash
