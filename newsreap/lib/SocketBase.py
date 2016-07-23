@@ -16,14 +16,15 @@
 
 from gevent import sleep
 from gevent import socket
+from gevent import ssl
 from gevent import Timeout
 from gevent.select import select
 from gevent.select import error as SelectError
+
 import gevent.monkey
 gevent.monkey.patch_all()
 
 import errno
-import ssl
 from datetime import datetime
 
 # Logging
@@ -45,8 +46,8 @@ class ConnectionType:
     SECURE_CONNECT = 'ssl_connect'
     # Listen for a connection
     LISTEN = 'listen'
-
-    # TODO: create an exlusive TLS connect
+    # Listen for a secure connection
+    SECURE_LISTEN = 'ssl_listen'
 
 try:
     SECURE_PROTOCOL_PRIORITY = (
@@ -58,6 +59,7 @@ try:
 
         # The following are not 100% secure but are sometimes
         # the only option
+         (ssl.PROTOCOL_SSLv2, u'SSL v2.0'),
          (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
     )
 
@@ -70,9 +72,9 @@ except AttributeError:
 
         # The following are not 100% secure but are sometimes
         # the only option
+         (ssl.PROTOCOL_SSLv2, u'SSL v2.0'),
          (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
     )
-
 
 class SignalCaughtException(Exception):
     """ Generic Signal Caught Exception;
@@ -90,35 +92,6 @@ class SocketException(Exception):
 class SocketRetryLimit(Exception):
     """generic socket manager exception for retry limits reached class"""
     pass
-
-try:
-    from OpenSSL import SSL
-    WantReadError = SSL.WantReadError
-    SSLSocketError = SSL.SysCallError
-    ZeroReturnError = SSL.ZeroReturnError
-
-except ImportError:
-    # Support systems without SSL Support
-    class DummySSLException(Exception):
-        pass
-
-    class WantReadError(Exception):
-        def __init__(self, value):
-            self.param = value
-
-    class ZeroReturnError(Exception):
-        def __init__(self, value):
-            self.param = value
-
-    class SSLSocketError(Exception):
-        def __init__(self, value):
-            self.param = value
-
-        def __str__(self):
-            return repr(self.param)
-
-    class SSL(object):
-        Error = DummySSLException
 
 
 class SocketBase(object):
@@ -167,19 +140,19 @@ class SocketBase(object):
         self.bytes_in = 0
         self.bytes_out = 0
 
-    def get_ssl_context(self):
+    def get_ssl_version(self, try_next=False):
         """
         Returns an SSL Context Object while handling the many
         supported protocols
         """
+
+        if try_next:
+            # Increment version
+            self.secure_protocol_idx += 1
+
         while self.secure_protocol_idx < len(SECURE_PROTOCOL_PRIORITY):
-            try:
-                return SSL.Context(
-                    SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][0],
-                )
-            except ValueError:
-                # Invalid Protocol Type; try another
-                self.secure_protocol_idx += 1
+            # Now return it
+            return SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][0]
 
         # If we reach here, we had a problem
         raise SocketException('There were no secure protocols left to try.')
@@ -189,12 +162,15 @@ class SocketBase(object):
         Checks if there is data that can be read from the
         socket (if open). Returns True if there is data and
         False if not.
+
+        It returns None if something very bad happens such as
+        a dead connection (bad file descriptor), etc
         """
 
         # rs = Read Sockets
         # ws = Write Sockets
         # es = Error Sockets
-        if self.connected and self.socket:
+        if self.socket is not None:
             try:
                 rs, _, es = select([self.socket] , [], [], timeout)
             except (SelectError, socket.error), e:
@@ -210,7 +186,7 @@ class SocketBase(object):
 
             return len(rs) > 0
 
-        # Really Bad; no socket
+        # no socket or no connection
         return None
 
 
@@ -219,12 +195,15 @@ class SocketBase(object):
         Checks if there is data that can be written to the
         socket (if open). Returns True if writing is possible and
         False if not.
+
+        It returns None if something very bad happens such as
+        a dead connection (bad file descriptor), etc
         """
 
         # rs = Read Sockets
         # ws = Write Sockets
         # es = Error Sockets
-        if self.connected and self.socket:
+        if self.socket is not None:
             try:
                 _, ws, es = select([], [self.socket] , [], timeout)
             except (SelectError, socket.error), e:
@@ -240,7 +219,7 @@ class SocketBase(object):
 
             return len(ws) > 0
 
-        # Really Bad; no socket
+        # no socket or no connection
         return None
 
 
@@ -302,19 +281,8 @@ class SocketBase(object):
         established = False
 
         while not established:
-            if self.mode == ConnectionType.CONNECT:
-                # Create a new socket
-                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-            elif self.mode == ConnectionType.SECURE_CONNECT:
-                # Create & Secure a new socket
-                self.socket = SSL.Connection(
-                    self.get_ssl_context(),
-                    socket.socket(
-                        socket.AF_INET,
-                        socket.SOCK_STREAM,
-                    ),
-                )
+            # Create a new socket
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
             # Set Reuse Address flag
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -414,28 +382,81 @@ class SocketBase(object):
                     int(self.port),
                 ))
 
+                # Disable Blocking
+                self.socket.setblocking(False)
+
                 logger.info("Connection established to %s", connection_str)
 
-                if self.mode == ConnectionType.SECURE_CONNECT:
-                    while True:
-                        try:
-                            self.socket.do_handshake()
-                            logger.info("Secured connection using %s." % (
-                                SECURE_PROTOCOL_PRIORITY\
-                                    [self.secure_protocol_idx][1],
-                            ))
+                if self.mode == ConnectionType.CONNECT:
+                    # A non secure connection; we're done
+                    break
 
-                            # Store our certificate
-                            self.peer_certificate = self.socket.get_peer_certificate()
-                            break
+                # Wrap our socket with the SSLSocket Object
+                self.socket = ssl.wrap_socket(
+                    self.socket,
+                    cert_reqs=ssl.CERT_NONE,
+                    ssl_version=self.get_ssl_version(),
+                    do_handshake_on_connect=False,
+                    suppress_ragged_eofs=True,
+                )
 
-                        except WantReadError, e:
-                            self.can_read()
+                while True:
+                    # Infinit loop is nessisary for do_handshake() wrapping
+                    # we'll either exit this loop with a secure connection
+                    # or we'll time out and gracefully exit.
+                    try:
+                        self.socket.do_handshake()
+                        logger.info("Secured connection using %s." % (
+                            SECURE_PROTOCOL_PRIORITY\
+                                [self.secure_protocol_idx][1],
+                        ))
 
-                # We're Done
-                break
+                        # Store our certificate
+                        self.peer_certificate = \
+                            self.socket.getpeercert(binary_form=False)
 
-            except SSLSocketError, e:
+                        # TODO: Verify hostname if required to do so
+
+                        # We're done
+                        self.connected = True
+                        return True
+
+                    except ssl.SSLWantReadError, e:
+                        # SSL Connection will block until it is ready
+                        # The problem with this is can_read() and can_write()
+                        # all return True.  the socket needs more time
+                        # though to initialize so we have to call sleep here
+                        if self.can_read(retry_wait) is None:
+                            self.close()
+                            raise SocketException('Connection broken')
+                        continue
+
+                    except ssl.SSLWantWriteError, e:
+                        # SSL Connection will block until it is ready
+                        # The problem with this is can_read() and can_write()
+                        # all return True.  the socket needs more time
+                        # though to initialize so we have to call sleep here
+                        if self.can_write(retry_wait) is None:
+                            self.close()
+                            raise SocketException('Connection broken')
+                            continue
+
+                    if timeout:
+                        # Update Elapsed Time
+                        elapsed_time = datetime.now() - cur_time
+                        elapsed_time = (elapsed_time.days * 86400) \
+                                         + elapsed_time.seconds \
+                                         + (elapsed_time.microseconds/1e6)
+
+                        if elapsed_time > timeout:
+                            # Times up
+                            self.close()
+                            raise SocketException(
+                                'Secure Connection Timeout')
+                # Throttle retry
+                sleep(retry_wait)
+
+            except ssl.SSLError, e:
                 # Secure Connection Failed
                 logger.error(
                     "Failed to secure connection using %s / errno=%d" % (
@@ -445,6 +466,9 @@ class SocketBase(object):
                     ),
                 )
                 self.close()
+                # Fetch next
+                self.get_ssl_version(try_next=True)
+
                 raise SocketException('Secure Connection Failed')
 
             except socket.error, e:
@@ -661,23 +685,17 @@ class SocketBase(object):
 
                 continue
 
-            except ZeroReturnError, e:
+            except ssl.SSLZeroReturnError, e:
                 # Raised by SSL Socket
                 self.close()
                 raise SocketException('Connection broken')
-
-            except WantReadError, e:
-                # SSL Connection will block until it is ready
-                # The problem with this is can_read() and can_write()
-                # all return True.  the socket needs more time
-                # though to initialize so we have to call sleep here
-                sleep(retry_wait)
-                continue
 
             except socket.error, e:
                 if e[0] == errno.EAGAIN:
                     # Timeout occurred; Sleep for a little bit
                     sleep(retry_wait)
+
+                    # Test socket for connectivity
                     if self.can_read(retry_wait) is None:
                         self.close()
                         raise SocketException('Connection broken')
@@ -783,6 +801,28 @@ class SocketBase(object):
                 stale_timer.cancel()
 
         return tot_bytes
+
+    def __wrap_socket(self, do_handshake_on_connect=False):
+        """
+        Wrap an existing Python socket and return an SSLSocket Object.
+        this is iternally called if we're dealing with a secure
+        connection.
+        """
+        if self.socket is None:
+            # Nothing to do if we have no socket to work with
+            return None
+
+        return ssl.wrap_socket(
+            self.socket,
+            keyfile=self._keyfile,
+            certfile=self._certfile,
+            server_side=server_side,
+            cert_reqs=self._verify_mode,
+            ssl_version=self._protocol,
+            ca_certs=self._cafile,
+            do_handshake_on_connect=do_handshake_on_connect,
+            suppress_ragged_eofs=True,
+        )
 
     def __del__(self):
         """

@@ -23,7 +23,9 @@ if 'threading' in sys.modules:
 
 import gevent
 import gevent.monkey
+from gevent import ssl
 from gevent import socket
+
 from gevent.select import select
 gevent.monkey.patch_all()
 
@@ -35,7 +37,6 @@ import threading
 
 import re
 import SocketServer
-import ssl
 from pprint import pformat
 from io import BytesIO
 from zlib import compress
@@ -125,8 +126,10 @@ class NNTPSocketServer(SocketServer.TCPServer):
         self._join_group = join_group
 
         # Server (self-signed) Certificates for SSL Testing
-        self.certfile = abspath(join(dirname(__file__), 'var', 'ssl','localhost.crt'))
-        self.keyfile = abspath(join(dirname(__file__), 'var', 'ssl','localhost.key'))
+        self.certfile = abspath(
+            join(dirname(__file__), 'var', 'ssl','localhost.crt'))
+        self.keyfile = abspath(
+            join(dirname(__file__), 'var', 'ssl','localhost.key'))
 
         # These checks are very nessisary; you'll get strange errors like:
         # _ssl.c:341: error:140B0002:SSL routines:SSL_CTX_use_PrivateKey_file:system lib
@@ -136,12 +139,19 @@ class NNTPSocketServer(SocketServer.TCPServer):
         #
         # it doesn't hurt to just check ahead of time.
         if not isfile(self.certfile):
-            raise ValueError('Could not locate Certificate: %s' % self.certfile)
+            raise ValueError(
+                'Could not locate Certificate: %s' % self.certfile)
         if not isfile(self.keyfile):
-            raise ValueError('Could not locate Private Key: %s' % self.keyfile)
+            raise ValueError(
+                'Could not locate Private Key: %s' % self.keyfile)
 
         # Secure Protocol to use
-        self.ssl_version = ssl.PROTOCOL_TLSv1
+        try:
+            # Python v2.7+
+            self.ssl_version = ssl.PROTOCOL_TLSv1_2
+        except AttributeError:
+            # Python v2.6+
+            self.ssl_version = ssl.PROTOCOL_TLSv1
 
         # sent welcome
         self.sent_welcome = False
@@ -297,13 +307,12 @@ class NNTPBaseRequestHandler(SocketServer.BaseRequestHandler):
             self.request = context.wrap_socket(
                 self.request,
                 server_side=True,
-                server_hostname=self.server.hostname,
             )
             self.request.connect(self.server.server_address)
 
-        except AttributeError:
+        except (ValueError, AttributeError, TypeError):
             try:
-                # < Python 2.7.9
+                # <=Python 2.7.8
                 self.request = ssl.wrap_socket(
                     self.request,
                     server_side=True,

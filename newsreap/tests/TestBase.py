@@ -34,7 +34,6 @@ from tempfile import gettempdir
 from getpass import getuser
 from shutil import rmtree
 
-#print 'here %s' % dirname(dirname(abspath(__file__)))
 try:
     from lib.codecs import CodecBase
 

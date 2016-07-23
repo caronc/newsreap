@@ -2,7 +2,7 @@
 #
 # A base testing class/library to test the NNTP Server and Connection class
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -116,7 +116,7 @@ class NNTPConnection_Test(TestBase):
             secure=False,
             join_group=False,
         )
-        assert sock.connect() == True
+        assert sock.connect(timeout=5.0) == True
         assert sock._iostream == NNTPIOStream.RFC3977_GZIP
         sock.close()
 
@@ -129,7 +129,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Username
-        assert sock.connect() == False
+        assert sock.connect(timeout=5.0) == False
 
         sock = NNTPConnection(
             host=self.nttp_ipaddr,
@@ -140,7 +140,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Password
-        assert sock.connect() == False
+        assert sock.connect(timeout=5.0) == False
 
 
     def test_secure_authentication(self):
@@ -152,7 +152,7 @@ class NNTPConnection_Test(TestBase):
             secure=True,
             join_group=False,
         )
-        assert sock.connect() == True
+        assert sock.connect(timeout=5.0) == True
         assert sock._iostream == NNTPIOStream.RFC3977_GZIP
         sock.close()
 
@@ -165,7 +165,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Username
-        assert sock.connect() == False
+        assert sock.connect(timeout=5.0) == False
 
         sock = NNTPConnection(
             host=self.nttps_ipaddr,
@@ -176,7 +176,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Password
-        assert sock.connect() == False
+        assert sock.connect(timeout=5.0) == False
 
 
     def test_regular_expressions(self):
@@ -263,7 +263,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
 
-        assert sock.connect() == True
+        assert sock.connect(timeout=5.0) == True
 
         # Assign a cached grouplist
         sock._grouplist = grouplist
@@ -333,12 +333,12 @@ if __name__ == '__main__':
     # Push DUMMY NTP Server To Thread
     nntps_thread = threading.Thread(
         target=nntps.serve_forever,
-        name='NTPServer',
+        name='NTPS_Server',
     )
 
     nntp_thread = threading.Thread(
         target=nntp.serve_forever,
-        name='NTPerver',
+        name='NTP_Server',
     )
 
     # Exit the server thread when the main thread terminates
@@ -358,7 +358,7 @@ if __name__ == '__main__':
         join_group=False,
     )
 
-    socket = NNTPConnection(
+    ssocket = NNTPConnection(
         host=nttps_ipaddr,
         port=nntps_portno,
         username='valid',
@@ -368,7 +368,7 @@ if __name__ == '__main__':
     )
 
     print 'DEBUG: CLIENT CONNECT'
-    socket.connect()
+    ssocket.connect(timeout=20.0)
     print 'DEBUG: CLIENT CONNECTED'
     print 'DEBUG: CLIENT CLOSING CONNECTION'
     nntp.shutdown()

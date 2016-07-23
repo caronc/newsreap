@@ -403,7 +403,7 @@ class NNTPConnection(SocketBase):
         self._soft_reset()
 
         # call _connect()
-        return self._connect()
+        return self._connect(*args, **kwargs)
 
 
     def _connect(self, *args, **kwargs):
