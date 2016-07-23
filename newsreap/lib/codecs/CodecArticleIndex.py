@@ -131,7 +131,7 @@ class CodecArticleIndex(CodecBase):
                 # We weren't able to parse the date
                 article_date = parse(result.group('date'), fuzzy=True)
 
-            except TypeError:
+            except (ValueError, TypeError):
                 # It would be great if users of the product would email
                 # us these errors so we can work on making them better
                 logger.warning(
