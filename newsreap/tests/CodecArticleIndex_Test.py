@@ -23,9 +23,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from os.path import join
 from os.path import dirname
-from os.path import isfile
 from os.path import abspath
 from datetime import datetime
 
@@ -35,17 +33,17 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from tests.TestBase import TestBase
 
-from lib.codecs.CodecIndexHeader import CodecIndexHeader
-from lib.NNTPMetaContent  import NNTPMetaContent
+from lib.codecs.CodecArticleIndex import CodecArticleIndex
 
-class Codec_IndexHeader(TestBase):
+class Codec_ArticleIndex(TestBase):
 
-    def test_bad_groups(self):
+    @classmethod
+    def test_bad_groups(cls):
         """
         Make sure we fail on bad groups
         """
         # Initialize Codec
-        ch = CodecIndexHeader()
+        ch = CodecArticleIndex()
 
         # Empty lines are not valid
         assert ch.detect("") == None
@@ -53,7 +51,8 @@ class Codec_IndexHeader(TestBase):
         assert ch.detect("    ") == None
 
 
-    def test_strange_formated(self):
+    @classmethod
+    def test_strange_formated(cls):
         """
         A List of strange errors that surfaced when indexing
         usenet.  I put them here to try to catch them and bullet
@@ -61,7 +60,7 @@ class Codec_IndexHeader(TestBase):
         """
 
         # Initialize Codec
-        ch = CodecIndexHeader()
+        ch = CodecArticleIndex()
 
         # astraweb.us: alt.binaries.zune.videos
         # date failed to parse: 'mercredi, 23 jul 2014 20:01:02 -0600'

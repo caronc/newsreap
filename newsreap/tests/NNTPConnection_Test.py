@@ -186,7 +186,7 @@ class NNTPConnection_Test(TestBase):
         These entries were based on ones that have failed in the past during
         testing when scanning against Usenet
         """
-        from lib.codecs.CodecIndexHeader import NNTP_XOVER_RESPONSE_RE
+        from lib.codecs.CodecArticleIndex import NNTP_XOVER_RESPONSE_RE
         from datetime import datetime
         from dateutil.parser import parse
         import pytz
