@@ -19,21 +19,21 @@ for x in range(0, Q):
     })
 
 '''
-# Queue Size (Q) = 1000000
+# Queue Size (Q) = 5000000
 
 # Dictionary Key Character Size (D) = 300000
 
 #
 # lambda vs itemgetter
 #
-print('sorted(1000000) using itergettter() : %s' % (
+print('sorted(5000000) using itergettter() : %s' % (
     Timer(
         'sorted(mydictlist, key=itemgetter("key"))',
-        'Q=300000;D=1000000'+setup).timeit(1)
+        'Q=300000;D=5000000'+setup).timeit(1)
 ))
 
-print('sorted(1000000) using lamda         : %s' % (
+print('sorted(5000000) using lamda         : %s' % (
     Timer(
         'sorted(mydictlist, key=lambda k: k["key"])',
-        'Q=300000;D=1000000'+setup).timeit(1)
+        'Q=300000;D=5000000'+setup).timeit(1)
 ))
