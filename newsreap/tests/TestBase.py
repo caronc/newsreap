@@ -48,9 +48,12 @@ from lib.Logging import add_handler
 from lib.Logging import NEWSREAP_ENGINE
 from lib.Logging import SQLALCHEMY_ENGINE
 
-# Silence Logging for Tests
-add_handler(logging.getLogger(NEWSREAP_ENGINE), sendto=None)
-add_handler(logging.getLogger(SQLALCHEMY_ENGINE), sendto=None)
+# Silence Logging for Tests (uncomment and/or comment as needed)
+# By default having them off is nice because then you can run
+# $> nosetests -s
+#
+#add_handler(logging.getLogger(NEWSREAP_ENGINE), sendto=None)
+#add_handler(logging.getLogger(SQLALCHEMY_ENGINE), sendto=None)
 
 
 class TestBase(unittest.TestCase):
