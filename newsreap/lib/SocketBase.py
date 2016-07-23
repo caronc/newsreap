@@ -2,7 +2,7 @@
 #
 # A Low Level Socket Manager
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -24,6 +24,7 @@ from gevent.select import error as SelectError
 import gevent.monkey
 gevent.monkey.patch_all()
 
+from os.path import isfile
 import errno
 from datetime import datetime
 
@@ -101,15 +102,21 @@ class SocketBase(object):
 
        Arguments to initialize a SocketBase:
 
-            mode            Define Connection Type
+            host            the host to connect/listen on
 
-            port            int (default=9999)
+            port            int (default=0)
 
                             - Port to bind (slave)
+                            - 0 means an ephemeral port is chosen
+                              (random > 32768)
 
             timeout         int (default=None)
 
                             - connection timeout
+
+            mode            Define how this socket will be used (see
+                              ConnectionType class for more details)
+
 
     """
     def __init__(self, host=None, port=0, bindaddr=None, bindport=0,
@@ -136,26 +143,21 @@ class SocketBase(object):
         # if we're dealing with a secure connection
         self.peer_certificate = {}
 
+
+        # CA stands for Certificate Authority (for those reading this code)
+        # This is the master list of servers that you trust for verifying
+        # your certificates against.  If you're using a self-signed key
+        # then this is useless to you (and you shouldn't verify)
+        # You'll need these if you want to verify your host
+        self._ca_certs = kwargs.get('ca_certs', "/etc/ssl/certs/ca-bundle.crt")
+
+        # These keys are needed for hosting / listen type modes only
+        self._keyfile = kwargs.get('keyfile', None)
+        self._certfile = kwargs.get('certfile', None)
+
         # For Statistics
         self.bytes_in = 0
         self.bytes_out = 0
-
-    def get_ssl_version(self, try_next=False):
-        """
-        Returns an SSL Context Object while handling the many
-        supported protocols
-        """
-
-        if try_next:
-            # Increment version
-            self.secure_protocol_idx += 1
-
-        while self.secure_protocol_idx < len(SECURE_PROTOCOL_PRIORITY):
-            # Now return it
-            return SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][0]
-
-        # If we reach here, we had a problem
-        raise SocketException('There were no secure protocols left to try.')
 
     def can_read(self, timeout=0.0):
         """
@@ -391,70 +393,13 @@ class SocketBase(object):
                     # A non secure connection; we're done
                     break
 
-                # Wrap our socket with the SSLSocket Object
-                self.socket = ssl.wrap_socket(
-                    self.socket,
-                    cert_reqs=ssl.CERT_NONE,
-                    ssl_version=self.get_ssl_version(),
-                    do_handshake_on_connect=False,
-                    suppress_ragged_eofs=True,
-                )
+                # Encrypt our socket (changing it into an SSLSocket Object)
+                self.__encrypt_socket(timeout=timeout)
 
-                while True:
-                    # Infinit loop is nessisary for do_handshake() wrapping
-                    # we'll either exit this loop with a secure connection
-                    # or we'll time out and gracefully exit.
-                    try:
-                        self.socket.do_handshake()
-                        logger.info("Secured connection using %s." % (
-                            SECURE_PROTOCOL_PRIORITY\
-                                [self.secure_protocol_idx][1],
-                        ))
-
-                        # Store our certificate
-                        self.peer_certificate = \
-                            self.socket.getpeercert(binary_form=False)
-
-                        # TODO: Verify hostname if required to do so
-
-                        # We're done
-                        self.connected = True
-                        return True
-
-                    except ssl.SSLWantReadError, e:
-                        # SSL Connection will block until it is ready
-                        # The problem with this is can_read() and can_write()
-                        # all return True.  the socket needs more time
-                        # though to initialize so we have to call sleep here
-                        if self.can_read(retry_wait) is None:
-                            self.close()
-                            raise SocketException('Connection broken')
-                        continue
-
-                    except ssl.SSLWantWriteError, e:
-                        # SSL Connection will block until it is ready
-                        # The problem with this is can_read() and can_write()
-                        # all return True.  the socket needs more time
-                        # though to initialize so we have to call sleep here
-                        if self.can_write(retry_wait) is None:
-                            self.close()
-                            raise SocketException('Connection broken')
-                            continue
-
-                    if timeout:
-                        # Update Elapsed Time
-                        elapsed_time = datetime.now() - cur_time
-                        elapsed_time = (elapsed_time.days * 86400) \
-                                         + elapsed_time.seconds \
-                                         + (elapsed_time.microseconds/1e6)
-
-                        if elapsed_time > timeout:
-                            # Times up
-                            self.close()
-                            raise SocketException(
-                                'Secure Connection Timeout')
-                # Throttle retry
-                sleep(retry_wait)
+                # If we get here, we were successful in encrypting the
+                # connection; so let's go ahead and break out of our
+                # connectino loop
+                break
 
             except ssl.SSLError, e:
                 # Secure Connection Failed
@@ -467,7 +412,7 @@ class SocketBase(object):
                 )
                 self.close()
                 # Fetch next
-                self.get_ssl_version(try_next=True)
+                self.__ssl_version(try_next=True)
 
                 raise SocketException('Secure Connection Failed')
 
@@ -550,6 +495,7 @@ class SocketBase(object):
         while True:
             try:
                 conn, self.host = self.socket.accept()
+                # If we get here, we've got a connection
                 break
             except TypeError, e:
                 # Timeout occurred
@@ -592,13 +538,57 @@ class SocketBase(object):
         # Swap socket with new
         self.socket = conn
 
-        # Set Blocking on our new socket
-        self.socket.setblocking(True)
+        logger.info("Connection established to %s", connection_str)
+
+        if self.mode == ConnectionType.LISTEN:
+            # A non secure connection; we're done
+
+            # Toggle our connection flag
+            self.connected = True
+
+            # Return our success
+            return True
+
+        try:
+            # Encrypt our socket (changing it into an SSLSocket Object)
+            self.__encrypt_socket(timeout=timeout)
+
+            # If we get here, we were successful in encrypting the connection;
+            # so let's go ahead and break out of our connection loop
+
+        except ssl.SSLError, e:
+            # Secure Connection Failed
+            logger.error(
+                "Failed to secure connection using %s / errno=%d" % (
+                    SECURE_PROTOCOL_PRIORITY\
+                        [self.secure_protocol_idx][1],
+                    e[0],
+                ),
+            )
+            self.close()
+            # Fetch next
+            self.__ssl_version(try_next=True)
+
+            raise SocketException('Secure Connection Failed')
+
+        except socket.error, e:
+            #logger.debug("Exception received: %s " % (e));
+            if e[0] == errno.EINTR:
+                # Ensure socket is closed
+                self.close()
+                # A Signal was caught,
+                # return so we can handle this
+                raise
+
+        except:
+            # Close socket
+            self.close()
+            # Raise issue
+            raise
 
         # Toggle our connection flag
         self.connected = True
 
-        logger.info("Connection established to %s", connection_str)
         return True
 
 
@@ -802,27 +792,158 @@ class SocketBase(object):
 
         return tot_bytes
 
-    def __wrap_socket(self, do_handshake_on_connect=False):
+    def __ssl_version(self, try_next=False):
+        """
+        Returns an SSL Context Object while handling the many
+        supported protocols
+        """
+
+        if try_next:
+            # Increment version
+            self.secure_protocol_idx += 1
+
+        while self.secure_protocol_idx < len(SECURE_PROTOCOL_PRIORITY):
+            # Now return it
+            return SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][0]
+
+        # If we reach here, we had a problem; use SocketRetryLimit() instead
+        # of SocketException() since we're at the end of the line now.
+        raise SocketRetryLimit('There are no protocols left to try.')
+
+    def __encrypt_socket(self, timeout=None, retry_wait=1.00, verify=False):
         """
         Wrap an existing Python socket and return an SSLSocket Object.
         this is iternally called if we're dealing with a secure
         connection.
+
+        timeout is used to break from this function if a certain period
+        elapses. Otherwise, if None is specified, we'll only break on
+        completion or if an error occurs.
+
+        verify checks the certificate with the Certificate Authority. For
+        this reason. it's important that the ca_cert has been defined!
+        verify is only used during a 'connect' (not a listen)
+
+        This function has no return value; it either encryptes the socket
+        or throws a SocketException() error.
+
         """
+        # Disable Blocking
+        self.socket.setblocking(False)
+
         if self.socket is None:
             # Nothing to do if we have no socket to work with
-            return None
+            raise SocketException("No connection")
 
-        return ssl.wrap_socket(
-            self.socket,
-            keyfile=self._keyfile,
-            certfile=self._certfile,
-            server_side=server_side,
-            cert_reqs=self._verify_mode,
-            ssl_version=self._protocol,
-            ca_certs=self._cafile,
-            do_handshake_on_connect=do_handshake_on_connect,
-            suppress_ragged_eofs=True,
-        )
+        # Define our default keyword arguments
+        kwargs = {
+            'ssl_version': self.__ssl_version(),
+            'do_handshake_on_connect': False,
+            'suppress_ragged_eofs': True,
+        }
+
+        if self.mode == ConnectionType.SECURE_LISTEN:
+            # We need to add a few more parameters
+            kwargs['keyfile'] = self._keyfile
+            kwargs['certfile'] = self._certfile
+            kwargs['server_side'] = True
+
+            # Verify our certificates/keys exist or abort
+            # These checks are nessisary otherwise you'll get strange errors like:
+            # _ssl.c:341: error:140B0002:SSL routines:SSL_CTX_use_PrivateKey_file:system lib
+            #
+            # The error itself will surface during the call to wrap_socket() which
+            # will throw the exception ssl.SSLError
+            #
+            # it doesn't hurt to just check ahead of time and make the error human readable
+            if not isfile(self._certfile):
+                raise ValueError(
+                    'Could not locate Certificate: %s' % self._certfile)
+            if not isfile(self._keyfile):
+                raise ValueError(
+                    'Could not locate Private Key: %s' % self._keyfile)
+
+        if self.mode == ConnectionType.SECURE_CONNECT:
+            if verify:
+                # Verify Certificate
+                cert_reqs = ssl.CERT_REQUIRED
+
+                if self._ca_certs:
+                    # if we have a ca_certs reference, then let's store it
+                    kwargs['ca_certs'] = self._ca_certs
+                    if not isfile(self._ca_certs):
+                        raise ValueError(
+                            'Could not locate CA Certificates: %s' % \
+                            self._ca_certs,
+                        )
+            else:
+                cert_reqs = ssl.CERT_NONE
+
+            # Store our Certificate Requirements
+            kwargs['cert_reqs'] = cert_reqs
+
+        # Wrap our socket with the SSLSocket Object
+        self.socket = ssl.wrap_socket(self.socket, **kwargs)
+
+        while True:
+            # Infinit loop is nessisary for do_handshake() wrapping
+            # we'll either exit this loop with a secure connection
+            # or we'll time out and gracefully exit.
+            try:
+                self.socket.do_handshake()
+                logger.info("Secured connection using %s." % (
+                    SECURE_PROTOCOL_PRIORITY\
+                        [self.secure_protocol_idx][1],
+                ))
+
+                # Store our certificate
+                if self.mode == ConnectionType.SECURE_CONNECT:
+                    self.peer_certificate = \
+                        self.socket.getpeercert(binary_form=False)
+
+                # if verify:
+                # TODO: Verify hostname if verify specified
+
+                # We're done
+                self.connected = True
+                return
+
+            except ssl.SSLWantReadError, e:
+                # SSL Connection will block until it is ready
+                # The problem with this is can_read() and can_write()
+                # all return True.  the socket needs more time
+                # though to initialize so we have to call sleep here
+                if self.can_read(retry_wait) is None:
+                    self.close()
+                    raise SocketException('Connection broken')
+                continue
+
+            except ssl.SSLWantWriteError, e:
+                # SSL Connection will block until it is ready
+                # The problem with this is can_read() and can_write()
+                # all return True.  the socket needs more time
+                # though to initialize so we have to call sleep here
+                if self.can_write(retry_wait) is None:
+                    self.close()
+                    raise SocketException('Connection broken')
+                    continue
+
+            if timeout:
+                # Update Elapsed Time
+                elapsed_time = datetime.now() - cur_time
+                elapsed_time = (elapsed_time.days * 86400) \
+                                 + elapsed_time.seconds \
+                                 + (elapsed_time.microseconds/1e6)
+
+                if elapsed_time > timeout:
+                    # Times up
+                    self.close()
+                    raise SocketException(
+                        'Secure Connection Timeout')
+
+        # This code is unreachable but just to satisify standards
+        # we'll put a return statement here
+        return
 
     def __del__(self):
         """
@@ -835,7 +956,6 @@ class SocketBase(object):
             return 'tcps://%s:%d' % (self.host, self.port)
         # else
         return 'tcp%s:%d' % (self.host, self.port)
-
 
     def __unicode__(self):
         if self.mode == ConnectionType.SECURE_CONNECT:

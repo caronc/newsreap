@@ -132,7 +132,8 @@ class NNTPSocketServer(SocketServer.TCPServer):
             join(dirname(__file__), 'var', 'ssl','localhost.key'))
 
         # These checks are very nessisary; you'll get strange errors like:
-        # _ssl.c:341: error:140B0002:SSL routines:SSL_CTX_use_PrivateKey_file:system lib
+        # _ssl.c:341: error:140B0002:SSL \
+        #               routines:SSL_CTX_use_PrivateKey_file:system lib
         #
         # The error itself will surface during the call to wrap_socket() which
         # will throw the exception ssl.SSLError
@@ -500,7 +501,8 @@ class NNTPBaseRequestHandler(SocketServer.BaseRequestHandler):
                                 break
 
                             # create a file from our fetch map
-                            entry = self.server.fetch_map[self.server.current_group].get(
+                            entry = self.server.fetch_map\
+                                [self.server.current_group].get(
                                 str(_result.group('id')),
                                 self.server.default_fetch,
                             )
@@ -508,7 +510,8 @@ class NNTPBaseRequestHandler(SocketServer.BaseRequestHandler):
                         else:
                             try:
                                 # If we are in a group, test it first
-                                entry = self.server.fetch_map[self.server.current_group].get(
+                                entry = self.server.fetch_map\
+                                    [self.server.current_group].get(
                                     str(_result.group('id')),
                                     self.server.default_fetch,
                                 )
@@ -555,7 +558,7 @@ class NNTPBaseRequestHandler(SocketServer.BaseRequestHandler):
 
                     if 'file' in v:
                         try:
-                            # Read in a file and send it / TODO
+                            # Read in a file and send it
                             fd = open(v['file'], 'rb')
                             response += NNTP_EOL + fd.read()
                             fd.close()
@@ -569,12 +572,13 @@ class NNTPBaseRequestHandler(SocketServer.BaseRequestHandler):
                         # If the file isn't gzipped and you 'want' to gzip it
                         # then you use this
                         try:
-                            # Read in a gzipped file and send it / TODO
+                            # Read in a gzipped file and send it
                             fd = open(v['gzip'], 'rb')
                             if response is None:
                                 response = '230 Retrieving article.'
 
-                            response += " [COMPRESS=GZIP]" + NNTP_EOL + compress(fd.read())
+                            response += " [COMPRESS=GZIP]" + NNTP_EOL + \
+                                compress(fd.read())
                             fd.close()
 
                         except IOError:
