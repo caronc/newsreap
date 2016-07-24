@@ -36,7 +36,6 @@ from lib.NNTPIOStream import NNTP_SUPPORTED_IO_STREAMS
 from lib.NNTPIOStream import NNTP_DEFAULT_ENCODING
 
 from lib.SocketBase import SocketBase
-from lib.SocketBase import ConnectionType
 from lib.SocketBase import SocketException
 from lib.SocketBase import SignalCaughtException
 from lib.Utils import mkdir
@@ -88,7 +87,7 @@ NNTP_RESPONSE_RE = re.compile(
 
 # Group Response (when we switch to a group)
 NNTP_GROUP_RESPONSE_RE = re.compile(
-    r'(?P<count>[0-9]+)\s+(?P<low>[0-9]+)\s+' + \
+    r'(?P<count>[0-9]+)\s+(?P<low>[0-9]+)\s+' +
     r'(?P<high>[0-9]+)\s+(?P<name>.*[^\s]*[^.])(\.|\s)*$',
 )
 
@@ -132,13 +131,14 @@ SCAN_FROM_TAIL = 10
 # query fails
 NNTP_XOVER_RETRIES = 5
 
-#RAW_TEXT_MESSAGE = re.compile(
-#    r'^message-id:\s*<?([^>]+)>?\s*$',
-#)
+# RAW_TEXT_MESSAGE = re.compile(
+#     r'^message-id:\s*<?([^>]+)>?\s*$',
+# )
 
 # Used with BytesIO seek().  These variables
 # are part of python v2.7 but included here for python v2.6
 # support too.
+
 
 class NNTPConnection(SocketBase):
     """
@@ -229,10 +229,10 @@ class NNTPConnection(SocketBase):
 
         # get connection mode
         if secure:
-            kwargs['mode'] = ConnectionType.SECURE_CONNECT
+            kwargs['secure'] = True
             self.protocol = 'nntps'
         else:
-            kwargs['mode'] = ConnectionType.CONNECT
+            kwargs['secure'] = False
             self.protocol = 'nntp'
 
         # Default Filters
@@ -274,24 +274,24 @@ class NNTPConnection(SocketBase):
                 if self._iostream not in NNTP_SUPPORTED_IO_STREAMS:
                     # Default
                     self._iostream = NNTPIOStream.RFC3977_GZIP
-                    logger.warning('An unknown iostream was specified; ' + \
+                    logger.warning('An unknown iostream was specified; ' +
                                    "using default: '%s'." % self._iostream)
 
             except (TypeError, ValueError):
                 # Default
                 self._iostream = NNTPIOStream.RFC3977_GZIP
-                logger.warning('A malformed iostream was specified; ' + \
+                logger.warning('A malformed iostream was specified; ' +
                                    "using default: '%s'." % self._iostream)
 
         elif iostream:
             # Default
-            logger.warning('An invalid iostream was specified; ' + \
+            logger.warning('An invalid iostream was specified; ' +
                 "using default: '%s'." % self._iostream)
             self._iostream = NNTPIOStream.RFC3977_GZIP
 
         else: # iostream is None (0, or False)
             # used RFC3977 Standards but without Compresssion
-            logger.info('An invalid iostream was specified; ' + \
+            logger.info('An invalid iostream was specified; ' +
                 "using default: '%s'." % self._iostream)
             self._iostream = NNTPIOStream.RFC3977
 
@@ -369,14 +369,6 @@ class NNTPConnection(SocketBase):
         # Used to cache group list responses
         self._grouplist = None
 
-
-    def __del__(self):
-        """
-        Handle Deconstruction
-        """
-        self.close()
-
-
     def append(self, connection, *args, **kwargs):
         """
         Add a backup NNTP Server (Block Account) which is only
@@ -389,7 +381,6 @@ class NNTPConnection(SocketBase):
         # block/backup connections are established on demand
         self._backups.append(connection)
         return True
-
 
     def connect(self, *args, **kwargs):
         """
@@ -404,7 +395,6 @@ class NNTPConnection(SocketBase):
 
         # call _connect()
         return self._connect(*args, **kwargs)
-
 
     def _connect(self, *args, **kwargs):
         """
@@ -476,7 +466,6 @@ class NNTPConnection(SocketBase):
 
         return True
 
-
     def post(self, payload):
         """
         Allows posting content to a NNTP Server
@@ -493,8 +482,7 @@ class NNTPConnection(SocketBase):
             return response
 
         # The server
-        #header=('From: %s' % terry@richard.geek.org.au
-
+        # header=('From: %s' % terry@richard.geek.org.au
 
         # STUB: TODO
         # payload should be a class that takes all the required
@@ -503,7 +491,6 @@ class NNTPConnection(SocketBase):
         # and the class will take care of opening it, streaming it's
         # contents and closing it afterwards.
         return NNTPResponse(239, 'Article transferred OK')
-
 
     def group(self, name):
         """
@@ -558,7 +545,6 @@ class NNTPConnection(SocketBase):
 
         logger.warning('Bad Group: %s' % name)
         return (None, None, None, self.group_name)
-
 
     def groups(self, filters=None, lazy=True):
         """
@@ -616,16 +602,16 @@ class NNTPConnection(SocketBase):
 
             elif isinstance(filter, basestring):
                 try:
-                    filter =r'^.*%s.*$' % re.escape(filter)
-                    _filters.append(re.compile(
-                        filter, flags=re.IGNORECASE),
+                    filter = r'^.*%s.*$' % re.escape(filter)
+                    _filters.append(
+                        re.compile(filter, flags=re.IGNORECASE),
                     )
                     logger.debug('Compiled group regex "%s"' % filter)
 
                 except:
                     logger.error(
-                            'Invalid group regular expression: "%s"' % filter,
-                        )
+                        'Invalid group regular expression: "%s"' % filter,
+                    )
             else:
                 logger.error(
                     'Ignored group expression: "%s"' % filter,
@@ -674,13 +660,11 @@ class NNTPConnection(SocketBase):
         ))
         return self._grouplist
 
-
     def tell(self):
         """
         Returns the current index
         """
         return self.group_index
-
 
     def seek_by_date(self, refdate, group=None):
         """
@@ -740,7 +724,6 @@ class NNTPConnection(SocketBase):
         logger.info('Matched index: %d' % (self.group_index))
         return self.group_index
 
-
     def _seek_by_date(self, refdate, head=None, tail=None):
         """
 
@@ -788,13 +771,13 @@ class NNTPConnection(SocketBase):
         if response is None:
             # Nothing Retrieved
             return -1
-            #if response.code != 423:
+            # if response.code != 423:
             #    # 423 means there were no more items to fetch
             #    # this is a common error that even this class produces
             #    # and therefore we do not need to create a verbose
             #    # message from it.
             #    logger.error('NNTP Server responded %s' % response)
-            #return -1
+            # return -1
 
         # Deal with our response
         if len(response):
@@ -807,12 +790,12 @@ class NNTPConnection(SocketBase):
             # dict()
             _refkeys = response.keys()
 
-            #logger.debug('total=%d, left=%s, right=%s, ref=%s' % (
+            # logger.debug('total=%d, left=%s, right=%s, ref=%s' % (
             #    end-start,
             #    _refkeys[0],
             #    _refkeys[-1],
             #    _refdate,
-            #))
+            # ))
 
             #
             # Decisions
@@ -875,7 +858,6 @@ class NNTPConnection(SocketBase):
         # We recursively scanned too far in one
         # direction; we need to
         return -1
-
 
     def seek(self, index, whence=None):
         """
@@ -951,7 +933,8 @@ class NNTPConnection(SocketBase):
         return response
 
 
-    def xover(self, group=None, start=None, end=None, sort=XoverGrouping.BY_POSTER_TIME):
+    def xover(self, group=None, start=None, end=None,
+              sort=XoverGrouping.BY_POSTER_TIME):
         """
         xover
         Returns a NNTPRequest object
@@ -1678,12 +1661,15 @@ class NNTPConnection(SocketBase):
                         # when retrieving server-side listings; it's best to
                         # just alert the end user and move along
                         logger.warning(
-                            '_recv() %d byte(s) ZLIB decompression failure.' % (
-                            bytes,
-                        ))
+                            '_recv() %d byte(s) ZLIB decompression failure.' \
+                            % (bytes),
+                        )
                         # Convert our response to that of an response Fetch
                         # Error
-                        return NNTPResponse(NNTPResponseCode.FETCH_ERROR, 'Fetch Error')
+                        return NNTPResponse(
+                            NNTPResponseCode.FETCH_ERROR,
+                            'Fetch Error',
+                        )
                 else:
                     # No compression
                     self._data.write(self._buffer.read(tail_ptr-head_ptr))
@@ -1848,7 +1834,7 @@ class NNTPConnection(SocketBase):
         if self.connected:
             try:
                 # Prevent Recursion by calling parent send()
-                super(NNTPConnection, self).send('QUIT')
+                super(NNTPConnection, self).send('QUIT' + EOL)
             except:
                 pass
 
@@ -1891,6 +1877,11 @@ class NNTPConnection(SocketBase):
         self.close()
         self.connect()
 
+    def __del__(self):
+        """
+        Handle Deconstruction
+        """
+        self.close()
 
     def __str__(self):
         return '%s://%s@%s:%d' % (
@@ -1900,7 +1891,6 @@ class NNTPConnection(SocketBase):
     def __unicode__(self):
         return u'%s://%s@%s:%d' % (
             self.protocol, self.username, self.host, self.port)
-
 
     def __repr__(self):
         """
@@ -1913,4 +1903,3 @@ class NNTPConnection(SocketBase):
                 self.host,
                 self.port,
         )
-

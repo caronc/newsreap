@@ -40,16 +40,6 @@ DEFAULT_BIND_ADDR = '0.0.0.0'
 # or fail to connect before failing out right
 socket.setdefaulttimeout(30.0)
 
-class ConnectionType:
-    # Establish a remote connection
-    CONNECT = 'connect'
-    # Establish a secure remote connection
-    SECURE_CONNECT = 'ssl_connect'
-    # Listen for a connection
-    LISTEN = 'listen'
-    # Listen for a secure connection
-    SECURE_LISTEN = 'ssl_listen'
-
 try:
     SECURE_PROTOCOL_PRIORITY = (
         # The first element is the default priority
@@ -114,13 +104,15 @@ class SocketBase(object):
 
                             - connection timeout
 
-            mode            Define how this socket will be used (see
-                              ConnectionType class for more details)
+            secure          Use encryption when managing the connection
+                            Expects a True or False, but you can also
+                            Specify the encryption Cypher to use here
+                            too.
 
 
     """
     def __init__(self, host=None, port=0, bindaddr=None, bindport=0,
-                 mode=ConnectionType.CONNECT, *args, **kwargs):
+                 secure=False, *args, **kwargs):
 
         try:
             self.port = int(port)
@@ -132,17 +124,34 @@ class SocketBase(object):
         self.bindport = bindport
 
         self.connected = False
-        self.mode = mode
+        self.secure = secure
+
+        if self.secure is None:
+            # a little qwirky, but allow users to set secure to
+            # None and have it treated the same way as False
+            self.secure = False
 
         self.socket = None
 
         # Track the current index of the secure protocol singleton to use
         self.secure_protocol_idx = 0
 
+        if self.secure not in (True, False):
+            # If self.secure identifies an actual protocol, we want to use it
+            # The below simply looks for it's existance, and if it isn't
+            # present then we return None
+            self.secure_protocol_idx = next((i for i, v in \
+                          enumerate(SECURE_PROTOCOL_PRIORITY) \
+                                             if v[0] == self.secure), None)
+
+            if self.secure_protocol_idx is None:
+                # Protocol specified was not found and/or supported; alert the
+                # user with a loud bang; we're done here.
+                raise AttributeError("Invalid secure protocol specified.")
+
         # A spot we can store our peer certificate; this is only used
         # if we're dealing with a secure connection
         self.peer_certificate = {}
-
 
         # CA stands for Certificate Authority (for those reading this code)
         # This is the master list of servers that you trust for verifying
@@ -151,13 +160,19 @@ class SocketBase(object):
         # You'll need these if you want to verify your host
         self._ca_certs = kwargs.get('ca_certs', "/etc/ssl/certs/ca-bundle.crt")
 
-        # These keys are needed for hosting / listen type modes only
+        # These keys are needed for hosting / listen type connections only
         self._keyfile = kwargs.get('keyfile', None)
         self._certfile = kwargs.get('certfile', None)
 
         # For Statistics
         self.bytes_in = 0
         self.bytes_out = 0
+
+        # Calculated through connections
+        self._local_addr = None
+        self._local_port = None
+        self._remote_addr = None
+        self._remote_port = None
 
     def can_read(self, timeout=0.0):
         """
@@ -264,6 +279,14 @@ class SocketBase(object):
         self.bytes_in = 0
         self.bytes_out = 0
 
+        # reset remote connection details only
+        # we keep the local ones so we can re-use them
+        # if possible (especially the port)
+
+        # Calculated through connections
+        self._remote_addr = None
+        self._remote_port = None
+
         # return any lingering data in buffer
         if data:
             return data
@@ -292,19 +315,19 @@ class SocketBase(object):
             # We don't need to bind connections that are not configured with
             # bind information.
             if not (self.bindaddr or self.bindport):
+                # Store local connection details
                 return True
 
-            bindaddr = self.bindaddr
-            bindport = self.bindport
             if not self.bindaddr:
-                bindaddr = '0.0.0.0'
+                self.bindaddr = '0.0.0.0'
             if not self.bindport:
-                bindport = 0
+                self.bindport = 0
 
             try:
-                bind_str = '%s:%s' % (bindaddr, bindport)
-                self.socket.bind((bindaddr, self.bindport))
+                bind_str = '%s:%s' % (self.bindaddr, self.bindport)
+                self.socket.bind((self.bindaddr, self.bindport))
                 logger.debug("Socket bound to %s" % bind_str)
+                # Store local connection details
                 return True
 
             except socket.error, e:
@@ -337,6 +360,10 @@ class SocketBase(object):
             # no need to thrash
             sleep(retry_wait)
 
+        # Code can't ever reach here; but to satisfy lint
+        # we'll put a return statement here
+        return False
+
 
     def connect(self, timeout=None, retry_wait=1.00):
         """
@@ -356,9 +383,11 @@ class SocketBase(object):
 
         """
 
-        connection_str = '%s:%s' % (self.host, self.port)
         # Blocking until a connection
-        logger.debug("Connecting to host: %s" % connection_str)
+        logger.debug("Connecting to host: %s:%d" % (
+            self.host,
+            self.port,
+        ))
 
         if timeout:
             socket.setdefaulttimeout(timeout)
@@ -387,14 +416,22 @@ class SocketBase(object):
                 # Disable Blocking
                 self.socket.setblocking(False)
 
-                logger.info("Connection established to %s", connection_str)
+                # Store local details of our socket
+                (self._local_addr, self._local_port) = self.socket.getsockname()
+                (self._remote_addr, self._remote_port) = self.socket.getpeername()
 
-                if self.mode == ConnectionType.CONNECT:
+                logger.info(
+                    "Connection established to %s:%d" % (
+                    self._remote_addr,
+                    self._remote_port,
+                ))
+
+                if self.secure is False:
                     # A non secure connection; we're done
                     break
 
                 # Encrypt our socket (changing it into an SSLSocket Object)
-                self.__encrypt_socket(timeout=timeout)
+                self.__encrypt_socket(timeout=timeout, server_side=False)
 
                 # If we get here, we were successful in encrypting the
                 # connection; so let's go ahead and break out of our
@@ -411,10 +448,20 @@ class SocketBase(object):
                     ),
                 )
                 self.close()
-                # Fetch next
-                self.__ssl_version(try_next=True)
 
-                raise SocketException('Secure Connection Failed')
+                if self.secure is True:
+                    # Fetch next (but only if nothing was explicitly
+                    # specified)
+                    self.__ssl_version(try_next=True)
+                    raise SocketException('Secure Connection Failed')
+
+                # If we reach here, we had a problem with our secure connection
+                # handshaking and we were explicitly told to only use 1 (one)
+                # protocol.  Thus there is nothing more to retry.  So throwing
+                # a SocketException() is not a good idea.  Instead, we throw
+                # a SocketRetryLimit() so it can be handled differently
+                # upstream
+                raise SocketRetryLimit('There are no protocols left to try.')
 
             except socket.error, e:
                 #logger.debug("Exception received: %s " % (e));
@@ -452,7 +499,7 @@ class SocketBase(object):
         return True
 
 
-    def listen(self, timeout=None, retry_wait=1.00):
+    def listen(self, timeout=None, retry_wait=1.00, reuse_port=True):
         """
            input Parameters:
            -timeout     How long accept() should block for before giving up and
@@ -470,9 +517,17 @@ class SocketBase(object):
 
         """
 
+        if reuse_port and self._local_port is not None and self.port == 0:
+            # Re-use the last port we acquired that way we can close a
+            # connection gracefully and not have to re-acquire a new
+            # ephemeral port
+            self.port = self._local_port
+
         # Blocking until a connection
-        connection_str = '%s:%s' % (self.bindaddr, self.port)
-        logger.debug("Listening for a connection at: %s" % connection_str)
+        logger.debug("Listening for a connection at: %s:%d" % (
+            self.bindaddr,
+            self.port,
+        ))
         if timeout:
             socket.setdefaulttimeout(timeout)
             logger.debug("Socket timeout set to :%ds" % (timeout))
@@ -481,25 +536,36 @@ class SocketBase(object):
         if not self.bind(timeout=timeout, retries=3):
             return False
 
-        if timeout is None:
-            self.socket.setblocking(True)
-        else:
-            self.socket.setblocking(False)
+        # Never use blocking
+        self.socket.setblocking(False)
 
         # Listen Enabled, the 1 identifies the number of connections we
         # will accept; never handle more then 1 at a time.
         self.socket.listen(1)
 
+        # Store local details of our socket
+        (self._local_addr, self._local_port) = self.socket.getsockname()
+
         # Get reference time
         cur_time = datetime.now()
         while True:
             try:
-                conn, self.host = self.socket.accept()
+                conn, (self._remote_addr, self._remote_port) = \
+                        self.socket.accept()
                 # If we get here, we've got a connection
                 break
+
             except TypeError, e:
                 # Timeout occurred
                 pass
+
+            except AttributeError, e:
+                # Usually means someone called close() while accept() was
+                # blocked. Happens when using this class with threads.
+                # No problem... we'll just finish up here
+                self.close()
+                raise SocketException('Connection broken abruptly')
+
             except socket.error, e:
                 if e[0] == errno.EAGAIN:
                     # Timeout occurred
@@ -529,18 +595,29 @@ class SocketBase(object):
                     self.close()
                     raise SocketException('Connection timeout')
 
-            # Throttle retry
-            sleep(retry_wait)
+            # Throttle until data is available
+            if self.can_read(retry_wait) is None:
+                # Something very bad happened
+                self.close()
+                raise SocketException('Connection broken')
 
         # Close listening connection
-        self.close()
+        self.socket.close()
 
         # Swap socket with new
         self.socket = conn
 
-        logger.info("Connection established to %s", connection_str)
+        # Update our local information
+        (self._local_addr, self._local_port) = self.socket.getsockname()
+        (self._remote_addr, self._remote_port) = self.socket.getpeername()
 
-        if self.mode == ConnectionType.LISTEN:
+        logger.info(
+            "Connection established to %s:%d" % (
+            self._remote_addr,
+            self._remote_port,
+        ))
+
+        if self.secure is False:
             # A non secure connection; we're done
 
             # Toggle our connection flag
@@ -551,7 +628,7 @@ class SocketBase(object):
 
         try:
             # Encrypt our socket (changing it into an SSLSocket Object)
-            self.__encrypt_socket(timeout=timeout)
+            self.__encrypt_socket(timeout=timeout, server_side=True)
 
             # If we get here, we were successful in encrypting the connection;
             # so let's go ahead and break out of our connection loop
@@ -566,10 +643,19 @@ class SocketBase(object):
                 ),
             )
             self.close()
-            # Fetch next
-            self.__ssl_version(try_next=True)
 
-            raise SocketException('Secure Connection Failed')
+            if self.secure is True:
+                # Fetch next (but only if nothing was explicitly
+                # specified)
+                self.__ssl_version(try_next=True)
+                raise SocketException('Secure Connection Failed')
+
+            # If we reach here, we had a problem with our secure connection
+            # handshaking and we were explicitly told to only use 1 (one)
+            # protocol.  Thus there is nothing more to retry.  So throwing
+            # a SocketException() is not a good idea.  Instead, we throw
+            # a SocketRetryLimit() so it can be handled differently upstream
+            raise SocketRetryLimit('There are no protocols left to try.')
 
         except socket.error, e:
             #logger.debug("Exception received: %s " % (e));
@@ -661,8 +747,9 @@ class SocketBase(object):
                         self.bytes_in += len(data)
                         total_data.append(data)
 
-                    if not timeout:
-                        raise SocketException('Connection lost')
+                    #if not timeout:
+                    #    raise SocketException('Connection lost')
+                    break
 
                 if timeout and bytes_read == 0:
                     # We're done
@@ -673,6 +760,14 @@ class SocketBase(object):
                     # further to be read
                     break
 
+                continue
+
+            except ssl.SSLWantReadError, e:
+                # Raised by SSL Socket; This is okay data was received, but not
+                # all of it. Be patient and try again.
+                if self.can_read(retry_wait) is None:
+                    self.close()
+                    raise SocketException('Connection broken')
                 continue
 
             except ssl.SSLZeroReturnError, e:
@@ -792,6 +887,36 @@ class SocketBase(object):
 
         return tot_bytes
 
+    def local_connection_info(self):
+        """
+        Returns a tuple of current address of 'this' server
+        if listening, then it is the listing server.  If performing a
+        remote connection, then it is the address that was made in
+        a bind() call
+
+        If no connection has been established, the connection returns None.
+        """
+
+        if self.socket is None:
+            return None
+
+        return (self._local_addr, self._local_port)
+
+    def remote_connection_info(self):
+        """
+        Returns a tuple of current address of 'this' server
+        if listening, then it is the listing server.  If performing a
+        remote connection, then it is the address that was made in
+        a bind() call
+
+        If no connection has been established, the connection returns None.
+        """
+        if self.socket is None:
+            return None
+
+        return (self._remote_addr, self._remote_port)
+
+
     def __ssl_version(self, try_next=False):
         """
         Returns an SSL Context Object while handling the many
@@ -810,7 +935,8 @@ class SocketBase(object):
         # of SocketException() since we're at the end of the line now.
         raise SocketRetryLimit('There are no protocols left to try.')
 
-    def __encrypt_socket(self, timeout=None, retry_wait=1.00, verify=False):
+    def __encrypt_socket(self, timeout=None, retry_wait=1.00, verify=False,
+                         server_side=False):
         """
         Wrap an existing Python socket and return an SSLSocket Object.
         this is iternally called if we're dealing with a secure
@@ -842,11 +968,11 @@ class SocketBase(object):
             'suppress_ragged_eofs': True,
         }
 
-        if self.mode == ConnectionType.SECURE_LISTEN:
+        kwargs['server_side'] = server_side
+        if server_side:
             # We need to add a few more parameters
             kwargs['keyfile'] = self._keyfile
             kwargs['certfile'] = self._certfile
-            kwargs['server_side'] = True
 
             # Verify our certificates/keys exist or abort
             # These checks are nessisary otherwise you'll get strange errors like:
@@ -863,7 +989,7 @@ class SocketBase(object):
                 raise ValueError(
                     'Could not locate Private Key: %s' % self._keyfile)
 
-        if self.mode == ConnectionType.SECURE_CONNECT:
+        else:
             if verify:
                 # Verify Certificate
                 cert_reqs = ssl.CERT_REQUIRED
@@ -897,7 +1023,7 @@ class SocketBase(object):
                 ))
 
                 # Store our certificate
-                if self.mode == ConnectionType.SECURE_CONNECT:
+                if not server_side:
                     self.peer_certificate = \
                         self.socket.getpeercert(binary_form=False)
 
@@ -952,13 +1078,13 @@ class SocketBase(object):
         self.close()
 
     def __str__(self):
-        if self.mode == ConnectionType.SECURE_CONNECT:
-            return 'tcps://%s:%d' % (self.host, self.port)
+        if self.secure is False:
+            return 'tcp%s:%d' % (self.host, self.port)
         # else
-        return 'tcp%s:%d' % (self.host, self.port)
+        return 'tcps://%s:%d' % (self.host, self.port)
 
     def __unicode__(self):
-        if self.mode == ConnectionType.SECURE_CONNECT:
-            return u'tcps://%s:%d' % (self.host, self.port)
+        if self.secure is False:
+            return u'tcp%s:%d' % (self.host, self.port)
         # else
-        return u'tcp%s:%d' % (self.host, self.port)
+        return u'tcps://%s:%d' % (self.host, self.port)

@@ -38,7 +38,6 @@ try:
     from lib.codecs import CodecBase
 
 except ImportError:
-    print 'importing %s' % dirname(dirname(abspath(__file__)))
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from lib.codecs import CodecBase
 

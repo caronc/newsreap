@@ -23,6 +23,7 @@ if 'threading' in sys.modules:
 
 import gevent.monkey
 gevent.monkey.patch_all()
+
 # Import threading after monkey patching
 # see: http://stackoverflow.com/questions/8774958/\
 #        keyerror-in-module-threading-after-a-successful-py-test-run
@@ -40,7 +41,6 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from tests.NNTPSocketServer import NNTPSocketServer
-from tests.NNTPSocketServer import NNTPBaseRequestHandler
 
 from lib.NNTPConnection import NNTPConnection
 from lib.NNTPIOStream import NNTPIOStream
@@ -60,44 +60,29 @@ class NNTPConnection_Test(TestBase):
         """
         super(NNTPConnection_Test, self).setUp()
 
-        self.hostname = "localhost"
-
-        ## Secure NNTP Server
+        # Secure NNTP Server
         self.nntps = NNTPSocketServer(
-            (self.hostname, 0),
-            NNTPBaseRequestHandler,
             secure=True,
         )
-        ## Insecure NNTP Server
+
+        # Insecure NNTP Server
         self.nntp = NNTPSocketServer(
-            (self.hostname, 0),
-            NNTPBaseRequestHandler,
             secure=False,
-        )
-
-        # Get our connection stats
-        self.nttps_ipaddr, self.nntps_portno = self.nntps.server_address
-        self.nttp_ipaddr, self.nntp_portno = self.nntp.server_address
-
-        # Push DUMMY NTP Server To Thread
-        self.nntps_thread = threading.Thread(
-            target=self.nntps.serve_forever,
-            name='NNTPSServer',
-        )
-
-        self.nntp_thread = threading.Thread(
-            target=self.nntp.serve_forever,
-            name='NNTPServer',
         )
 
         # Exit the server thread when the main thread terminates
         self.nntps.daemon = True
         self.nntp.daemon = True
 
-        # Start Threads
-        self.nntps_thread.start()
-        self.nntp_thread.start()
+        # Start Our Server Threads
+        self.nntps.start()
+        self.nntp.start()
 
+        # Acquire our configuration
+        self.nttp_ipaddr, self.nntp_portno = \
+                self.nntp.local_connection_info()
+        self.nttps_ipaddr, self.nntps_portno = \
+                self.nntps.local_connection_info()
 
     def tearDown(self):
         # Shutdown NNTP Dummy Servers Daemons
@@ -105,7 +90,6 @@ class NNTPConnection_Test(TestBase):
         self.nntp.shutdown()
 
         super(NNTPConnection_Test, self).tearDown()
-
 
     def test_authentication(self):
         sock = NNTPConnection(
@@ -116,7 +100,7 @@ class NNTPConnection_Test(TestBase):
             secure=False,
             join_group=False,
         )
-        assert sock.connect(timeout=5.0) == True
+        assert sock.connect(timeout=5.0) is True
         assert sock._iostream == NNTPIOStream.RFC3977_GZIP
         sock.close()
 
@@ -129,7 +113,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Username
-        assert sock.connect(timeout=5.0) == False
+        assert sock.connect(timeout=5.0) is False
 
         sock = NNTPConnection(
             host=self.nttp_ipaddr,
@@ -140,7 +124,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Password
-        assert sock.connect(timeout=5.0) == False
+        assert sock.connect(timeout=5.0) is False
 
 
     def test_secure_authentication(self):
@@ -152,7 +136,7 @@ class NNTPConnection_Test(TestBase):
             secure=True,
             join_group=False,
         )
-        assert sock.connect(timeout=5.0) == True
+        assert sock.connect(timeout=5.0) is True
         assert sock._iostream == NNTPIOStream.RFC3977_GZIP
         sock.close()
 
@@ -165,7 +149,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Username
-        assert sock.connect(timeout=5.0) == False
+        assert sock.connect(timeout=5.0) is False
 
         sock = NNTPConnection(
             host=self.nttps_ipaddr,
@@ -176,10 +160,10 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
         # Invalid Password
-        assert sock.connect(timeout=5.0) == False
+        assert sock.connect(timeout=5.0) is False
 
-
-    def test_regular_expressions(self):
+    @classmethod
+    def test_regular_expressions(cls):
         """
         Tests XOVER Regular Expressions
 
@@ -306,71 +290,3 @@ class NNTPConnection_Test(TestBase):
         # Again without the lazy flag set
         groups = sock.groups(filters='alt.binaries')
         assert len(groups) == 5270
-
-
-if __name__ == '__main__':
-
-    hostname = "localhost"
-
-    ## Secure NNTP Server
-    nntps = NNTPSocketServer(
-        (hostname, 0),
-        NNTPBaseRequestHandler,
-        secure=True,
-    )
-
-    ## Insecure NNTP Server
-    nntp = NNTPSocketServer(
-        (hostname, 0),
-        NNTPBaseRequestHandler,
-        secure=False,
-    )
-
-    # Get our connection stats
-    nttps_ipaddr, nntps_portno = nntps.server_address
-    nttp_ipaddr, nntp_portno = nntp.server_address
-
-    # Push DUMMY NTP Server To Thread
-    nntps_thread = threading.Thread(
-        target=nntps.serve_forever,
-        name='NTPS_Server',
-    )
-
-    nntp_thread = threading.Thread(
-        target=nntp.serve_forever,
-        name='NTP_Server',
-    )
-
-    # Exit the server thread when the main thread terminates
-    nntps.daemon = True
-    nntp.daemon = True
-
-    # Start Threads
-    nntps_thread.start()
-    nntp_thread.start()
-
-    socket = NNTPConnection(
-        host=nttp_ipaddr,
-        port=nntp_portno,
-        username='valid',
-        password='user',
-        secure=False,
-        join_group=False,
-    )
-
-    ssocket = NNTPConnection(
-        host=nttps_ipaddr,
-        port=nntps_portno,
-        username='valid',
-        password='user',
-        secure=True,
-        join_group=False,
-    )
-
-    print 'DEBUG: CLIENT CONNECT'
-    ssocket.connect(timeout=20.0)
-    print 'DEBUG: CLIENT CONNECTED'
-    print 'DEBUG: CLIENT CLOSING CONNECTION'
-    nntp.shutdown()
-    nntps.shutdown()
-    exit(0)

@@ -44,7 +44,6 @@ except ImportError:
 
 
 from tests.NNTPSocketServer import NNTPSocketServer
-from tests.NNTPSocketServer import NNTPBaseRequestHandler
 from tests.NNTPSocketServer import NNTP_TEST_VAR_PATH as VAR_PATH
 
 from lib.NNTPConnection import NNTPConnection
@@ -60,36 +59,16 @@ class NNTPYencArticle_Test(TestBase):
         """
         super(NNTPYencArticle_Test, self).setUp()
 
-        self.hostname = "localhost"
-
-        ## Secure NNTP Server
+        # Secure NNTP Server
         self.nntps = NNTPSocketServer(
-            (self.hostname, 0),
-            NNTPBaseRequestHandler,
             secure=True,
             join_group=True,
         )
-        ## Insecure NNTP Server
+
+        # Insecure NNTP Server
         self.nntp = NNTPSocketServer(
-            (self.hostname, 0),
-            NNTPBaseRequestHandler,
             secure=False,
             join_group=True,
-        )
-
-        # Get our connection stats
-        self.nttps_ipaddr, self.nntps_portno = self.nntps.server_address
-        self.nttp_ipaddr, self.nntp_portno = self.nntp.server_address
-
-        # Push DUMMY NTP Server To Thread
-        self.nntps_thread = threading.Thread(
-            target=self.nntps.serve_forever,
-            name='NTPServer',
-        )
-
-        self.nntp_thread = threading.Thread(
-            target=self.nntp.serve_forever,
-            name='NTPServer',
         )
 
         # Common Group Name
@@ -97,33 +76,33 @@ class NNTPYencArticle_Test(TestBase):
 
         # Map Articles (to groups) for fetching
         self.nntp.map(
-            id='5',
+            article_id='5',
             groups=(self.common_group, ),
             filepath=join(VAR_PATH, '00000005.ntx'),
         )
         self.nntps.map(
-            id='5',
+            article_id='5',
             groups=(self.common_group, ),
             filepath=join(VAR_PATH, '00000005.ntx'),
         )
 
         self.nntp.map(
-            id='20',
+            article_id='20',
             groups=(self.common_group, ),
             filepath=join(VAR_PATH, '00000020.ntx'),
         )
         self.nntp.map(
-            id='21',
+            article_id='21',
             groups=(self.common_group, ),
             filepath=join(VAR_PATH, '00000021.ntx'),
         )
         self.nntps.map(
-            id='20',
+            article_id='20',
             groups=(self.common_group, ),
             filepath=join(VAR_PATH, '00000020.ntx'),
         )
         self.nntps.map(
-            id='21',
+            article_id='21',
             groups=(self.common_group, ),
             filepath=join(VAR_PATH, '00000021.ntx'),
         )
@@ -132,9 +111,15 @@ class NNTPYencArticle_Test(TestBase):
         self.nntps.daemon = True
         self.nntp.daemon = True
 
-        # Start Threads
-        self.nntps_thread.start()
-        self.nntp_thread.start()
+        # Start Our Server Threads
+        self.nntps.start()
+        self.nntp.start()
+
+        # Acquire our configuration
+        self.nttp_ipaddr, self.nntp_portno = \
+                self.nntp.local_connection_info()
+        self.nttps_ipaddr, self.nntps_portno = \
+                self.nntps.local_connection_info()
 
 
     def tearDown(self):
