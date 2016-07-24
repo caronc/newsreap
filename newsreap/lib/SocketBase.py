@@ -50,7 +50,6 @@ try:
 
         # The following are not 100% secure but are sometimes
         # the only option
-         (ssl.PROTOCOL_SSLv2, u'SSL v2.0'),
          (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
     )
 
@@ -63,7 +62,6 @@ except AttributeError:
 
         # The following are not 100% secure but are sometimes
         # the only option
-         (ssl.PROTOCOL_SSLv2, u'SSL v2.0'),
          (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
     )
 
