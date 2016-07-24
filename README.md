@@ -6,11 +6,11 @@ you interface with your Usenet providers.
 NewsReap supports features such as:
 * SSL Support
 * Group Searching
-* Threading Support (handles multiple connections simultaneously)
+* Multithreaded (handles multiple connections simultaneously)
 * Aliases allow you to not only group multiple Usenet groups into 1; you can use aliases to also simplify the reference to the group itself.
 
 Some under the hood stuff that developers should appreciate about NewsReap are:
-* It suports character sets and does it's bes to allow you to work with unicode characters
+* It suports character sets and does it's best to allow you to work with unicode characters
 * It's backend is based on SQLAlchemy making it really easy to adapt to your own projects.
 * It's front-end CLI is built using Click which allows anyone to extend it to their likings.
 

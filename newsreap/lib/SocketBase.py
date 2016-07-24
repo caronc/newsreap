@@ -21,6 +21,10 @@ from gevent import Timeout
 from gevent.select import select
 from gevent.select import error as SelectError
 
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from cryptography.x509.oid import NameOID
+
 import gevent.monkey
 gevent.monkey.patch_all()
 
@@ -64,6 +68,7 @@ except AttributeError:
         # the only option
          (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
     )
+
 
 class SignalCaughtException(Exception):
     """ Generic Signal Caught Exception;
@@ -149,7 +154,7 @@ class SocketBase(object):
 
         # A spot we can store our peer certificate; this is only used
         # if we're dealing with a secure connection
-        self.peer_certificate = {}
+        self.peer_certificate = None
 
         # CA stands for Certificate Authority (for those reading this code)
         # This is the master list of servers that you trust for verifying
@@ -187,7 +192,7 @@ class SocketBase(object):
         # es = Error Sockets
         if self.socket is not None:
             try:
-                rs, _, es = select([self.socket] , [], [], timeout)
+                rs, _, es = select([self.socket], [], [], timeout)
             except (SelectError, socket.error), e:
                 if e[0] == errno.EBADF:
                     # Bad File Descriptor... hmm
@@ -204,7 +209,6 @@ class SocketBase(object):
         # no socket or no connection
         return None
 
-
     def can_write(self, timeout=0):
         """
         Checks if there is data that can be written to the
@@ -220,7 +224,7 @@ class SocketBase(object):
         # es = Error Sockets
         if self.socket is not None:
             try:
-                _, ws, es = select([], [self.socket] , [], timeout)
+                _, ws, es = select([], [self.socket], [], timeout)
             except (SelectError, socket.error), e:
                 if e[0] == errno.EBADF:
                     # Bad File Descriptor... hmm
@@ -236,7 +240,6 @@ class SocketBase(object):
 
         # no socket or no connection
         return None
-
 
     def close(self):
         """ Socket Wrapper for people using this class as if it were just
@@ -271,7 +274,7 @@ class SocketBase(object):
         self.connected = False
 
         # reset our peer certificate
-        self.peer_certificate = {}
+        self.peer_certificate = None
 
         # reset stats
         self.bytes_in = 0
@@ -289,7 +292,6 @@ class SocketBase(object):
         if data:
             return data
         return ''
-
 
     def bind(self, timeout=None, retries=3, retry_wait=10.0):
         """
@@ -336,7 +338,7 @@ class SocketBase(object):
                     # listening process to continue; break so that we
                     # can handle this
                     raise SignalCaughtException('Signal received')
-                #elif e[0] == errno.EADDRINUSE:
+                # elif e[0] == errno.EADDRINUSE:
 
             # Close socket
             self.close()
@@ -361,7 +363,6 @@ class SocketBase(object):
         # Code can't ever reach here; but to satisfy lint
         # we'll put a return statement here
         return False
-
 
     def connect(self, timeout=None, retry_wait=1.00):
         """
@@ -415,8 +416,10 @@ class SocketBase(object):
                 self.socket.setblocking(False)
 
                 # Store local details of our socket
-                (self._local_addr, self._local_port) = self.socket.getsockname()
-                (self._remote_addr, self._remote_port) = self.socket.getpeername()
+                (self._local_addr, self._local_port) = \
+                        self.socket.getsockname()
+                (self._remote_addr, self._remote_port) = \
+                        self.socket.getpeername()
 
                 logger.info(
                     "Connection established to %s:%d" % (
@@ -462,7 +465,7 @@ class SocketBase(object):
                 raise SocketRetryLimit('There are no protocols left to try.')
 
             except socket.error, e:
-                #logger.debug("Exception received: %s " % (e));
+                # logger.debug("Exception received: %s " % (e));
                 if e[0] == errno.EINTR:
                     # Ensure socket is closed
                     self.close()
@@ -495,7 +498,6 @@ class SocketBase(object):
 
         self.connected = True
         return True
-
 
     def listen(self, timeout=None, retry_wait=1.00, reuse_port=True):
         """
@@ -656,7 +658,7 @@ class SocketBase(object):
             raise SocketRetryLimit('There are no protocols left to try.')
 
         except socket.error, e:
-            #logger.debug("Exception received: %s " % (e));
+            # logger.debug("Exception received: %s " % (e));
             if e[0] == errno.EINTR:
                 # Ensure socket is closed
                 self.close()
@@ -745,7 +747,7 @@ class SocketBase(object):
                         self.bytes_in += len(data)
                         total_data.append(data)
 
-                    #if not timeout:
+                    # if not timeout:
                     #    raise SocketException('Connection lost')
                     break
 
@@ -802,7 +804,6 @@ class SocketBase(object):
 
         # Return Buffer
         return ''.join(total_data)
-
 
     def send(self, data, max_bytes=None, retry_wait=0.25):
         """ Socket Wrapper for people using this class as if it were just
@@ -914,7 +915,6 @@ class SocketBase(object):
 
         return (self._remote_addr, self._remote_port)
 
-
     def __ssl_version(self, try_next=False):
         """
         Returns an SSL Context Object while handling the many
@@ -933,7 +933,8 @@ class SocketBase(object):
         # of SocketException() since we're at the end of the line now.
         raise SocketRetryLimit('There are no protocols left to try.')
 
-    def __encrypt_socket(self, timeout=None, retry_wait=1.00, verify=False,
+    def __encrypt_socket(self, timeout=None, retry_wait=1.00,
+                         verify=True, cert_reqs=ssl.CERT_NONE,
                          server_side=False):
         """
         Wrap an existing Python socket and return an SSLSocket Object.
@@ -944,12 +945,19 @@ class SocketBase(object):
         elapses. Otherwise, if None is specified, we'll only break on
         completion or if an error occurs.
 
-        verify checks the certificate with the Certificate Authority. For
-        this reason. it's important that the ca_cert has been defined!
-        verify is only used during a 'connect' (not a listen)
-
         This function has no return value; it either encryptes the socket
         or throws a SocketException() error.
+            cert_reqs can be:
+                ssl.CERT_REQUIRED:  certificate verification manditory; no
+                                     certificate means to fail.
+                ssl.CERT_OPTIONAL:  certificate verifcation performed but
+                                     only if one was detected.
+                ssl.CERT_NONE:      No certificate verification performed
+
+            verify can kick in if ssl.CERT_NONE is specified (otherwise
+            it's not nesisary).  It handles those with self-signed certificates
+            by doing it's best to perform some very basic checks that can help
+            abort the connection when dealing with a man-in-the-middle attack.
 
         """
         # Disable Blocking
@@ -973,13 +981,16 @@ class SocketBase(object):
             kwargs['certfile'] = self._certfile
 
             # Verify our certificates/keys exist or abort
-            # These checks are nessisary otherwise you'll get strange errors like:
-            # _ssl.c:341: error:140B0002:SSL routines:SSL_CTX_use_PrivateKey_file:system lib
+            # These checks are nessisary otherwise you'll get strange errors
+            # like:
+            # _ssl.c:341: error:140B0002:SSL \
+            #       routines:SSL_CTX_use_PrivateKey_file:system lib
             #
-            # The error itself will surface during the call to wrap_socket() which
-            # will throw the exception ssl.SSLError
+            # The error itself will surface during the call to wrap_socket()
+            # which will throw the exception ssl.SSLError
             #
-            # it doesn't hurt to just check ahead of time and make the error human readable
+            # it doesn't hurt to just check ahead of time and make the error
+            # human readable
             if not isfile(self._certfile):
                 raise ValueError(
                     'Could not locate Certificate: %s' % self._certfile)
@@ -987,21 +998,14 @@ class SocketBase(object):
                 raise ValueError(
                     'Could not locate Private Key: %s' % self._keyfile)
 
-        else:
-            if verify:
-                # Verify Certificate
-                cert_reqs = ssl.CERT_REQUIRED
-
-                if self._ca_certs:
-                    # if we have a ca_certs reference, then let's store it
-                    kwargs['ca_certs'] = self._ca_certs
-                    if not isfile(self._ca_certs):
-                        raise ValueError(
-                            'Could not locate CA Certificates: %s' % \
-                            self._ca_certs,
-                        )
-            else:
-                cert_reqs = ssl.CERT_NONE
+        elif self._ca_certs:
+            # if we have a ca_certs reference, then let's store them now
+            kwargs['ca_certs'] = self._ca_certs
+            if not isfile(self._ca_certs):
+                raise ValueError(
+                    'Could not locate CA Certificates: %s' % \
+                    self._ca_certs,
+                )
 
             # Store our Certificate Requirements
             kwargs['cert_reqs'] = cert_reqs
@@ -1009,30 +1013,112 @@ class SocketBase(object):
         # Wrap our socket with the SSLSocket Object
         self.socket = ssl.wrap_socket(self.socket, **kwargs)
 
+        # Get reference time
+        cur_time = datetime.now()
+
         while True:
             # Infinit loop is nessisary for do_handshake() wrapping
             # we'll either exit this loop with a secure connection
             # or we'll time out and gracefully exit.
             try:
+                # This command does a lot of the magic
                 self.socket.do_handshake()
+
                 logger.info("Secured connection using %s." % (
                     SECURE_PROTOCOL_PRIORITY\
                         [self.secure_protocol_idx][1],
                 ))
 
-                # Store our certificate
                 if not server_side:
-                    self.peer_certificate = \
-                        self.socket.getpeercert(binary_form=False)
+                    # Store our peer certificate
+                    try:
+                        #self.peer_certificate = \
+                        #    self.socket.getpeercert(binary_form=False)
+                        # Returns None if there is no certificate for the peer
+                        # on the other end; there is always a binary form, but
+                        # not always the non-binary version
+                        binary_cert = self.socket.getpeercert(binary_form=True)
 
-                # if verify:
-                # TODO: Verify hostname if verify specified
+                    except ValueError:
+                        # SSL Handshaking hasn't completed yet; this is a
+                        # horrible state to be in if this is the case because
+                        # we're only at this part of the code because this
+                        # handshaking is presumed to have already been
+                        # complete.
+
+                        # Fail at this point for the reason there is something
+                        # wrong with our SSL.
+                        raise SocketException('Secure handshaking failure')
+
+                    try:
+                        # load_der_x509_certificate() also throws a ValueError
+                        # if it couldn't parse the certificate. So we need a
+                        # separate try/except after acquiring the binary
+                        # certificate
+                        self.peer_certificate = x509.load_der_x509_certificate(
+                            binary_cert,
+                            default_backend(),
+                        )
+                    except ValueError:
+                        # we couldn't acquire the certificate
+                        self.peer_certificate = None
+                        if verify:
+                            raise SocketRetryLimit(
+                                "Could not acquire site certificate.",
+                            )
+                        logger.warning("Could not acquire site certificate.")
+
+                    if verify and cert_reqs == ssl.CERT_NONE:
+                        # Our own verification process which certainly isn't
+                        # bulletproof, but can help with self-signed
+                        # certificates and still offer 'some' security
+                        try:
+                            cert_host = \
+                                self.peer_certificate.subject\
+                                    .get_attributes_for_oid(NameOID.COMMON_NAME)\
+                                    .pop().value
+
+                            # Perform a reverse lookup on our remote IP Address
+                            (host, alias, ips) = \
+                                    socket.gethostbyaddr(self._remote_addr)
+
+                            # If we get here, we've got a hostname to work with
+                            matched_host = next((h for h in \
+                                          [ host ] + alias + ips
+                                          if h == cert_host), False)
+
+                            if not matched_host:
+                                raise SocketRetryLimit(
+                                    "Certificate for '%s' and does not match." % (
+                                        cert_host,
+                                ))
+
+                            # Now we check that the host we're connecting to
+                            # is also in this list
+                            matched_host = next((h for h in \
+                                          [ host ] + alias + ips
+                                          if h == self.host), False)
+
+                            if not matched_host:
+                                raise SocketRetryLimit(
+                                    "The host '%s' does not match remote location.",
+                                        cert_host,
+                                )
+
+                        # TODO: Store fingerprint (if not stored already)
+                        #       If already stored, then verify that it hasn't
+                        #       changed.
+
+                        except IndexError:
+                            raise SocketRetryLimit(
+                                'Certificate common name not defined!',
+                            )
 
                 # We're done
                 self.connected = True
                 return
 
-            except ssl.SSLWantReadError, e:
+            except ssl.SSLWantReadError:
                 # SSL Connection will block until it is ready
                 # The problem with this is can_read() and can_write()
                 # all return True.  the socket needs more time
@@ -1042,7 +1128,7 @@ class SocketBase(object):
                     raise SocketException('Connection broken')
                 continue
 
-            except ssl.SSLWantWriteError, e:
+            except ssl.SSLWantWriteError:
                 # SSL Connection will block until it is ready
                 # The problem with this is can_read() and can_write()
                 # all return True.  the socket needs more time
@@ -1077,12 +1163,12 @@ class SocketBase(object):
 
     def __str__(self):
         if self.secure is False:
-            return 'tcp%s:%d' % (self.host, self.port)
+            return 'tcp%s:%d' % (self._remote_addr, self._remote_port)
         # else
-        return 'tcps://%s:%d' % (self.host, self.port)
+        return 'tcps://%s:%d' % (self._remote_addr, self._remote_port)
 
     def __unicode__(self):
         if self.secure is False:
-            return u'tcp%s:%d' % (self.host, self.port)
+            return u'tcp%s:%d' % (self._remote_addr, self._remote_port)
         # else
-        return u'tcps://%s:%d' % (self.host, self.port)
+        return u'tcps://%s:%d' % (self._remote_addr, self._remote_port)

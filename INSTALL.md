@@ -12,7 +12,8 @@ This is my personal favorite choice; the OS is usually always a bit outdated, bu
 sudo yum --enablerepo=nuxref* install \
            python-blist python-yenc \
            PyYAML python-sqlalchemy \
-           python-gevent python-click
+           python-gevent python-click \
+           python-cryptography
 
 # Testers might want to also install the following:
 sudo yum --enablerepo=nuxref* --best install \
@@ -28,7 +29,8 @@ sudo yum --enablerepo=nuxref* --best install \
 sudo dnf --enablerepo=nuxref* --best install \
            python-blist python-yenc \
            PyYAML python-sqlalchemy \
-           python-gevent python-click
+           python-gevent python-click \
+           python-cryptography
 
 # Testers might want to also install the following:
 sudo dnf --enablerepo=nuxref* --best install \
@@ -38,80 +40,13 @@ sudo dnf --enablerepo=nuxref* --best install \
 # You're done; go ahead and use the newsreap tools
 ```
 
-### Virtualenv
-Python Virtual Environments are kind of handy to have but are a little trickier to work with.  Explaining these here is probably a bit overkill. They are
-maybe only needed for that hardcore developer who's working on newsreap as
-well as other apps and doesn't want my python dependencies colliding with
-there other ones. This is more advanced and not for everyone.
-
-#### Step 1: The Environment Setup
-##### Red Hat / CentOS 6 & 7
-```bash
-sudo yum install python-virtualenv python-pip curl \
-             python-virtualenvwrapper gcc
-# either open a new terminal window or run the following
-# to make your current terminal window ready to use the
-# virtualenvwrapper
-. /etc/profile.d/virtualenvwrapper.sh
-
-# Create a new newsreap virtualenv
-mkvirtualenv -p python2.7 newsreap
+## Other Distributions
+### PIP
+For other distributions, you may need to go the PIP route.
 ```
-##### Fedora 22+
-```bash
-sudo dnf install python-virtualenv python-pip curl \
-             python-virtualenvwrapper gcc
-
-# either open a new terminal window or run the following
-# to make your current terminal window ready to use the
-# virtualenvwrapper
-. /etc/profile.d/virtualenvwrapper.sh
-
-# Create a new newsreap virtualenv
-mkvirtualenv -p python2.7 newsreap
-```
-##### Ubuntu & Debian
-```
-sudo apt-get install virtualenv \
-        python-pip unzip gcc
-
-# enable virtualenvwrapper manually if you don't have
-# bash autocomplete set up yet:
-echo 'source /etc/bash_completion.d/virtualenvwrapper' >> ~/.bashrc
-echo "export WORKON_HOME=~/.virtualenvs" >> ~/.bashrc
-
-# close your terminal window and open a new one, or
-# just do the following to make your current window active
-export WORKON_HOME=~/.virtualenvs
-source /etc/bash_completion.d/virtualenvwrapper
-
-# Create a new newsreap virtualenv
-mkvirtualenv -p python2.7 newsreap
-```
-##### Windows
-```bash
-# make sure pip is installed (it comes with python when you
-# download it and install it:
-pip install virtualenv
-pip install virtualenvwrapper-win
-
-# Create a new newsreap virtualenv
-mkvirtualenv -p python2.7 newsreap
-```
-
-#### Step 2: The Environment
-Once you've got your virtual environment set up, you
-can interact with it at anytime:
-```bash
-# You can leave this environment and return by typing
-deactivate
-
-# In the future, you can just change to this environment
-# by typing:
-workon newsreap
-# You should see a (newsreap) prefix infront of your directory
-
 # Browse to the directory you installed newsreap into
-# Then Install the nessisary dependencies;
+# Then Install the nessisary dependencies like so:
 pip install -r requirements.txt
 ```
+
+__Note:__ _Windows users_ will need to have access to a compiler (as pip will need to compile things such as [gevent](https://pypi.python.org/pypi/gevent/) and [cryptography](https://pypi.python.org/pypi/cryptography/). As long as the [Microsoft Visual C++ Compiler for Python 2.7](https://www.microsoft.com/en-ca/download/details.aspx?id=44266) is installed, you shouldn't have a problem.

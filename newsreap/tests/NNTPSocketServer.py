@@ -44,11 +44,13 @@ from os.path import abspath
 try:
     from lib.SocketBase import SocketBase
     from lib.SocketBase import SocketException
+    from lib.SocketBase import DEFAULT_BIND_ADDR
 
 except ImportError:
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from lib.SocketBase import SocketBase
     from lib.SocketBase import SocketException
+    from lib.SocketBase import DEFAULT_BIND_ADDR
 
 # Our internal server is only used for testing, therefore we can get away with
 # having a really low timeout
@@ -67,7 +69,6 @@ DEFAULT_EMPTY_FILE = join(
 
 # Article ID
 ARTICLE_ID_RE = re.compile(r'\s*<*\s*(?P<id>[^>]+)>?.*')
-
 
 # All of the default NNTP Responses are defined here by their
 # compiled regular expression
@@ -125,6 +126,9 @@ class NNTPClient(SocketBase):
 
     """
     def __init__(self, *args, **kwargs):
+        """
+        NNTPClient initialization
+        """
         # Initialize the Socket Base Class
         super(NNTPClient, self).__init__(*args, **kwargs)
 
@@ -153,7 +157,7 @@ class NNTPClient(SocketBase):
         """
         try:
             # Prevent Recursion by calling parent send()
-            super(NNTPClient, self).send('QUIT' + EOL)
+            super(NNTPClient, self).send('QUIT' + NNTP_EOL)
         except:
             # well.. we tried at least
             pass
@@ -237,6 +241,9 @@ class NNTPSocketServer(threading.Thread):
         connection_info = self.local_connection_info(timeout=timeout)
         if connection_info:
             _ipaddr, _portno = connection_info
+
+        if _ipaddr == DEFAULT_BIND_ADDR:
+            _ipaddr = '127.0.0.1'
 
         # create a socket
         sock = NNTPClient(
@@ -649,9 +656,6 @@ if __name__ == "__main__":
     socket = nntp_server.get_client()
 
     socket.put("AUTHINFO USER valid")
-    # client(hostname, portno, "AUTHINFO USER valid\r\n")
-    # client(hostname, portno, "AUTHINFO USER valid\r\n", ssl.PROTOCOL_TLSv1)
-    # client(hostname, portno, "AUTHINFO USER valid\r\n", ssl.PROTOCOL_SSLv3)
     nntp_server.shutdown()
 
     ## NON SSL
