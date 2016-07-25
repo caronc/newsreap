@@ -62,6 +62,7 @@ YENC_KEY_MAP = {
     'crc32_1': 'crc32', 'crc32_2': 'crc32',
 }
 
+
 class YencError(Exception):
     """ Class for specific yEnc errors
     """
@@ -91,30 +92,31 @@ except ImportError:
     # the below code was based on the yEnc libraries.  But
     # the part that is blisterily fast (Written in C) will
     # be writting in python (a much slower solution)
-
     FAST_YENC_SUPPORT = False
 
-YENC42 = ''.join(map(lambda x: chr((x-42) & 255), range(256)))
+    # A Translation Map
+    YENC42 = ''.join(map(lambda x: chr((x-42) & 255), range(256)))
 
-# a map that identifies all of the special keywords used by
-# yEnc which need a special conversion done to them before
-# We use the curses.ascii table to make our code easier to read
-from curses import ascii
-YENC_DECODE_SPECIAL_MAP = dict([('=%s' % chr(k+64), chr(k)) for k in (
-    # Non-Printable
-    ascii.NUL, ascii.LF, ascii.CR, ascii.SP, ascii.TAB,
+    # a map that identifies all of the special keywords used by
+    # yEnc which need a special conversion done to them before
+    # We use the curses.ascii table to make our code easier to read
+    from curses import ascii
+    YENC_DECODE_SPECIAL_MAP = dict([('=%s' % chr(k+64), chr(k)) for k in (
+        # Non-Printable
+        ascii.NUL, ascii.LF, ascii.CR, ascii.SP, ascii.TAB,
 
-    # Printable
-    ord('.'), ord('='),
-)] + [
-    # Ignore Types (we simply ignore these types if they are found)
-    (chr(ascii.LF), ''), (chr(ascii.CR), ''),
-])
+        # Printable
+        ord('.'), ord('='),
+    )] + [
+        # Ignore Types (we simply ignore these types if they are found)
+        (chr(ascii.LF), ''), (chr(ascii.CR), ''),
+    ])
 
-# Compile our map into a decode table
-YENC_DECODE_SPECIAL_RE = re.compile(
-    r'(' + r'|'.join(YENC_DECODE_SPECIAL_MAP.keys()) + r')',
-)
+    # Compile our map into a decode table
+    YENC_DECODE_SPECIAL_RE = re.compile(
+        r'(' + r'|'.join(YENC_DECODE_SPECIAL_MAP.keys()) + r')',
+    )
+
 
 class CodecYenc(CodecBase):
 
@@ -132,7 +134,6 @@ class CodecYenc(CodecBase):
         # Our Binary Object we can reference while we decode
         # content
         self.decoded = None
-
 
     def detect(self, line, relative=True):
         """
@@ -185,7 +186,6 @@ class CodecYenc(CodecBase):
                     del f_map[kw]
 
         return f_map
-
 
     def decode(self, stream):
         """ Decode some data and decode the data
@@ -290,7 +290,7 @@ class CodecYenc(CodecBase):
                 except YencError:
                     logger.warning(
                         "Corruption on line %d." % \
-                                 self._lines,
+                        self._lines,
                     )
 
                     # Line Tracking
@@ -334,13 +334,12 @@ class CodecYenc(CodecBase):
         # Reset part information
         self._part_no = 1
 
-        if  self.decoded:
+        if self.decoded:
             # close article when complete
             self.decoded.close()
 
         # Return what we do have
         return self.decoded
-
 
     def reset(self):
         """
@@ -359,13 +358,11 @@ class CodecYenc(CodecBase):
         # content
         self.decoded = None
 
-
     def __lt__(self, other):
         """
         Sorts by part number
         """
         return self._part_no < other._part_no
-
 
     def __str__(self):
         """
@@ -381,7 +378,6 @@ class CodecYenc(CodecBase):
         return '%s' % (
             fname
         )
-
 
     def __repr__(self):
         """
