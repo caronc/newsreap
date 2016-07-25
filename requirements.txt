@@ -5,4 +5,4 @@ sqlalchemy >= 1.0
 gevent >= 1.1.2
 dateutils
 cryptography >= 0.7
-yenc > 0.4
+yenc >= 0.4
