@@ -231,7 +231,16 @@ class NNTPSocketServer(threading.Thread):
         if not self._active.wait(timeout):
             return None
 
-        return self.socket.local_connection_info()
+        connection_info = self.socket.local_connection_info()
+        if connection_info:
+            _ipaddr, _portno = connection_info
+        else:
+            return None
+
+        if _ipaddr == DEFAULT_BIND_ADDR:
+            _ipaddr = '127.0.0.1'
+
+        return (_ipaddr, _portno)
 
     def get_client(self, timeout=3.0):
         """
@@ -239,11 +248,7 @@ class NNTPSocketServer(threading.Thread):
 
         """
         connection_info = self.local_connection_info(timeout=timeout)
-        if connection_info:
-            _ipaddr, _portno = connection_info
-
-        if _ipaddr == DEFAULT_BIND_ADDR:
-            _ipaddr = '127.0.0.1'
+        _ipaddr, _portno = connection_info
 
         # create a socket
         sock = NNTPClient(

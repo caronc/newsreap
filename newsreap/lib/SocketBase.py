@@ -1101,8 +1101,8 @@ class SocketBase(object):
 
                             if not matched_host:
                                 raise SocketRetryLimit(
-                                    "The host '%s' does not match remote location.",
-                                        cert_host,
+                                    "The host '%s' does not match remote (%s)." % (
+                                        cert_host, self.host),
                                 )
 
                         # TODO: Store fingerprint (if not stored already)
