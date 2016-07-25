@@ -141,7 +141,7 @@ sock = NNTPConnection(
 groups = sock.groups()
 
 # - Iterate over articles in a group (returns a listing)
-items = xover()
+items = sock.xover()
 
 # - Retrieve an article (if you know it's ID)
 #      - The work_dir is where the content is placed into
