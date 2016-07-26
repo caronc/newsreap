@@ -23,7 +23,7 @@ from setuptools import find_packages
 setup(
     name='newsreap',
     version='0.0.1',
-    description='Usenet Indexer',
+    description='Usenet Indexer and Framework',
     long_description=open('README.md').read() + \
                         '\n\n' + open('HISTORY.rst').read(),
     url='https://github.com/caronc/newsreap',
@@ -32,6 +32,7 @@ setup(
     author_email='lead2gold@gmail.com',
     packages=find_packages(),
     include_package_data=True,
+    scripts=['bin/nr.py'],
     test_suite='tests',
     install_requires=open('requirements.txt').readlines(),
     classifiers=(
