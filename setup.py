@@ -17,8 +17,6 @@
 #
 
 from setuptools import setup
-from setuptools import find_packages
-
 
 setup(
     name='newsreap',
@@ -27,12 +25,13 @@ setup(
     long_description=open('README.md').read() + \
                         '\n\n' + open('HISTORY.rst').read(),
     url='https://github.com/caronc/newsreap',
-    keywords='usenet nntp index',
+    keywords='usenet nntp index framework',
     author='Chris Caron',
     author_email='lead2gold@gmail.com',
-    packages=find_packages(),
+    packages=['newsreap', ],
     include_package_data=True,
-    scripts=['bin/nr.py'],
+    scripts=['bin/nr.py', ],
+    data_files=[('share/newsreap', ['config.yaml', ]), ],
     test_suite='tests',
     install_requires=open('requirements.txt').readlines(),
     classifiers=(
