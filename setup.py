@@ -24,7 +24,7 @@ setup(
     name='newsreap',
     version='0.0.1',
     description='Usenet Indexer',
-    long_description=open('README.rst').read() + \
+    long_description=open('README.md').read() + \
                         '\n\n' + open('HISTORY.rst').read(),
     url='https://github.com/caronc/newsreap',
     keywords='usenet nntp index',

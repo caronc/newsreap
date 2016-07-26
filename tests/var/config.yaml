@@ -1,0 +1,28 @@
+servers:
+  - username: myusername
+    password: mypassword
+    host: myprovider
+    port: 563
+    secure: True
+    compress: True
+    join_group: False
+    use_body: False
+    use_stat: True
+
+processing:
+   threads: 3
+   header_batch_size: 25000
+
+posting:
+  - author: 'omg <putin@russia.ru>'
+    max_article_size: 25M
+
+groups:
+  - name: 'alt.binaries.test'
+  - name: 'alt.binaries.mp3'
+  - name: 'alt.binaries.series.tv.divx.french'
+  - name: 'alt.binaries.multimedia'
+
+database:
+   engine: 'sqlite:////tmp/test.db'
+#   engine: 'sqlite:///:memory:'
