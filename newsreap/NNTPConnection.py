@@ -126,7 +126,6 @@ SCAN_FROM_HEAD = 40
 # of a yenc message
 SCAN_FROM_TAIL = 10
 
-
 # The number of XOVER Server retries to make in the event the
 # query fails
 NNTP_XOVER_RETRIES = 5

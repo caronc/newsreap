@@ -53,6 +53,7 @@ class NNTPFileMode(object):
     ASCII_R = 'r'
     ASCII_RW = 'w+'
 
+
 class NNTPContent(object):
     """
     An object for maintaining retrieved article content. There can only
@@ -143,7 +144,6 @@ class NNTPContent(object):
         # if all is good, then we just leave the flag as is
         self._is_valid = True
 
-
     def getvalue(self):
         """
         This is mostly just used for unit testing, but it
@@ -163,7 +163,6 @@ class NNTPContent(object):
 
         return self.read()
 
-
     def is_valid(self):
         """
         A simple function that returns whether the article is valid or not
@@ -175,7 +174,6 @@ class NNTPContent(object):
         was set to.
         """
         return self._is_valid
-
 
     def open(self, filepath=None, mode=None, eof=False):
         """
@@ -299,7 +297,6 @@ class NNTPContent(object):
 
         return True
 
-
     def load(self, filepath, detached=True):
         """
         This causes the function to point to the file specified and acts in a
@@ -333,7 +330,6 @@ class NNTPContent(object):
         self.filepath = filepath
 
         return True
-
 
     def save(self, filepath=None, copy=False, append=False):
         """
@@ -446,7 +442,6 @@ class NNTPContent(object):
 
         return None
 
-
     def write(self, data, eof=True):
         """
         Writes data to stream
@@ -466,7 +461,6 @@ class NNTPContent(object):
         # Set dirty flag
         self._dirty = True
 
-
     def read(self, n=-1):
         """
         read up to n bytes from the stream
@@ -476,7 +470,6 @@ class NNTPContent(object):
             self.open(mode=NNTPFileMode.BINARY_RO, eof=False)
 
         return self.stream.read(n)
-
 
     def close(self):
         """
@@ -501,7 +494,6 @@ class NNTPContent(object):
             self._dirty = False
 
         return
-
 
     def append(self, content):
         """
@@ -536,7 +528,6 @@ class NNTPContent(object):
 
         return True
 
-
     def detach(self, close=True):
         """
         Detach the article stored on disk from being further managed by this class
@@ -547,14 +538,12 @@ class NNTPContent(object):
         self._detached = True
         return
 
-
     def key(self):
         """
         Returns a key that can be used for sorting with:
             lambda x : x.key()
         """
         return '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
-
 
     def next(self):
         """
@@ -568,7 +557,6 @@ class NNTPContent(object):
 
         return data
 
-
     def __next__(self):
         """
         Python 3 support
@@ -581,7 +569,6 @@ class NNTPContent(object):
 
         return data
 
-
     def __iter__(self):
         """
         Grants usage of the next()
@@ -591,10 +578,9 @@ class NNTPContent(object):
         self.open(mode=NNTPFileMode.BINARY_RO)
         return self
 
-
     def __len__(self):
         """
-        Returns the length of the articles
+        Returns the length of the article
         """
         if not self.filepath:
             # If there is no filepath, then we're probably dealing with a
@@ -620,7 +606,6 @@ class NNTPContent(object):
 
         return length
 
-
     def __del__(self):
         """
         Gracefully remove the file retrieved as it was removed
@@ -637,20 +622,17 @@ class NNTPContent(object):
             except:
                 pass
 
-
     def __lt__(self, other):
         """
         Support Less Than (<) operator for sorting
         """
         return self.key() < self.key()
 
-
     def __cmp__(self, content):
         """
         Support comparative checks
         """
         return cmp(self.key(), content.key())
-
 
     def __str__(self):
         """
@@ -659,7 +641,6 @@ class NNTPContent(object):
         if self.part > 0:
             return '%s.%.5d' % (self.filename, self.part)
         return self.filename
-
 
     def __repr__(self):
         """
