@@ -2,7 +2,7 @@
 #
 # A container of NNTPContent which together forms an NNTPArticle.
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -51,16 +51,19 @@ class NNTPArticle(object):
 
         """
         # The Subject
-        self.subject = kwargs.get('subject', '')
+        self.subject = kwargs.get(u'subject', '')
 
         # The Poster
-        self.poster = kwargs.get('poster', '')
+        self.poster = kwargs.get(u'poster', '')
 
+        # TODO: Rename id to article_id (readability and id is a
+        # reserved keyword)
         # The Article Message-ID
-        self.id = kwargs.get('id', '')
+        self.id = kwargs.get(u'id', '')
 
+        # TODO: Rename no to index_no (readability)
         # The NNTP Group Index #
-        self.no = kwargs.get('no', 0)
+        self.no = kwargs.get(u'no', 0)
 
         # A hash of header entries
         self.header = NNTPHeader()
@@ -70,7 +73,6 @@ class NNTPArticle(object):
 
         # Contains a list of decoded content
         self.decoded = sortedset(key=lambda x: x.key())
-
 
     def load_response(self, response):
         """
@@ -95,13 +97,11 @@ class NNTPArticle(object):
 
         return True
 
-
     def files(self):
         """
         Returns a list of the files within article
         """
-        return [ x.keys() for x in self.decoded ]
-
+        return [x.keys() for x in self.decoded]
 
     def key(self):
         """
@@ -110,18 +110,17 @@ class NNTPArticle(object):
         """
         return '%s' % self.id
 
-
     def detach(self):
         """
-        Detach the article stored on disk from being further managed by this class
+        Detach the article stored on disk from being further managed by this
+        class
         """
         for a in self.decoded:
             if isinstance(a, NNTPBinaryContent):
                 a.detach()
         return
 
-
-    def len(self):
+    def __len__(self):
         """
         Returns the length of the article
         """
@@ -131,13 +130,11 @@ class NNTPArticle(object):
                 length += a.len()
         return length
 
-
     def __lt__(self, other):
         """
         Handles less than for storing in btrees
         """
         return str(self.no) < str(other.no)
-
 
     def __str__(self):
         """
@@ -145,13 +142,11 @@ class NNTPArticle(object):
         """
         return '%s' % self.id
 
-
     def __unicode__(self):
         """
         Return a printable version of the article
         """
         return u'%s' % self.id
-
 
     def __repr__(self):
         """
@@ -162,4 +157,3 @@ class NNTPArticle(object):
             self.id,
             len(self.decoded),
         )
-

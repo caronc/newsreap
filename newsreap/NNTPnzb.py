@@ -15,9 +15,12 @@
 # GNU Lesser General Public License for more details.
 
 from blist import sortedset
+from os.path import join
+from os.path import dirname
 
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPSegmentedFile import NNTPSegmentedFile
+from HTMLParser import HTMLParser
 
 # Logging
 import logging
@@ -38,12 +41,18 @@ NZB_XML_NAMESPACE = 'http://www.newzbin.com/DTD/2003/nzb'
 # If set to SYSTEM then the XML_DTD is expected to be local to the system
 NZB_XML_DTD_TYPE = 'PUBLIC'
 
+# Path to LOCAL DTD Validation
+NZB_XML_DTD_FILE = join(dirname(__file__), 'var', 'nzb-1.1.dtd')
+
 # http://stackoverflow.com/questions/7007427/does-a-valid-xml\
 #       -file-require-an-xml-declaration
 # If XML_STANDALONE is set to True, then no DTD is provided and the
 # standalone="yes" flag is specified instead. Otherwise standalone is set to
 # "no"
 NZB_XML_STANDALONE = True
+
+# Defined globally for namespace lookups with lxml calls
+NZB_LXML_NAMESPACES={ 'ns': NZB_XML_NAMESPACE }
 
 
 class NNTPnzb(NNTPContent):
@@ -64,8 +73,6 @@ class NNTPnzb(NNTPContent):
         one.
         """
 
-        # The nzbfile
-        self.nzbfile = nzbfile
 
         # File lazy counter; it is only populated on demand
         self._lazy_file_count = None
@@ -74,13 +81,11 @@ class NNTPnzb(NNTPContent):
         # XML Stream/Iter Pointer
         self.xml_iter = None
         self.xml_root = None
+        self.xml_itr_count = 0
 
         # Meta information placed into (or read from) the <head/> tag
 
-        self.meta = {
-            'subject': kwargs.get('subject', ''),
-            'category': kwargs.get('category', ''),
-        }
+        self.meta = None
 
         # Track segmented files when added
         # TODO: add method for adding to segmented files list
@@ -88,6 +93,15 @@ class NNTPnzb(NNTPContent):
 
         # Initialize our parent
         super(NNTPnzb, self).__init__(tmp_dir=tmp_dir, *args, **kwargs)
+
+        # Used for it's ability to convert to and
+        self._htmlparser = HTMLParser()
+
+        # NNTPContent Object
+        self._detached = True
+
+        # The nzbfile
+        self.filepath = nzbfile
 
     def save(self, nzbfile=None):
         """
@@ -99,7 +113,7 @@ class NNTPnzb(NNTPContent):
         """
         if not nzbfile:
             # Lets try another
-            nzbfile = self.nzbfile
+            nzbfile = self.filepath
 
         if not nzbfile:
             # Not much more we can do here
@@ -108,6 +122,16 @@ class NNTPnzb(NNTPContent):
         # STUB: TODO: Write save() function which should take all segmented
         #             files and write a new NZB file from them.
         return False
+
+    def gid(self):
+        """
+        Returns the Global Identifier associated with an NZB File.
+        This is just a unique way of associating this file with another
+        posted to usenet.
+
+        """
+
+        # TODO: Get md5 sum of article-ID and return it of first segment
 
     def is_valid(self):
         """
@@ -123,12 +147,13 @@ class NNTPnzb(NNTPContent):
             # TODO: Generate .dtd and properly verify file
             # for now we can just call len() because that will
             # set the _is_valid to False if it fails.
-
-            len(self)
-
-            if self._is_valid is True:
-                # We parsed data and had no problem
-                self._lazy_is_valid = True
+            if self.open():
+                # Open DTD file and create dtd object
+                dtdfd = open(NZB_XML_DTD_FILE)
+                dtd = etree.DTD(dtdfd)
+                # Verify our dtd file against our current stream
+                nzb = etree.parse(self.filepath)
+                self._lazy_is_valid = dtd.validate(nzb)
 
         return (super(NNTPnzb, self).is_valid() and \
                 self._lazy_is_valid is True)
@@ -146,12 +171,15 @@ class NNTPnzb(NNTPContent):
         try:
             _, self.xml_root = self.xml_iter.next()
 
+            # Increment our iterator
+            self.xml_itr_count += 1
+
         except StopIteration:
             # let this pass through
             self.xml_root = None
 
         except IOError:
-            logger.warning('NZB-File is missing: %s' % self.nzbfile)
+            logger.warning('NZB-File is missing: %s' % self.filepath)
             self.xml_root = None
             # Mark situation
             self._is_valid = False
@@ -161,7 +189,7 @@ class NNTPnzb(NNTPContent):
             pdb.set_trace()
             if e[0] is not None:
                 # We have corruption
-                logger.error("NZB-File '%s' is corrupt" % self.nzbfile)
+                logger.error("NZB-File '%s' is corrupt" % self.filepath)
                 logger.debug('NZB-File XMLSyntaxError Exception %s' % str(e))
                 # Mark situation
                 self._is_valid = False
@@ -177,7 +205,7 @@ class NNTPnzb(NNTPContent):
             self.xml_root = None
 
         except Exception as e:
-            logger.error("NZB-File '%s' is corrupt" % self.nzbfile)
+            logger.error("NZB-File '%s' is corrupt" % self.filepath)
             logger.debug('NZB-File Exception %s' % str(e))
             # Mark situation
             self._is_valid = False
@@ -187,63 +215,54 @@ class NNTPnzb(NNTPContent):
             self.xml_root = None
             raise StopIteration()
 
-        # TODO: Convert xml_root into a NNTPBinaryContent() Object
-        return self.xml_root
+        if self.meta is None:
+            # Attempt to populate meta information
+            self.meta = {}
+
+            for meta in self.xml_root.xpath('/ns:nzb/ns:head[1]/ns:meta',
+                                            namespaces=NZB_LXML_NAMESPACES):
+                # Store the Meta Information Detected
+                self.meta[meta.attrib['type'].decode()] = \
+                    self._htmlparser.unescape(meta.text.strip()).decode()
+
+        # Acquire the Segments Groups
+        groups = [
+            group.text.strip().decode() for group in self.xml_root.xpath(
+            'ns:groups/ns:group',
+            namespaces=NZB_LXML_NAMESPACES,
+        )]
+
+        # Initialize a NNTPSegmented File Object using the data we read
+        _file = NNTPSegmentedFile(
+            u'%s.%.3d' % (
+                self.meta.get('name', u'unknown'), self.xml_itr_count,
+            ),
+            poster=self._htmlparser.unescape(
+                self.xml_root.attrib.get('poster', '')).decode(),
+            epoch=self.xml_root.attrib.get('date', '0'),
+            subject=self._htmlparser.unescape(
+                self.xml_root.attrib.get('subject', '')).decode(),
+            groups = groups,
+        )
+
+        # Now append our segments
+        for segment in self.xml_root.xpath('ns:segments/ns:segment',
+                                            namespaces=NZB_LXML_NAMESPACES):
+            _file.add_segment(
+                article_id=segment.text.strip().decode(),
+                index_no=int(segment.attrib.get('number', '')),
+                size=int(segment.attrib.get('bytes', '')),
+            )
+
+        # Return our object
+        return _file
 
     def __next__(self):
         """
         Python 3 support
         Support stream type functions and iterations
         """
-        if self.xml_root is not None:
-            # clear our unused memory
-            self.xml_root.clear()
-
-        # get the root element
-        try:
-            _, self.xml_root = self.xml_iter.next()
-
-        except StopIteration:
-            # let this pass through
-            self.xml_root = None
-
-        except IOError:
-            logger.warning('NZB-File is missing: %s' % self.nzbfile)
-            self.xml_root = None
-            # Mark situation
-            self._is_valid = False
-
-        except XMLSyntaxError as e:
-            if e[0] is not None:
-                # We have corruption
-                logger.error("NZB-File '%s' is corrupt" % self.nzbfile)
-                logger.debug('NZB-File Exception %s' % str(e))
-                # Mark situation
-                self._is_valid = False
-            # else:
-            # this is a bug with lxml in earlier versions
-            # https://bugs.launchpad.net/lxml/+bug/1185701
-            # It occurs when the end of the file is reached and lxml
-            # simply just doesn't handle the closure properly
-            # it was fixed here:
-            # https://github.com/lxml/lxml/commit\
-            #       /19f0a477c935b402c93395f8c0cb561646f4bdc3
-            # So we can relax and return ok results here
-            self.xml_root = None
-
-        except Exception as e:
-            logger.error("NZB-File '%s' is corrupt" % self.nzbfile)
-            logger.debug('NZB-File Exception %s' % str(e))
-            # Mark situation
-            self._is_valid = False
-
-        if self.xml_root is None or len(self.xml_root) == 0:
-            self.xml_iter = None
-            self.xml_root = None
-            raise StopIteration()
-
-        # TODO: Convert xml_root into a NNTPSegmentedFile() Object
-        return self.xml_root
+        return self.next()
 
     def __iter__(self):
         """
@@ -258,21 +277,22 @@ class NNTPnzb(NNTPContent):
             self.xml_root.clear()
             # reset our variable
             self.xml_root = None
+            self.xml_itr_count = 0
 
         try:
             self.xml_iter = iter(etree.iterparse(
-                self.nzbfile,
+                self.filepath,
                 tag="{%s}file" % NZB_XML_NAMESPACE,
             ))
 
         except IOError:
-            logger.warning('NZB-File is missing: %s' % self.nzbfile)
+            logger.warning('NZB-File is missing: %s' % self.filepath)
             self._is_valid = False
 
         except XMLSyntaxError as e:
             if e[0] is not None:
                 # We have corruption
-                logger.error("NZB-File '%s' is corrupt" % self.nzbfile)
+                logger.error("NZB-File '%s' is corrupt" % self.filepath)
                 logger.debug('NZB-File Exception %s' % str(e))
                 # Mark situation
                 self._is_valid = False
@@ -287,7 +307,7 @@ class NNTPnzb(NNTPContent):
             # So we can relax and return ok results here
 
         except Exception as e:
-            logger.error("NZB-File '%s' is corrupt" % self.nzbfile)
+            logger.error("NZB-File '%s' is corrupt" % self.filepath)
             logger.debug('NZB-File Exception %s' % str(e))
 
         return self

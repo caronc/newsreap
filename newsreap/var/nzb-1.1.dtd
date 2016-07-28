@@ -1,0 +1,87 @@
+<!--
+    This is the NZB 1.1 DTD; a simple XML format for describing
+    collections of one or more files located on Usenet.
+
+    Namespace = http://www.newzbin.com/2003/nzb
+
+    This DTD is identified by the PUBLIC and SYSTEM identifiers:
+
+      PUBLIC "-//newzBin//DTD NZB 1.1//EN"
+      SYSTEM "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd"
+
+    Clients are expected to handle extensions to this specification.
+    If you're not parsing it with a reasonable XML parser and coping
+    with elements and attributes your client doesn't know about, well,
+    your client is broken.
+-->
+
+<!-- a Uniform Resource Identifier as per [RFC2396] -->
+<!ENTITY % URI "CDATA">
+
+<!-- an integer, in this case a positive one -->
+<!ENTITY % Integer "CDATA">
+
+<!-- date and time in standard Unix timestamp format -->
+<!ENTITY % Unixtime "CDATA">
+
+
+<!ELEMENT nzb (head?,file*)>
+<!ATTLIST nzb
+  xmlns      %URI;          #FIXED 'http://www.newzbin.com/DTD/2003/nzb'
+  >
+
+<!-- zero or one header section per nzb, contains metadata for contents
+     -->
+<!ELEMENT head (meta)*>
+
+<!-- exactly one metadata element per item of arbitrary metadata.
+
+    type - An identifier for this metadata
+           Some types are pre-defined,
+	   see http://docs.newzbin.com/index.php/Newzbin:NZB_Specs
+    -->
+<!ELEMENT meta (#PCDATA)*>
+<!ATTLIST meta
+   type      CDATA          #REQUIRED
+   >
+
+<!-- exactly one file element per file, with exactly zero or one
+     set of groups and/or segments associated with it  
+     
+    subject - Subject this file was posted under
+    poster - The From: header the file was posted with
+    date - A unix timestamp representing the time the file was first seen 
+    -->
+<!ELEMENT file (groups,segments)?>
+<!ATTLIST file
+  subject    CDATA          #REQUIRED
+  poster     CDATA          #IMPLIED
+  date       %Unixtime;     #IMPLIED
+  >
+
+<!-- the collection of newsgroups this file is known to be in -->
+<!ELEMENT groups (group)*>
+<!ATTLIST groups>
+
+<!-- one group element per newsgroup,
+     containing text is the group name -->
+<!ELEMENT group (#PCDATA)>
+<!ATTLIST group>
+
+<!-- the collection of Usenet articles this file is made up from -->
+<!ELEMENT segments (segment)*>
+<!ATTLIST segments>
+
+
+<!-- a Usenet article containing at least part of this file. 
+
+    bytes - Byte-count of the article
+    number - Segment number
+    -->
+<!ELEMENT segment (#PCDATA)>
+<!ATTLIST segment
+  bytes      %Integer;      #IMPLIED
+  number     %Integer;      #IMPLIED
+  >
+
+

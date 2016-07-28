@@ -36,6 +36,8 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPnzb import NNTPnzb
+from newsreap.NNTPSegmentedFile import NNTPSegmentedFile
+
 
 class NNTPnzb_Test(TestBase):
     """
@@ -55,11 +57,17 @@ class NNTPnzb_Test(TestBase):
         nzbobj = NNTPnzb(nzbfile=nzbfile)
 
         # Test iterations
-        for element in nzbobj:
-            print str(element)
+        for article in nzbobj:
+            assert isinstance(article, NNTPSegmentedFile)
 
-        # Test Length
+        # Test Length (this particular file we know has 55 entries
+        # If we don't hardcode this check, we could get it wrong below
         assert len(nzbobj) == 55
+
+        # We should be able to iterate over each entry and get
+        # the same count
+        assert len(nzbobj) == sum(1 for c in nzbobj)
+
         assert nzbobj.is_valid() is True
 
     def test_bad_files(self):
@@ -75,5 +83,3 @@ class NNTPnzb_Test(TestBase):
 
         # Test Length
         assert len(nzbobj) == 0
-
-

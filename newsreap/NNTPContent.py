@@ -74,13 +74,14 @@ class NNTPContent(object):
 
     """
 
-    def __init__(self, filename=None, part=0, tmp_dir=None, sort_no=10000, *args, **kwargs):
+    def __init__(self, filename=None, part=0, tmp_dir=None,
+                 sort_no=10000, *args, **kwargs):
         """
         Initialize NNTP Content
 
-        If a filepath is specified, it can be either a stream (already opened file
-        or ByteIO or StringIO class is fine too), or it can be a path to a filename
-        which will be open in 'wb' mode.
+        If a filepath is specified, it can be either a stream (already opened
+        file or ByteIO or StringIO class is fine too), or it can be a path to
+        a filename which will be open in 'wb' mode.
         """
 
         # The sort is used with sorting; different filetypes/content types
@@ -260,7 +261,7 @@ class NNTPContent(object):
                     (self.filepath, mode),
                 )
 
-            except OSError:
+            except (IOError, OSError):
                 logger.error(
                     'Could not open %s (mode=%s) (flag=D)' % \
                     (self.filepath, mode),

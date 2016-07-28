@@ -138,6 +138,10 @@ NNTP_XOVER_RETRIES = 5
 # are part of python v2.7 but included here for python v2.6
 # support too.
 
+#TODO: Change all references of 'id' to article_id; this sadly exists
+#      everywhere, id is a reserved function id() and is and is pretty
+#      ambiguous.  article_id would explicity identify what the id
+#      represents
 
 class NNTPConnection(SocketBase):
     """
