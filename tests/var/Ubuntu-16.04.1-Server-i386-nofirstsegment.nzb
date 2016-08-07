@@ -2,6 +2,9 @@
 <!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
 <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
 
+<!-- This file is used to test the ability to generate a GID using the ID of -->
+<!-- the first segment. This file contains an invalid first segment -->
+
 <head>
  <meta type="category">Apps &gt; ISO</meta>
  <meta type="name">Ubuntu-16.04.1-Server-i386</meta>
@@ -12,26 +15,6 @@
   <group>alt.binaries.etc</group>
  </groups>
  <segments>
-  <segment bytes="787454" number="1">WkDiEy2wT9GD@1469191673.73366j2ZZTZEsTPGqzA</segment>
-  <segment bytes="786660" number="2">gcxv19F8gmK@1469191673.733737fTO4pC86cVVW</segment>
-  <segment bytes="787406" number="3">8SM8PIxnElEismMI34ET@1469191673.73380VxSx8GUqhr</segment>
-  <segment bytes="786531" number="4">3O01SOyfhsB@1469191673.73387kseFufsDDgD2w79Qwo</segment>
-  <segment bytes="786845" number="5">W94cMOin8W68QGO@1469191673.73396MlTOOBHyhZ2qjfaNLpoV</segment>
-  <segment bytes="783311" number="6">xoOIZnFvTg6U2K@1469191673.73404PNn6qo1h8zZ0TfOUCp</segment>
-  <segment bytes="782250" number="7">WKqxEmTixd2c@1469191673.73411GTOXlBYEH3B</segment>
-  <segment bytes="782450" number="8">C4AtteeHCDgUTfMxGIYS@1469191673.73420oDLLmqbAwtqw</segment>
-  <segment bytes="782174" number="9">wmSY3AUjjEFVNZ@1469191673.73428j6Bk3qgIJj0WR</segment>
-  <segment bytes="782316" number="10">833B4RcPyKMlhu5jqRo@1469191673.73435apFmtlIkHp3XCAqeieCi</segment>
-  <segment bytes="791574" number="11">1lrur8nFA2iIkQ@1469191673.73443mXSynmkJkxndANeAtY8f</segment>
-  <segment bytes="793285" number="12">JWT7Qdq493Iv@1469191673.73450WDA5JTNTPVzqHk</segment>
-  <segment bytes="793067" number="13">SRyckYXJwPsHqrSS0WK@1469191673.73458lWQf0KfrYC2j</segment>
-  <segment bytes="793034" number="14">eMqK4IqG0j@1469191673.73465iuFK7htLJ91yv4RoY</segment>
-  <segment bytes="793101" number="15">SONbI9edkXWb@1469191673.73472p1FXZmm9YmDp2Wvtrk</segment>
-  <segment bytes="793106" number="16">5oadIm7HYuOAaBN0YbWQ@1469191673.73480XsP5aBgjhMG4hKxe3</segment>
-  <segment bytes="793191" number="17">ikSSARF580xE7saL@1469191673.73488PJ5GZzT9eFF0kDD3A0pA</segment>
-  <segment bytes="793149" number="18">PLf8w31fBF@1469191673.73498WhGkxOqrXAnlEdaqrp</segment>
-  <segment bytes="792905" number="19">X6pOuHzUVLZoMsEv24r@1469191673.7350546sflvg9MoLo</segment>
-  <segment bytes="421077" number="20">FNvcw2GqEswivGFFyOA@1469191673.73513c3jQ9T9c28BjGCIeA3g</segment>
  </segments>
 </file>
 <file poster="bd432ea78c21c132e87d167117355297 &lt;grCGpgPrFZENhq8PQh5@xvfeR0aaq.Db&gt;" date="1469191677" subject="&quot;b2d3075d94af88c6742b1fdfc34b225e.11&quot; yEnc (1/20)">

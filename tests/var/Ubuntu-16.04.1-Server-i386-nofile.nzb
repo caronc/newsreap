@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+
+<!-- This file is used to test the ability to generate a GID using the ID of -->
+<!-- the first file. This file contains no file entries which according to -->
+<!-- nzb-1.1 standards; this is valid -->
+<head>
+ <meta type="category">Apps &gt; ISO</meta>
+ <meta type="name">Ubuntu-16.04.1-Server-i386</meta>
+</head>
+
+</nzb>

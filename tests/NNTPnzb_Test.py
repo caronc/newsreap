@@ -70,6 +70,40 @@ class NNTPnzb_Test(TestBase):
 
         assert nzbobj.is_valid() is True
 
+        assert nzbobj.gid() == '8c6b3a3bc8d925cd63125f7bea31a5c9'
+
+    def test_gid_retrievals(self):
+        """
+        Test different variations of gid retrievals based on what
+        defines a valid GID entry in an NZB File.
+        """
+        # No parameters should create a file
+        nzbfile = join(
+            self.var_dir,
+            'Ubuntu-16.04.1-Server-i386-nofirstsegment.nzb',
+        )
+        assert isfile(nzbfile)
+
+        nzbobj = NNTPnzb(nzbfile=nzbfile)
+        assert nzbobj.is_valid() is True
+
+        # GID Is not retrievable
+        assert nzbobj.gid() is None
+
+        # No parameters should create a file
+        nzbfile = join(
+            self.var_dir,
+            'Ubuntu-16.04.1-Server-i386-nofile.nzb',
+        )
+        assert isfile(nzbfile)
+
+        nzbobj = NNTPnzb(nzbfile=nzbfile)
+        assert nzbobj.is_valid() is True
+
+        # GID Is not retrievable
+        assert nzbobj.gid() is None
+
+
     def test_bad_files(self):
         """
         Test different variations of bad file inputs
@@ -80,6 +114,7 @@ class NNTPnzb_Test(TestBase):
 
         nzbobj = NNTPnzb(nzbfile=nzbfile)
         assert nzbobj.is_valid() is False
+        assert nzbobj.gid() is None
 
         # Test Length
         assert len(nzbobj) == 0

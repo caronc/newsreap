@@ -30,7 +30,7 @@ logger = logging.getLogger(NEWSREAP_LOGGER)
 # XML Parsing
 from lxml import etree
 from lxml.etree import XMLSyntaxError
-
+import hashlib
 # Some Common Information for the NZB Construction
 NZB_XML_VERSION = "1.0"
 NZB_XML_ENCODING = "UTF-8"
@@ -52,7 +52,7 @@ NZB_XML_DTD_FILE = join(dirname(__file__), 'var', 'nzb-1.1.dtd')
 NZB_XML_STANDALONE = True
 
 # Defined globally for namespace lookups with lxml calls
-NZB_LXML_NAMESPACES={ 'ns': NZB_XML_NAMESPACE }
+NZB_LXML_NAMESPACES = {'ns': NZB_XML_NAMESPACE}
 
 
 class NNTPnzb(NNTPContent):
@@ -73,10 +73,10 @@ class NNTPnzb(NNTPContent):
         one.
         """
 
-
         # File lazy counter; it is only populated on demand
         self._lazy_file_count = None
         self._lazy_is_valid = None
+        self._lazy_gid = None
 
         # XML Stream/Iter Pointer
         self.xml_iter = None
@@ -129,9 +129,90 @@ class NNTPnzb(NNTPContent):
         This is just a unique way of associating this file with another
         posted to usenet.
 
-        """
+        None is returned if the GID can not be acquired
 
-        # TODO: Get md5 sum of article-ID and return it of first segment
+        """
+        if self._lazy_gid is None:
+
+            if self.is_valid() is False:
+                # Save ourselves the time and cpu of parsing further
+                return None
+
+            # get ourselves the gid which is just the md5sum of the first
+            # Article-ID
+            ptr = iter(self)
+            if self.xml_iter is None:
+                return None
+
+            # get the root element
+            try:
+                _, self.xml_root = self.xml_iter.next()
+
+                segment = self.xml_root.xpath(
+                    '/ns:nzb/ns:file[1]/ns:segments/ns:segment[1]',
+                    namespaces=NZB_LXML_NAMESPACES,
+                )[0]
+
+                self.xml_root.clear()
+                self.xml_root = None
+                self.xml_iter = None
+
+            except IndexError:
+                logger.warning(
+                    'NZB-File is missing initial </segment> element: %s' % \
+                    self.filepath,
+                )
+                # Thrown if no segment elements were found in the first file
+                # entry; this NZBFile is not good.
+
+                # We intentionally do not mark the invalidity of the situation
+                # because we allow for nzbfiles that are still being
+                # constructed.
+                return None
+
+            except StopIteration:
+                logger.warning(
+                    'NZB-File is missing </file> elements: %s' % self.filepath)
+                # Thrown if no <file/> elements were found at all.
+                # This NZBFile is not good.
+
+                # We intentionally do not mark the invalidity of the situation
+                # because we allow for nzbfiles that are still being
+                # constructed.
+                return None
+
+            except IOError:
+                logger.warning('NZB-File is missing: %s' % self.filepath)
+                self.xml_root = None
+                # Mark situation
+                self._lazy_is_valid = False
+
+            except XMLSyntaxError as e:
+                logger.error("NZB-File '%s' is corrupt" % self.filepath)
+                logger.debug('NZB-File XMLSyntaxError Exception %s' % str(e))
+                # Mark situation
+                self._lazy_is_valid = False
+
+            except Exception:
+                logger.error("NZB-File '%s' is corrupt" % self.filepath)
+                logger.debug('NZB-File Exception %s' % str(e))
+                # Mark situation
+                self._lazy_is_valid = False
+                return None
+
+            try:
+                # We simply
+                _md5sum = hashlib.md5()
+                _md5sum.update(segment.text.strip().decode())
+                # Store our data
+                self._lazy_gid = _md5sum.hexdigest()
+
+            except (TypeError, AttributeError):
+                # Can't be done
+                logger.warning(
+                    'Cannot calculate GID from NZB-File: %s' % self.filepath)
+
+        return self._lazy_gid
 
     def is_valid(self):
         """
@@ -152,7 +233,17 @@ class NNTPnzb(NNTPContent):
                 dtdfd = open(NZB_XML_DTD_FILE)
                 dtd = etree.DTD(dtdfd)
                 # Verify our dtd file against our current stream
-                nzb = etree.parse(self.filepath)
+                try:
+                    nzb = etree.parse(self.filepath)
+
+                except XMLSyntaxError as e:
+                    if e[0] is not None:
+                        # We have corruption
+                        logger.error("NZB-File '%s' is corrupt" % self.filepath)
+                        logger.debug('NZB-File XMLSyntaxError Exception %s' % str(e))
+                        # Mark situation
+                        self._lazy_is_valid = False
+
                 self._lazy_is_valid = dtd.validate(nzb)
 
         return (super(NNTPnzb, self).is_valid() and \
@@ -185,8 +276,6 @@ class NNTPnzb(NNTPContent):
             self._is_valid = False
 
         except XMLSyntaxError as e:
-            import pdb
-            pdb.set_trace()
             if e[0] is not None:
                 # We have corruption
                 logger.error("NZB-File '%s' is corrupt" % self.filepath)
