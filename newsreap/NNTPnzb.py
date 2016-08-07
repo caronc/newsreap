@@ -19,7 +19,8 @@ from os.path import join
 from os.path import dirname
 
 from newsreap.NNTPContent import NNTPContent
-from newsreap.NNTPSegmentedFile import NNTPSegmentedFile
+from newsreap.NNTPArticle import NNTPArticle
+from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 from HTMLParser import HTMLParser
 
 # Logging
@@ -140,7 +141,8 @@ class NNTPnzb(NNTPContent):
 
             # get ourselves the gid which is just the md5sum of the first
             # Article-ID
-            ptr = iter(self)
+            iter(self)
+
             if self.xml_iter is None:
                 return None
 
@@ -225,9 +227,6 @@ class NNTPnzb(NNTPContent):
         """
 
         if self._lazy_is_valid is None:
-            # TODO: Generate .dtd and properly verify file
-            # for now we can just call len() because that will
-            # set the _is_valid to False if it fails.
             if self.open():
                 # Open DTD file and create dtd object
                 dtdfd = open(NZB_XML_DTD_FILE)
@@ -273,7 +272,7 @@ class NNTPnzb(NNTPContent):
             logger.warning('NZB-File is missing: %s' % self.filepath)
             self.xml_root = None
             # Mark situation
-            self._is_valid = False
+            self._lazy_is_valid = False
 
         except XMLSyntaxError as e:
             if e[0] is not None:
@@ -281,7 +280,7 @@ class NNTPnzb(NNTPContent):
                 logger.error("NZB-File '%s' is corrupt" % self.filepath)
                 logger.debug('NZB-File XMLSyntaxError Exception %s' % str(e))
                 # Mark situation
-                self._is_valid = False
+                self._lazy_is_valid = False
             # else:
             # this is a bug with lxml in earlier versions
             # https://bugs.launchpad.net/lxml/+bug/1185701
@@ -297,7 +296,7 @@ class NNTPnzb(NNTPContent):
             logger.error("NZB-File '%s' is corrupt" % self.filepath)
             logger.debug('NZB-File Exception %s' % str(e))
             # Mark situation
-            self._is_valid = False
+            self._lazy_is_valid = False
 
         if self.xml_root is None or len(self.xml_root) == 0:
             self.xml_iter = None
@@ -322,7 +321,7 @@ class NNTPnzb(NNTPContent):
         )]
 
         # Initialize a NNTPSegmented File Object using the data we read
-        _file = NNTPSegmentedFile(
+        _file = NNTPSegmentedPost(
             u'%s.%.3d' % (
                 self.meta.get('name', u'unknown'), self.xml_itr_count,
             ),
@@ -334,14 +333,33 @@ class NNTPnzb(NNTPContent):
             groups = groups,
         )
 
+        # index tracker
+        _last_index = 0
+
         # Now append our segments
         for segment in self.xml_root.xpath('ns:segments/ns:segment',
                                             namespaces=NZB_LXML_NAMESPACES):
-            _file.add_segment(
-                article_id=segment.text.strip().decode(),
-                index_no=int(segment.attrib.get('number', '')),
-                size=int(segment.attrib.get('bytes', '')),
+
+            _cur_index = int(segment.attrib.get('number', _last_index+1))
+            try:
+                _size = int(segment.attrib.get('bytes'))
+
+            except (TypeError, ValueError):
+                _size = 0
+
+            article = NNTPArticle(
+                subject=_file.subject,
+                poster=_file.poster,
+                id=segment.text.strip().decode(),
+                no=_cur_index,
+                size=_size,
             )
+
+            # Add article
+            _file.add(article)
+
+            # Track our index
+            _last_index = _cur_index
 
         # Return our object
         return _file
@@ -376,7 +394,8 @@ class NNTPnzb(NNTPContent):
 
         except IOError:
             logger.warning('NZB-File is missing: %s' % self.filepath)
-            self._is_valid = False
+            # Mark situation
+            self._lazy_is_valid = False
 
         except XMLSyntaxError as e:
             if e[0] is not None:
@@ -384,7 +403,7 @@ class NNTPnzb(NNTPContent):
                 logger.error("NZB-File '%s' is corrupt" % self.filepath)
                 logger.debug('NZB-File Exception %s' % str(e))
                 # Mark situation
-                self._is_valid = False
+                self._lazy_is_valid = False
             # else:
             # this is a bug with lxml in earlier versions
             # https://bugs.launchpad.net/lxml/+bug/1185701
@@ -398,6 +417,8 @@ class NNTPnzb(NNTPContent):
         except Exception as e:
             logger.error("NZB-File '%s' is corrupt" % self.filepath)
             logger.debug('NZB-File Exception %s' % str(e))
+            # Mark situation
+            self._lazy_is_valid = False
 
         return self
 

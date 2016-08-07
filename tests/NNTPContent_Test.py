@@ -171,7 +171,6 @@ class NNTPContent_Test(TestBase):
         # Ascii Content read line by line
         lineno = 1
         for line in aa:
-            print 'line: "%s"' % line
             assert line == 'Line %d\n' % (lineno)
             lineno += 1
 

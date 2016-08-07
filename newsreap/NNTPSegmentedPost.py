@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# NNTPSegmentedFile is an object that manages several NNTPArticles.
+# NNTPSegmentedPost is an object that manages several NNTPArticles.
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
@@ -16,7 +16,6 @@
 
 from blist import sortedset
 from newsreap.NNTPArticle import NNTPArticle
-
 from datetime import datetime
 
 # Logging
@@ -25,12 +24,12 @@ from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
-class NNTPSegmentedFile(object):
+class NNTPSegmentedPost(object):
     """
     An object for maintaining retrieved nzb content. Large files need
     to be split across multiple Articles in order to be posted.
 
-    When combined into one, They create a SegmentedFile
+    When combined into one, They create a SegmentedPost
 
     """
 
@@ -64,36 +63,21 @@ class NNTPSegmentedFile(object):
         # A sorted set of segments
         self.segments = sortedset(key=lambda x: x.key())
 
-    def add_segment(self, article_id, index_no, size):
+    def add(self, article):
         """
-        This is used in NNTPnzb when parsing an existing NZB File.
-
-        Segments are spread amongst articles and when assembled amount to the
-        complete file.
-
-        Segments are cataloged by their article_id on Usenet.
-
-        To tell them apart from one another and help with assembly, we need to
-        know the index no of it.
-
-        Finally the size represents the size of the entire message when
-        downloaded.  This is important to us when we need to verify that the
-        file contents are whole
-
+        Add an article
         """
-        article = NNTPArticle(
-            subject=self.subject,
-            poster=self.poster,
-            id=article_id,
-            no=index_no,
-        )
+        if not isinstance(article, NNTPArticle):
+            return False
 
-        # TODO: Use the `size` variable (probably should play a role with the
-        # NNTPArticle object
+        # duplicates are ignored in a blist and therefore
+        # we just capture the length of our list before
+        # and after so that we can properly return a True/False
+        # value
+        _bcnt = len(self.segments)
         self.segments.add(article)
 
-        # We're Done
-        return True
+        return len(self.segments) > _bcnt
 
     def files(self):
         """
@@ -101,12 +85,26 @@ class NNTPSegmentedFile(object):
         """
         return [ x.keys() for x in self.segments ]
 
+    def size(self):
+        """
+        return the total size of our articles
+        """
+        return sum(a.size() for a in self.segments)
+
     def key(self):
         """
         Returns a key that can be used for sorting with:
             lambda x : x.key()
         """
         return '%s' % self.filename
+
+    def __iter__(self):
+        """
+        Grants usage of the next()
+        """
+
+        # Ensure our stream is open with read
+        return iter(self.segments)
 
     def __len__(self):
         """
@@ -137,7 +135,7 @@ class NNTPSegmentedFile(object):
         Return an unambigious version of the object
         """
 
-        return '<NNTPSegmentedFile filename="%s" segments=%d />' % (
+        return '<NNTPSegmentedPost filename="%s" segments=%d />' % (
             self.filename,
             len(self.segments),
         )

@@ -36,7 +36,7 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPnzb import NNTPnzb
-from newsreap.NNTPSegmentedFile import NNTPSegmentedFile
+from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 
 
 class NNTPnzb_Test(TestBase):
@@ -58,7 +58,7 @@ class NNTPnzb_Test(TestBase):
 
         # Test iterations
         for article in nzbobj:
-            assert isinstance(article, NNTPSegmentedFile)
+            assert isinstance(article, NNTPSegmentedPost)
 
         # Test Length (this particular file we know has 55 entries
         # If we don't hardcode this check, we could get it wrong below
@@ -103,6 +103,41 @@ class NNTPnzb_Test(TestBase):
         # GID Is not retrievable
         assert nzbobj.gid() is None
 
+        # No parameters should create a file
+        nzbfile = join(
+            self.var_dir,
+            'Ubuntu-16.04.1-Server-i386-noindex.nzb',
+        )
+        assert isfile(nzbfile)
+
+        nzbobj = NNTPnzb(nzbfile=nzbfile)
+        assert nzbobj.is_valid() is True
+
+        # GID should still be the correct first entry
+        assert nzbobj.gid() == '8c6b3a3bc8d925cd63125f7bea31a5c9'
+
+        # No parameters should create a file
+        nzbfile = join(
+            self.var_dir,
+            'Ubuntu-16.04.1-Server-i386-badsize.nzb',
+        )
+        assert isfile(nzbfile)
+
+        nzbobj = NNTPnzb(nzbfile=nzbfile)
+        assert nzbobj.is_valid() is True
+
+        # Test that we correctly store all Size 0
+        # Test iterations
+        for article in nzbobj:
+            assert isinstance(article, NNTPSegmentedPost) is True
+            assert article.size() == 0
+
+        # Test Length (this particular file we know has 55 entries
+        # If we don't hardcode this check, we could get it wrong below
+        assert len(nzbobj) == 55
+
+        # GID should still be the correct first entry
+        assert nzbobj.gid() == '8c6b3a3bc8d925cd63125f7bea31a5c9'
 
     def test_bad_files(self):
         """

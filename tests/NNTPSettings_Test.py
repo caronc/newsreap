@@ -98,10 +98,7 @@ class NNTPSettings_Test(TestBase):
         assert len(settings.cfg_files) == 1
         assert basename(settings.cfg_files[0]) == basename(cfg_file)
         assert len(settings.cfg_data) == len(DEFAULTS)
-        print str(settings.cfg_data)
         for k in DEFAULTS.iterkeys():
-            print str(k)
-            print type(settings.cfg_data[k])
             assert settings.cfg_data[k] == DEFAULTS[k]
 
         assert settings.is_valid() is False

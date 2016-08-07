@@ -15,6 +15,7 @@
 # GNU Lesser General Public License for more details.
 
 from blist import sortedset
+from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.NNTPHeader import NNTPHeader
@@ -65,6 +66,37 @@ class NNTPArticle(object):
         # The NNTP Group Index #
         self.no = kwargs.get(u'no', 0)
 
+        ## The size (used with segments)
+        #self._size = kwargs.get(u'size', 0)
+        #if not isinstance(self._size, int):
+        #    try:
+        #        self._size = int(self._size)
+
+        #    except (TypeError, ValueError):
+        #        self._size = 0
+
+        #if self._size < 0:
+        #    # Since we do calculations based on this size
+        #    # there is no reason we should set this value to
+        #    # anything less then zero.
+        #    self._size = 0
+
+        # Track the groups this article resides in
+        # This is populated for meta information when an article is
+        # retrieved; but its contents are used when posting an article
+        self.groups = set()
+        groups = kwargs.get(u'groups')
+        if groups:
+            if isinstance(groups, basestring):
+                # Support specified group
+                self.groups.add(groups)
+
+            elif isinstance(groups, (set, list)):
+                # Allow lists
+                self.groups = set(groups)
+
+            # else: we simpy don't support it
+
         # A hash of header entries
         self.header = NNTPHeader()
 
@@ -93,7 +125,7 @@ class NNTPArticle(object):
             self.decoded.remove(self.header)
 
             # TODO: Parse header information (if present) and populate
-            # some obvious fields
+            # some obvious fields (such as subject, groups, etc)
 
         return True
 
@@ -120,15 +152,41 @@ class NNTPArticle(object):
                 a.detach()
         return
 
+    def add(self, content):
+        """
+        Used for adding content to the self.decoded class
+        """
+        if not isinstance(content, NNTPContent):
+            return False
+
+        # duplicates are ignored in a blist and therefore
+        # we just capture the length of our list before
+        # and after so that we can properly return a True/False
+        # value
+        _bcnt = len(self.decoded)
+        self.decoded.add(content)
+
+        return len(self.decoded) > _bcnt
+
+    def size(self):
+        """
+        return the total size of our decoded content
+        """
+        return sum(d.size() for d in self.decoded)
+
+    def __iter__(self):
+        """
+        Grants usage of the next()
+        """
+
+        # Ensure our stream is open with read
+        return iter(self.decoded)
+
     def __len__(self):
         """
         Returns the length of the article
         """
-        length = 0
-        for a in self.decoded:
-            if isinstance(a, NNTPBinaryContent):
-                length += a.len()
-        return length
+        return sum(len(a) for a in self.decoded)
 
     def __lt__(self, other):
         """
