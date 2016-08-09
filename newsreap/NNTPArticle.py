@@ -25,6 +25,9 @@ import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
+DEFAULT_NNTP_SUBJECT = 'unknown.file'
+DEFAULT_NNTP_POSTER = 'newsreaper <news@reap.er>'
+
 
 class NNTPArticle(object):
     """
@@ -46,16 +49,17 @@ class NNTPArticle(object):
 
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, subject=DEFAULT_NNTP_SUBJECT,
+                 poster=DEFAULT_NNTP_POSTER, groups=None, *args, **kwargs):
         """
         Initialize NNTP Article
 
         """
         # The Subject
-        self.subject = kwargs.get(u'subject', '')
+        self.subject = subject
 
         # The Poster
-        self.poster = kwargs.get(u'poster', '')
+        self.poster = poster
 
         # TODO: Rename id to article_id (readability and id is a
         # reserved keyword)
@@ -84,16 +88,18 @@ class NNTPArticle(object):
         # Track the groups this article resides in
         # This is populated for meta information when an article is
         # retrieved; but its contents are used when posting an article
-        self.groups = set()
-        groups = kwargs.get(u'groups')
-        if groups:
-            if isinstance(groups, basestring):
-                # Support specified group
-                self.groups.add(groups)
+        self.groups = groups
+        if not self.groups:
+            self.groups = set()
 
-            elif isinstance(groups, (set, list)):
-                # Allow lists
-                self.groups = set(groups)
+        elif isinstance(self.groups, basestring):
+            self.groups = set((self.groups, ))
+
+        elif isinstance(self.groups, list):
+            self.groups = set(self.groups)
+
+        elif not isinstance(self.groups, set):
+            raise AttributeError("Invalid group set specified.")
 
             # else: we simpy don't support it
 
@@ -184,9 +190,9 @@ class NNTPArticle(object):
 
     def __len__(self):
         """
-        Returns the length of the article
+        Returns the number of decoded content entries found
         """
-        return sum(len(a) for a in self.decoded)
+        return len(self.decoded)
 
     def __lt__(self, other):
         """

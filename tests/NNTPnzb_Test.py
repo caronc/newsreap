@@ -25,6 +25,7 @@ gevent.monkey.patch_all()
 
 from os.path import join
 from os.path import dirname
+from os.path import basename
 from os.path import isfile
 from os.path import abspath
 
@@ -36,6 +37,8 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPnzb import NNTPnzb
+from newsreap.NNTPBinaryContent import NNTPBinaryContent
+from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 
 
@@ -138,6 +141,33 @@ class NNTPnzb_Test(TestBase):
 
         # GID should still be the correct first entry
         assert nzbobj.gid() == '8c6b3a3bc8d925cd63125f7bea31a5c9'
+
+    def test_nzbfile_generation(self):
+        """
+        Tests the creation of NZB Files
+        """
+        nzbfile = join(self.tmp_dir, 'test.nzbfile.nzb')
+        payload = join(self.var_dir, 'uudecoded.tax.jpg')
+        assert isfile(nzbfile) is False
+        # Create our NZB Object
+        nzbobj = NNTPnzb()
+
+        # create a fake article
+        segpost = NNTPSegmentedPost(basename(payload))
+        content = NNTPBinaryContent(payload)
+
+        article = NNTPArticle('testfile', groups='newsreap.is.awesome')
+        # Add our Content to the article
+        article.add(content)
+        # now add our article to the NZBFile
+        segpost.add(article)
+        # now add our Segmented Post to the NZBFile
+        nzbobj.add(segpost)
+
+        # Store our file
+        assert nzbobj.save(nzbfile) is True
+        assert isfile(nzbfile) is True
+
 
     def test_bad_files(self):
         """

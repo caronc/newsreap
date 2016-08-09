@@ -16,6 +16,8 @@
 
 from blist import sortedset
 from newsreap.NNTPArticle import NNTPArticle
+from newsreap.NNTPArticle import DEFAULT_NNTP_SUBJECT
+from newsreap.NNTPArticle import DEFAULT_NNTP_POSTER
 from datetime import datetime
 
 # Logging
@@ -33,32 +35,77 @@ class NNTPSegmentedPost(object):
 
     """
 
-    def __init__(self, filename, *args, **kwargs):
-        """
-        Initialize NNTP Segmented File
+    def __init__(self, filename, subject=DEFAULT_NNTP_SUBJECT,
+                 poster=DEFAULT_NNTP_POSTER, groups=None,
+                 utc=None, *args, **kwargs):
+        """Initialize NNTP Segmented File
+
+        Args:
+            filename (str): Either a path of an existing filename or if
+                            you're initializing a new file from scratch this
+                            should be the name of the filename being
+                            assembled.
+        Kwargs:
+            subject (str): The subject to associate with the file. This is
+                            only required if you're posting the content (to
+                            Usenet).
+            poster (str): The poster to associate with the file. This is
+                           only required if you're posting the content (to
+                           Usenet).
+            group (str, set): This can be either a string identifying a single
+                               Usenet group, or it can be a set() of strings
+                               identifying all of the Usenet groups you want
+                               to cross-post to. This is only required if you
+                               intend on posting the content (to Usenet).
+            utc (int, datetime): Should always be in UTC format and can be
+                                either defined as the number of seconds from
+                                epoch (usually produced from gmtime()) or it
+                                can be a datetime() object. This identifies the
+                                date to associate with the file.  It's mostly
+                                used for sorting.  If no time is specified
+                                then it defaults to datetime.utcnow(). If a
+                                valid `filename` was specified then the utc
+                                defaults to the time associated with the files
+                                modification date.
+        Returns:
+            Nothing
+
+        Raises:
+            AttributeError() if you don't follow group isn't a set() of str(),
+                              None or str().
 
         """
         # The Filename
         self.filename = filename
 
         # These fields get populated when reading in an nzb file
-        self.poster = kwargs.get('poster')
-        self.utc = kwargs.get('utc')
-        self.subject = kwargs.get('subject')
-        self.groups = kwargs.get('groups', '')
+        self.poster = poster
+        self.utc = utc
+        self.subject = subject
+        self.groups = groups
 
-        # Convert into datetime
-        try:
-            self.utc = datetime.fromtimestamp(int(self.utc))
+        if not isinstance(self.utc, datetime):
+            # Convert into datetime
+            try:
+                self.utc = datetime.fromtimestamp(int(self.utc))
 
-        except (TypeError, ValueError):
-            # Used None, uninitialized, or Used bad value
-            # Default timezone to 'now' but make it consistent
-            # with the world, use the UTC as a common source
-            self.utc = datetime.utcnow()
+            except (TypeError, ValueError):
+                # Used None, uninitialized, or Used bad value
+                # Default timezone to 'now' but make it consistent
+                # with the world, use the UTC as a common source
+                self.utc = datetime.utcnow()
 
-        if not isinstance(self.groups, set):
-            set(self.groups)
+        if not self.groups:
+            self.groups = set()
+
+        elif isinstance(self.groups, basestring):
+            self.groups = set((self.groups, ))
+
+        elif isinstance(self.groups, list):
+            self.groups = set(self.groups)
+
+        elif not isinstance(self.groups, set):
+            raise AttributeError("Invalid group set specified.")
 
         # A sorted set of segments
         self.segments = sortedset(key=lambda x: x.key())
@@ -67,6 +114,8 @@ class NNTPSegmentedPost(object):
         """
         Add an article
         """
+        # TODO: This function should support NNTPContent types too which we can
+        # generaate an Article from and still add it
         if not isinstance(article, NNTPArticle):
             return False
 
@@ -75,6 +124,16 @@ class NNTPSegmentedPost(object):
         # and after so that we can properly return a True/False
         # value
         _bcnt = len(self.segments)
+
+        if not article.groups and self.groups:
+            article.groups = set(self.groups)
+
+        if not article.subject and self.subject:
+            article.subject = self.subject
+
+        if not article.poster and self.poster:
+            article.poster = self.poster
+
         self.segments.add(article)
 
         return len(self.segments) > _bcnt

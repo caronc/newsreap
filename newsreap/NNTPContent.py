@@ -74,7 +74,7 @@ class NNTPContent(object):
 
     """
 
-    def __init__(self, filename=None, part=0, tmp_dir=None,
+    def __init__(self, filename=None, part=1, tmp_dir=None,
                  sort_no=10000, *args, **kwargs):
         """
         Initialize NNTP Content
@@ -101,7 +101,7 @@ class NNTPContent(object):
             self.part = int(part)
 
         except (ValueError, TypeError):
-            self.part = 0
+            self.part = 1
 
         # The filepath is automatically set up when the temporary file is
         # created
@@ -137,6 +137,10 @@ class NNTPContent(object):
             self.filename = ''
 
         else:
+            if isfile(filename):
+                self.load(filename)
+
+            # Store our file
             self.filename = basename(filename)
 
         # A flag that can be toggled if the data stored is
@@ -538,6 +542,20 @@ class NNTPContent(object):
 
         self._detached = True
         return
+
+    def remove(self):
+        """
+        Gracefully remove the file (attached or not)
+        """
+        if self.stream is not None:
+            self.close()
+
+        if not self._detached and self.filepath:
+            try:
+                unlink(self.filepath)
+                logger.debug('Removed file %s' % self.filepath)
+            except:
+                pass
 
     def key(self):
         """
