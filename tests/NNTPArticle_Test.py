@@ -27,6 +27,7 @@ gevent.monkey.patch_all()
 # see: http://stackoverflow.com/questions/8774958/\
 #        keyerror-in-module-threading-after-a-successful-py-test-run
 
+import re
 from os.path import dirname
 from os.path import abspath
 
@@ -55,23 +56,128 @@ class NNTPArticle_Test(TestBase):
         response = NNTPResponse(200, 'Great Data')
         response.decoded.add(NNTPBinaryContent())
 
-        # Preare Article
+        # Prepare Article
         article = NNTPArticle(id='random-id')
 
         # Load and Check
         assert article.load_response(response) is True
         assert article.header is None
         assert len(article.decoded) == 1
+        assert len(article.decoded) == len(article.files())
+        assert str(article) == 'random-id'
+        assert unicode(article) == u'random-id'
+        assert article.size() == 0
+
+        result = re.search(' Message-ID=\"(?P<id>[^\"]+)\"', repr(article))
+        assert result is not None
+        assert result.group('id') == str(article)
+
+        result = re.search(' attachments=\"(?P<no>[^\"]+)\"', repr(article))
+        assert result is not None
+        assert int(result.group('no')) == len(article)
+
+        # Prepare Article
+        article_a = NNTPArticle(id='a')
+        article_b = NNTPArticle(id='b')
+        assert (article_a < article_b) is True
+
+        # playing with the sort order however alters things
+        article_a.no += 1
+        assert (article_a < article_b) is False
 
         # Prepare a Response (with a Header)
         response = NNTPResponse(200, 'Great Data')
         response.decoded.add(NNTPHeader())
         response.decoded.add(NNTPBinaryContent())
 
-        # Preare Article
+        # Prepare Article
         article = NNTPArticle(id='random-id')
 
         # Load and Check
         assert article.load_response(response) is True
         assert isinstance(article.header, NNTPHeader)
         assert len(article.decoded) == 1
+
+    def test_group(self):
+        """
+        Tests the group variations
+        """
+
+        # Test String
+        article = NNTPArticle(
+            id='random-id',
+        )
+        assert(isinstance(article.groups, set))
+        assert(len(article.groups) == 0)
+
+        # Test String
+        article = NNTPArticle(
+            id='random-id',
+            groups='convert.lead.2.gold',
+        )
+        assert(isinstance(article.groups, set))
+        assert(len(article.groups) == 1)
+        assert('convert.lead.2.gold' in article.groups)
+
+        # Support Tuples
+        article = NNTPArticle(
+            id='random-id',
+            groups=(
+                'convert.lead.2.gold',
+                'convert.lead.2.gold.again',
+            ),
+        )
+
+        assert(isinstance(article.groups, set))
+        assert(len(article.groups) == 2)
+        assert('convert.lead.2.gold' in article.groups)
+        assert('convert.lead.2.gold.again' in article.groups)
+
+        # Support Lists
+        article = NNTPArticle(
+            id='random-id',
+            groups=[
+                'convert.lead.2.gold',
+                'convert.lead.2.gold.again',
+            ],
+        )
+        assert(isinstance(article.groups, set))
+        assert(len(article.groups) == 2)
+        assert('convert.lead.2.gold' in article.groups)
+        assert('convert.lead.2.gold.again' in article.groups)
+
+        # Support Sets
+        article = NNTPArticle(
+            id='random-id',
+            groups=set([
+                'convert.lead.2.gold',
+                'convert.lead.2.gold.again',
+            ]),
+        )
+        assert(isinstance(article.groups, set))
+        assert(len(article.groups) == 2)
+        assert('convert.lead.2.gold' in article.groups)
+        assert('convert.lead.2.gold.again' in article.groups)
+
+        try:
+            # Throw an exception if the group is invalid
+            article = NNTPArticle(id='random-id', groups=4)
+            assert False
+
+        except Exception, e:
+            assert isinstance(e, AttributeError)
+
+        # Duplicates groups are are removed automatically
+        article = NNTPArticle(
+            id='random-id',
+            groups=[
+                'convert.lead.2.gold.again',
+                'ConVert.lead.2.gold',
+                'convert.lead.2.gold',
+                'convert.lead.2.gold.again',
+            ],
+        )
+        assert(isinstance(article.groups, set))
+        assert(len(article.groups) == 2)
+        assert('convert.lead.2.gold' in article.groups)
+        assert('convert.lead.2.gold.again' in article.groups)

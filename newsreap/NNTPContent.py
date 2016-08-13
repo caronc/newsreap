@@ -557,6 +557,12 @@ class NNTPContent(object):
             except:
                 pass
 
+    def path(self):
+        """
+        Return the full path
+        """
+        return self.filepath
+
     def key(self):
         """
         Returns a key that can be used for sorting with:

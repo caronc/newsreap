@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 #
-# A container of NNTPContent which together forms an NNTPArticle.
+# A representation of an actual NNTPArticle() which can contain 1 or more
+# NNTPContent() objects in addition to header information.
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
@@ -68,7 +69,10 @@ class NNTPArticle(object):
 
         # TODO: Rename no to index_no (readability)
         # The NNTP Group Index #
-        self.no = kwargs.get(u'no', 0)
+        try:
+            self.no = int(kwargs.get(u'no', 1000))
+        except:
+            self.no = int(kwargs.get(u'no', 1000))
 
         ## The size (used with segments)
         #self._size = kwargs.get(u'size', 0)
@@ -95,8 +99,8 @@ class NNTPArticle(object):
         elif isinstance(self.groups, basestring):
             self.groups = set((self.groups, ))
 
-        elif isinstance(self.groups, list):
-            self.groups = set(self.groups)
+        elif isinstance(self.groups, (list, tuple)):
+            self.groups = set([ x.lower() for x in self.groups])
 
         elif not isinstance(self.groups, set):
             raise AttributeError("Invalid group set specified.")
@@ -109,6 +113,9 @@ class NNTPArticle(object):
         # Our body contains non-decoded content
         self.body = NNTPAsciiContent()
 
+        # TODO: rename decoded to content because decoded implies this object
+        # is only used when retrieving articles when in fact it's used for
+        # posting them too.
         # Contains a list of decoded content
         self.decoded = sortedset(key=lambda x: x.key())
 
@@ -139,14 +146,14 @@ class NNTPArticle(object):
         """
         Returns a list of the files within article
         """
-        return [x.keys() for x in self.decoded]
+        return [x.path() for x in self.decoded]
 
     def key(self):
         """
         Returns a key that can be used for sorting with:
             lambda x : x.key()
         """
-        return '%s' % self.id
+        return '%.5d%s' % (self.no, self.id)
 
     def detach(self):
         """
@@ -178,7 +185,7 @@ class NNTPArticle(object):
         """
         return the total size of our decoded content
         """
-        return sum(d.size() for d in self.decoded)
+        return sum(len(d) for d in self.decoded)
 
     def __iter__(self):
         """
@@ -198,7 +205,7 @@ class NNTPArticle(object):
         """
         Handles less than for storing in btrees
         """
-        return str(self.no) < str(other.no)
+        return self.key() < other.key()
 
     def __str__(self):
         """
@@ -217,7 +224,7 @@ class NNTPArticle(object):
         Return an unambigious version of the object
         """
 
-        return '<NNTPArticle Message-ID="%s" attachments=%d />' % (
+        return '<NNTPArticle Message-ID="%s" attachments="%d" />' % (
             self.id,
             len(self.decoded),
         )
