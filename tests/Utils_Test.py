@@ -28,6 +28,8 @@ from os.path import dirname
 from os.path import isdir
 from os.path import join
 from os import chmod
+from os import getcwd
+import errno
 
 import re
 from itertools import chain
@@ -43,6 +45,7 @@ from newsreap.Utils import strsize_to_bytes
 from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import stat
 from newsreap.Utils import mkdir
+from newsreap.Utils import pushd
 
 
 class Utils_Test(TestBase):
@@ -261,3 +264,49 @@ class Utils_Test(TestBase):
 
         # Confirm that the directory was never created:
         assert isdir(new_tmp_dir) is False
+
+    def test_pushd_popd(self):
+        """
+        Just a simple wrapper to makedirs, but tries a few times before
+        completely aborting.
+
+        """
+
+        # Temporary directory to work with
+        tmp_dir = join(self.tmp_dir, 'Utils_Test.pushd', 'newdir')
+
+        # Ensure it doesn't already exist
+        assert isdir(tmp_dir) is False
+
+        # Store our current directory
+        cur_dir = getcwd()
+
+        try:
+            with pushd(tmp_dir):
+                # We should throw an exeption here and never make it to the assert
+                # call below
+                assert False
+
+        except OSError, e:
+            # Directory doesn't exist
+            assert e[0] is errno.ENOENT
+            assert getcwd() == cur_dir
+
+        # Now we'll make the directory
+        with pushd(tmp_dir, create_if_missing=True):
+            # We're in a new directory
+            assert getcwd() == tmp_dir
+
+        # We're back to where we were
+        assert getcwd() == cur_dir
+
+        try:
+            with pushd(tmp_dir, create_if_missing=True):
+                # We're in a new directory
+                assert getcwd() == tmp_dir
+                # Throw an exception
+                raise Exception
+
+        except Exception:
+            # We're back to where we were
+            assert getcwd() == cur_dir

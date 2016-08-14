@@ -28,6 +28,11 @@ from os.path import basename
 from os.path import normpath
 from os.path import splitext
 
+# for pushd() popd() context
+from contextlib import contextmanager
+from os import getcwd
+from os import chdir
+
 from urlparse import urlparse
 from urlparse import parse_qsl
 from urllib import quote
@@ -950,3 +955,33 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
 
     # Return all files
     return files
+
+@contextmanager
+def pushd(newdir, create_if_missing=False, perm=0775):
+    """
+    # A pushd/popd implimentation
+    # Based on : http://stackoverflow.com/questions/6194499/\
+                    pushd-through-os-system
+
+    # It's use is pretty straight forward:
+    # with pushd('somewhere'):
+    #     # somewhere
+    #     print os.getcwd()
+    #
+    # # wherever you started
+    # print os.getcwd()
+
+    """
+    prevdir = getcwd()
+    if not isdir(newdir) and create_if_missing:
+        # Don't bother checking the success or not
+        # we'll find out soon enough with chdir()
+        mkdir(newdir, perm)
+
+    chdir(newdir)
+    try:
+        yield
+
+    finally:
+        # Fall back to previous directory popd()
+        chdir(prevdir)
