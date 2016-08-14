@@ -2,7 +2,7 @@
 #
 # A dummy decoder to handle just raw writes used to represent a message body
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -31,14 +31,15 @@ ASCII_CHARACTERS = bytearray([7, 8, 9, 10, 12, 13, 27]) + \
         bytearray(range(0x20, 0x7f)) + \
         bytearray(range(0x80, 0x100))
 
-class CodecBody(CodecBase):
+
+class CodecAscii(CodecBase):
     """
     This is the codec used to store general content parsed that is not encoded
-    on an NNTP Server.
+    on an NNTP Server. It doesn't do much but store/track ascii data
     """
 
     def __init__(self, descriptor=None, tmp_dir=None, *args, **kwargs):
-        super(CodecBody, self).__init__(descriptor=descriptor,
+        super(CodecAscii, self).__init__(descriptor=descriptor,
             tmp_dir=tmp_dir, *args, **kwargs)
 
         # Our Ascii Object we can reference while we store our
@@ -100,7 +101,7 @@ class CodecBody(CodecBase):
         """
         Reset our decoded content
         """
-        super(CodecBody, self).reset()
+        super(CodecAscii, self).reset()
 
         # Reset our decoded content
         self.decoded = NNTPAsciiContent(
@@ -120,6 +121,6 @@ class CodecBody(CodecBase):
         """
         Return a printable object
         """
-        return '<CodecBody lines_processed=%d />' % (
+        return '<CodecAscii lines_processed=%d />' % (
             self._lines,
         )
