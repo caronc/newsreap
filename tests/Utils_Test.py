@@ -25,6 +25,12 @@ gevent.monkey.patch_all()
 
 from os.path import abspath
 from os.path import dirname
+from os.path import isdir
+from os.path import join
+from os import chmod
+
+import re
+from itertools import chain
 
 try:
     from tests.TestBase import TestBase
@@ -35,15 +41,28 @@ except ImportError:
 
 from newsreap.Utils import strsize_to_bytes
 from newsreap.Utils import bytes_to_strsize
+from newsreap.Utils import stat
+from newsreap.Utils import mkdir
 
 
-class NNTPConnection_Test(TestBase):
+class Utils_Test(TestBase):
+    """
+    Testing the Utils class
+    """
 
     def test_strsize_n_bytes(self):
+        """
+        A formatting tool to make bytes more readable for an end user
+        """
         # Garbage Entry
-        assert strsize_to_bytes("0J") == 0
-        assert strsize_to_bytes("") == 0
-        assert strsize_to_bytes("totalgarbage") == 0
+        assert strsize_to_bytes(None) is None
+        assert strsize_to_bytes("0J") is None
+        assert strsize_to_bytes("") is None
+        assert strsize_to_bytes("totalgarbage") is None
+
+        # Allow integers
+        assert strsize_to_bytes(0) == 0
+        assert strsize_to_bytes(1024) == 1024
 
         # Good Entries
         assert strsize_to_bytes("0B") == 0
@@ -54,10 +73,29 @@ class NNTPConnection_Test(TestBase):
         assert strsize_to_bytes("1G") == 1024*1024*1024
         assert strsize_to_bytes("1T") == 1024*1024*1024*1024
 
+        # Spaces between units and value are fine too
+        assert strsize_to_bytes(" 0         B ") == 0
+        assert strsize_to_bytes("  1       K  ") == 1024
+        assert strsize_to_bytes("   1     M   ") == 1024*1024
+        assert strsize_to_bytes("    1   G    ") == 1024*1024*1024
+        assert strsize_to_bytes("     1 T     ") == 1024*1024*1024*1024
+
+        # Support Byte character
+        assert strsize_to_bytes("1KB") == 1024
+        assert strsize_to_bytes("1MB") == 1024*1024
+        assert strsize_to_bytes("1GB") == 1024*1024*1024
+        assert strsize_to_bytes("1TB") == 1024*1024*1024*1024
+
+        # Support bit character
+        assert strsize_to_bytes("1Kb") == 1000
+        assert strsize_to_bytes("1Mb") == 1000*1000
+        assert strsize_to_bytes("1Gb") == 1000*1000*1000
+        assert strsize_to_bytes("1Tb") == 1000*1000*1000*1000
 
         # Garbage Entry
-        assert bytes_to_strsize('') == "0.00B"
-        assert bytes_to_strsize('GARBAGE') == "0.00B"
+        assert bytes_to_strsize(None) is None
+        assert bytes_to_strsize('') is None
+        assert bytes_to_strsize('GARBAGE') is None
 
         # Good Entries
         assert bytes_to_strsize(0) == "0.00B"
@@ -66,3 +104,160 @@ class NNTPConnection_Test(TestBase):
         assert bytes_to_strsize(1024*1024) == "1.00MB"
         assert bytes_to_strsize(1024*1024*1024) == "1.00GB"
         assert bytes_to_strsize(1024*1024*1024*1024) == "1.00TB"
+
+        # Support strings too
+        assert bytes_to_strsize("0") == "0.00B"
+        assert bytes_to_strsize("1024") == "1.00KB"
+
+    def test_stat(self):
+        """
+        Stat makes it easier to disect the file extension, filesystem info
+        and mime information.
+        """
+
+        general_keys = ('extension', 'basename', 'filename', 'dirname')
+        filesys_keys = ('created', 'modified', 'accessed', 'size')
+        mime_keys = ('mime',)
+
+        # Test a file that doesn't exist
+        tmp_file = join(self.tmp_dir, 'Utils_Test.stat', 'missing_file')
+        stats = stat(tmp_file)
+        assert stats is None
+        stats = stat(tmp_file, fsinfo=False)
+        assert stats is None
+        stats = stat(tmp_file, fsinfo=False, mime=False)
+        assert stats is None
+
+        # Create Temporary file 1MB in size
+        tmp_file = join(self.tmp_dir, 'Utils_Test.stat', '1MB.rar')
+        assert self.touch(tmp_file, size='1MB')
+
+        stats = stat(tmp_file)
+
+        # This check basically makes sure all of the expected keys
+        # are in place and that there aren't more or less
+        k_iter = chain(mime_keys, filesys_keys, general_keys)
+        k_len = len(mime_keys) + len(filesys_keys) + len(general_keys)
+        assert isinstance(stats, dict) is True
+        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert k_len == len(stats)
+
+        # Filesize should actually match what we set it as
+        assert bytes_to_strsize(stats['size']) == "1.00MB"
+        # different OS's and variations of python can yield different
+        # results.  We're trying to just make sure that we find the
+        # rar keyword in the mime type
+        assert re.search(
+            'application/.*rar.*',
+            stats['mime'],
+            re.IGNORECASE,
+        ) is not None
+
+        # Create Temporary file 1MB in size
+        tmp_file = join(self.tmp_dir, 'Utils_Test.stat', '2MB.zip')
+        assert self.touch(tmp_file, size='2MB')
+
+        stats = stat(tmp_file)
+
+        # This check basically makes sure all of the expected keys
+        # are in place and that there aren't more or less
+        k_iter = chain(mime_keys, filesys_keys, general_keys)
+        k_len = len(mime_keys) + len(filesys_keys) + len(general_keys)
+        assert isinstance(stats, dict) is True
+        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert k_len == len(stats)
+
+        # Filesize should actually match what we set it as
+        assert bytes_to_strsize(stats['size']) == "2.00MB"
+
+        assert re.search(
+            'application/.*zip.*',
+            stats['mime'],
+            re.IGNORECASE,
+        ) is not None
+
+        # Test different variations
+        stats = stat(tmp_file, mime=False)
+
+        # This check basically makes sure all of the expected keys
+        # are in place and that there aren't more or less
+        k_iter = chain(filesys_keys, general_keys)
+        k_len = len(filesys_keys) + len(general_keys)
+        assert isinstance(stats, dict) is True
+        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert k_len == len(stats)
+
+        # Test different variations
+        stats = stat(tmp_file, fsinfo=False, mime=True)
+
+        # This check basically makes sure all of the expected keys
+        # are in place and that there aren't more or less
+        k_iter = chain(mime_keys, general_keys)
+        k_len = len(mime_keys) + len(general_keys)
+        assert isinstance(stats, dict) is True
+        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert k_len == len(stats)
+
+        # Test different variations
+        stats = stat(tmp_file, fsinfo=False, mime=False)
+
+        # This check basically makes sure all of the expected keys
+        # are in place and that there aren't more or less
+        k_iter = chain(general_keys)
+        k_len = len(general_keys)
+        assert isinstance(stats, dict) is True
+        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert k_len == len(stats)
+
+    def test_mkdir(self):
+        """
+        Just a simple wrapper to makedirs, but tries a few times before
+        completely aborting.
+
+        """
+
+        tmp_dir = join(self.tmp_dir, 'Utils_Test.mkdir', 'dirA')
+        # The directory should not exist
+        assert isdir(tmp_dir) is False
+
+        # mkdir() should be successful
+        assert mkdir(tmp_dir) is True
+
+        # The directory should exist now
+        assert isdir(tmp_dir) is True
+
+        # mkdir() gracefully handles 2 calls to the same location
+        assert mkdir(tmp_dir) is True
+
+        # Create Temporary file 1KB in size
+        tmp_file = join(self.tmp_dir, 'Utils_Test.mkdir', '2KB')
+        assert self.touch(tmp_file, size='2KB')
+
+        # Now the isdir() will still return False because there is a file
+        # there now, not a directory
+        assert isdir(tmp_file) is False
+        # mkdir() will fail to create a directory in place of file
+        assert mkdir(tmp_file) is False
+
+        # And reference a new directory (not created yet) within
+        new_tmp_dir = join(tmp_dir, 'subdir')
+
+        # Confirm our directory doesn't exist
+        assert isdir(new_tmp_dir) is False
+
+        # Now we'll protect our original directory
+        chmod(tmp_dir, 0000)
+
+        # mkdir() will fail because of permissions, but incase it doesn't work
+        # as planned, just store the result in a variable.  We'll flip our
+        # permission back first
+        result = mkdir(new_tmp_dir)
+
+        # reset the permission
+        chmod(tmp_dir, 0700)
+
+        # Our result should yield a failed result
+        assert result is False
+
+        # Confirm that the directory was never created:
+        assert isdir(new_tmp_dir) is False

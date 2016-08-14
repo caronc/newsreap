@@ -26,13 +26,16 @@ gevent.monkey.patch_all()
 import unittest
 import yaml
 
-from os import makedirs
+from os import kill
 from os.path import join
+from os.path import exists
+from os.path import isdir
 from os.path import dirname
 from os.path import abspath
 from tempfile import gettempdir
 from getpass import getuser
 from shutil import rmtree
+from os import utime
 
 try:
     from newsreap.codecs import CodecBase
@@ -40,6 +43,9 @@ try:
 except ImportError:
     sys.path.insert(0, join(dirname(dirname(abspath(__file__))), 'newsreap'))
     from newsreap.codecs import CodecBase
+
+from newsreap.Utils import strsize_to_bytes
+from newsreap.Utils import mkdir
 
 # Logging
 import logging
@@ -81,13 +87,21 @@ class TestBase(unittest.TestCase):
         # Prepare our variable path
         self.var_dir = join(abspath(dirname(__file__)), 'var')
 
-        try:
-            rmtree(self.test_dir)
-        except:
-            pass
-        makedirs(self.test_dir, 0700)
-        makedirs(self.tmp_dir, 0700)
-        makedirs(self.out_dir, 0700)
+        if isdir(self.test_dir):
+            try:
+                rmtree(self.test_dir)
+
+            except OSError, e:
+                # An exception occured; get this resolved before
+                # doing any more testing
+                raise
+
+            except:
+                pass
+
+        mkdir(self.test_dir, 0700)
+        mkdir(self.tmp_dir, 0700)
+        mkdir(self.out_dir, 0700)
 
         ## Configure Logging
         #handler = logging.StreamHandler(sys.stdout)
@@ -101,6 +115,49 @@ class TestBase(unittest.TestCase):
         ## add the handlers to the logger
         #logger.addHandler(handler)
 
+
+    def pid_exists(self, pid):
+        """A simple function that tests if a PID is running.
+
+        See: http://stackoverflow.com/questions/568271/\
+                how-to-check-if-there-exists-a-process-with-a-given-pid
+        """
+        try:
+            # Sending signal 0 to a pid will raise an OSError exception if the
+            # pid is not running, and do nothing otherwise.
+            kill(pid, 0)
+
+        except OSError:
+            return False
+
+        return True
+
+    def touch(self, path, size=None, time=None):
+        """Simplify the dynamic creation of files or the updating of their
+        modified time.  If a size is specified, then a file of that size
+        will be created on the disk. If the file already exists, then the
+        size= attribute is ignored (for safey reasons).
+
+        """
+
+        if not isdir(dirname(abspath(path))):
+            mkdir(dirname(abspath(path)), 0700)
+
+        if not exists(path):
+            f = open(path, "wb")
+
+            size = strsize_to_bytes(size)
+            if isinstance(size, int) and size > 0:
+                f.seek(size-1)
+                f.write("\0")
+
+            f.close()
+
+        # Update our path
+        utime(path, time)
+
+        # Return True
+        return True
 
     def cleanup(self):
         """Remove the temporary directory"""

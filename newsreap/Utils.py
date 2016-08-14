@@ -2,7 +2,7 @@
 #
 # A simple collection of general functions
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -20,11 +20,51 @@ from os import listdir
 from os import makedirs
 from os.path import isdir
 from os.path import join
+from os.path import islink
+from os.path import isfile
+from os.path import dirname
+from os.path import abspath
+from os.path import basename
+from os.path import normpath
+from os.path import splitext
+
 from urlparse import urlparse
 from urlparse import parse_qsl
 from urllib import quote
 from urllib import unquote
 from os.path import expanduser
+
+from datetime import datetime
+
+# File Stats
+from stat import ST_ATIME
+from stat import ST_CTIME
+from stat import ST_MTIME
+from stat import ST_SIZE
+
+from os import stat as os_stat
+
+# MIME Libraries
+from mimetypes import guess_type
+from urllib import pathname2url
+
+# Python 3 Support
+try:
+    from importlib.machinery import SourceFileLoader
+    PYTHON_3 = True
+
+except ImportError:
+    from imp import load_source
+    PYTHON_3 = False
+
+# Logging
+import logging
+from newsreap.Logging import NEWSREAP_ENGINE
+logger = logging.getLogger(NEWSREAP_ENGINE)
+
+# delimiters used to separate values when content is passed in by string
+# This is useful when turning a string into a list
+STRING_DELIMITERS = r'[\[\]\;,\s]+'
 
 # Pre-Escape content since we reference it so much
 ESCAPED_PATH_SEPARATOR = re.escape('\\/')
@@ -40,7 +80,7 @@ TIDY_WIN_PATH_RE = re.compile(
         ESCAPED_WIN_PATH_SEPARATOR,
 ))
 TIDY_WIN_TRIM_RE = re.compile(
-    '^(.+[^:][^%s])[\s%s]*$' %(
+    '^(.+[^:][^%s])[\s%s]*$' % (
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
 ))
@@ -50,19 +90,24 @@ TIDY_NUX_PATH_RE = re.compile(
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
 ))
+
 TIDY_NUX_TRIM_RE = re.compile(
     '([^%s])[\s%s]+$' % (
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
 ))
 
-try:
-    from importlib.machinery import SourceFileLoader
-    PYTHON_3 = True
 
-except ImportError:
-    from imp import load_source
-    PYTHON_3 = False
+# This table allows us to support MIMEs that may not have otherwise
+# been detected by our system.  It purely bases it's result on the
+# filename extension and is only referenced if the built in mime
+# applications didn't work.
+NEWSREAP_MIME_TABLE = (
+    (re.compile(r'\.r(ar|[0-9]{2})\s*$', re.IGNORECASE),
+     'application/x-rar-compressed'),
+    (re.compile(r'\.z(ip|[0-9]{2})\s*$', re.IGNORECASE),
+     'application/zip'),
+)
 
 DEFAULT_PYLIB_IGNORE_LIST = (
     # Any item begining with an underscore
@@ -81,11 +126,6 @@ SEEK_CUR = 1
 # End of the stream; offset should be zero or negative
 SEEK_END = 2
 
-# Logging
-import logging
-from newsreap.Logging import NEWSREAP_ENGINE
-logger = logging.getLogger(NEWSREAP_ENGINE)
-
 # Sub commands are identified by they're filename
 PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py?$')
 
@@ -93,6 +133,7 @@ PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py?$')
 VALID_URL_RE = re.compile(r'^[\s]*([^:\s]+):[/\\]*([^?]+)(\?(.+))?[\s]*$')
 VALID_HOST_RE = re.compile(r'^[\s]*([^:/\s]+)')
 VALID_QUERY_RE = re.compile(r'^(.*[/\\])([^/\\]*)$')
+
 
 def strsize_to_bytes(strsize):
     """
@@ -104,35 +145,74 @@ def strsize_to_bytes(strsize):
         example: 4TB, 3GB, 10MB, 25KB, etc
 
     """
-    strsize = re.sub('[^0-9BKMGT]+', '', strsize, re.IGNORECASE)
-    strsize_re = re.search('0*(?P<size>[1-9][0-9]*)(?P<unit>.)?.*', strsize)
+    #strsize = re.sub('[^0-9BKMGT]+', '', strsize, re.IGNORECASE)
+
+    if isinstance(strsize, int):
+        # Nothing further to do
+        return strsize
+
+    try:
+        strsize_re = re.match(
+            r'\s*(?P<size>(0|[1-9][0-9]*)(\.(0+|[1-9][0-9]*))?)\s*((?P<unit>.)(?P<type>[bB])?)?\s*',
+            strsize,
+        )
+    except TypeError:
+        return None
+
     if not strsize_re:
         # Not good
-        return 0
+        return None
 
     size = int(strsize_re.group('size'))
     unit = strsize_re.group('unit')
+    use_bytes = strsize_re.group('type') != 'b'
 
-    if not unit or unit == 'B':
-        # We're going to assume bytes and return now
+    if not unit:
         return size
 
+    # convert unit to uppercase
+    unit = unit.upper()
+
+    if use_bytes:
+        if unit == 'B':
+            # We're going to assume bytes and return now
+            return size
+
+        elif unit == 'K':
+            # We're dealing with Kilobytes
+            return size*1024
+
+        elif unit == 'M':
+            # We're dealing with Megabytes
+            return size*1048576
+
+        elif unit == 'G':
+            # We're dealing with Gigabytes
+            return size*1073741824
+
+        elif unit == 'T':
+            # We're dealing with Terabytes
+            return size*1073741824*1024
+
+    # In Bits
     if unit == 'K':
         # We're dealing with Kilobytes
-        return size*1024
+        return size*1e3
 
-    if unit == 'M':
+    elif unit == 'M':
         # We're dealing with Megabytes
-        return size*1048576
+        return size*1e6
 
-    if unit == 'G':
+    elif unit == 'G':
         # We're dealing with Gigabytes
-        return size*1073741824
+        return size*1e9
 
-    if unit == 'T':
+    elif unit == 'T':
         # We're dealing with Terabytes
-        return size*1073741824*1024
+        return size*1e12
 
+    # Unsupported Type
+    return None
 
 def bytes_to_strsize(byteval):
     """
@@ -140,30 +220,110 @@ def bytes_to_strsize(byteval):
     represents the integer (in bytes) passed in.
 
     """
-    if not byteval:
-        # Not good
-        return '0.00B'
-
     unit = 'B'
     try:
         byteval = float(byteval)
+
     except(ValueError, TypeError):
-        return '0.00B'
+        return None
 
     if byteval >= 1024.0:
         byteval = byteval/1024.0
         unit = 'KB'
-    if byteval >= 1024.0:
-        byteval = byteval/1024.0
-        unit = 'MB'
-    if byteval >= 1024.0:
-        byteval = byteval/1024.0
-        unit = 'GB'
-    if byteval >= 1024.0:
-        byteval = byteval/1024.0
-        unit = 'TB'
+        if byteval >= 1024.0:
+            byteval = byteval/1024.0
+            unit = 'MB'
+            if byteval >= 1024.0:
+                byteval = byteval/1024.0
+                unit = 'GB'
+                if byteval >= 1024.0:
+                    byteval = byteval/1024.0
+                    unit = 'TB'
 
-    return'%.2f%s' % (byteval, unit)
+    return '%.2f%s' % (byteval, unit)
+
+
+def stat(path, fsinfo=True, mime=True):
+    """
+    A wrapper to the stat() python class that handles exceptions and
+    converts all file stats into datetime objects.
+
+    A simple response would look like this:
+        {
+            'basename': 'filename.rar',
+            'dirname': '/path/to/location/',
+            'extension': 'rar',
+            'filename': 'filename',
+
+            # the below appears if you specified fsinfo=True
+            'created': datetime(),      # file creation time
+            'modified': datetime(),     # file last modified time
+            'accessed': datetime(),     # file last access time
+            'size': 3002423,            # size is in bytes
+
+            # Mime Type (if boolean set)
+            'mime': 'application/rar'
+        }
+    """
+    # If we reach here, we store the file found
+    _abspath = abspath(path)
+    _basename = basename(path)
+
+    try:
+        stat_obj = os_stat(_abspath)
+
+    except OSError:
+        # File was not found or recently removed
+        return None
+
+    nfo = {
+        'basename': _basename,
+        'dirname': dirname(_abspath),
+        'extension': splitext(_basename)[1].lower(),
+        'filename': splitext(_basename)[0],
+    }
+
+    if fsinfo:
+        # Extend file information
+        try:
+            nfo['modified'] = \
+                datetime.fromtimestamp(stat_obj[ST_MTIME])
+
+        except ValueError:
+            nfo['modified'] = \
+                    datetime(1980, 1, 1, 0, 0, 0, 0)
+
+        try:
+            nfo['accessed'] = \
+                datetime.fromtimestamp(stat_obj[ST_ATIME])
+
+        except ValueError:
+            nfo['accessed'] = \
+                    datetime(1980, 1, 1, 0, 0, 0, 0)
+
+        try:
+            nfo['created'] = \
+                datetime.fromtimestamp(stat_obj[ST_CTIME])
+
+        except ValueError:
+            nfo['created'] = \
+                    datetime(1980, 1, 1, 0, 0, 0, 0)
+
+        nfo['size'] = stat_obj[ST_SIZE]
+
+    if mime:
+        url = pathname2url(_basename)
+        mime_type = guess_type(url)[0]
+
+        if mime_type is None:
+            # Default MIME Type if nothing found in our backup list
+            mime_type = next((m[1] for (r, m) \
+                              in enumerate(NEWSREAP_MIME_TABLE) \
+                  if m[0].search(_basename)), 'application/octet-stream')
+
+        nfo['mime'] = mime_type
+
+    return nfo
 
 
 def mkdir(name, perm=0775):
@@ -183,7 +343,7 @@ def mkdir(name, perm=0775):
         except OSError, e:
             if e[0] == errno.EEXIST:
                 # directory exists; this is okay
-                return True
+                return isdir(name)
 
             logger.debug('Created directory %s exception: %s' % (
                 name, e,
@@ -223,10 +383,10 @@ def scan_pylib(paths, ignore_re=DEFAULT_PYLIB_IGNORE_LIST):
     rpaths = {}
 
     if isinstance(paths, basestring):
-        paths = [ paths ]
+        paths = [paths]
 
     # Filter dirs to those that exist
-    paths = [ d for d in paths if isdir(d) is True ]
+    paths = [d for d in paths if isdir(d) is True]
     for pd in paths:
         for filename in listdir(pd):
             result = PYTHON_MODULE_RE.match(filename)
@@ -376,6 +536,7 @@ def parse_url(url, default_schema='http'):
         if result['fullpath'][-1] not in ('/', '\\') and \
            url[-1] in ('/', '\\'):
             result['fullpath'] += url.strip()[-1]
+
     except IndexError:
         # No problem, there simply isn't any returned results
         # and therefore, no trailing slash
@@ -384,7 +545,7 @@ def parse_url(url, default_schema='http'):
     # Parse Query Arugments ?val=key&key=val
     # while ensureing that all keys are lowercase
     if qsdata:
-        result['qsd'] = dict([ (k.lower().strip(), v.strip()) \
+        result['qsd'] = dict([(k.lower().strip(), v.strip()) \
                               for k, v in parse_qsl(
             qsdata,
             keep_blank_values=True,
@@ -458,3 +619,334 @@ def parse_url(url, default_schema='http'):
         result['url'] += result['fullpath']
 
     return result
+
+
+def parse_list(self, *args):
+    """
+    Take a string list and break it into a delimited
+    list of arguments. This funciton also supports
+    the processing of a list of delmited strings and will
+    always return a unique set of arguments. Duplicates are
+    always combined in the final results.
+
+    You can append as many items to the argument listing for
+    parsing.
+
+    Hence: parse_list('.mkv, .iso, .avi') becomes:
+        ['.mkv', '.iso', '.avi']
+
+    Hence: parse_list('.mkv, .iso, .avi', ['.avi', '.mp4']) becomes:
+        ['.mkv', '.iso', '.avi', '.mp4']
+
+    The parsing is very forgiving and accepts spaces, slashes, commas
+    semicolons, and pipes as delimiters
+    """
+
+    result = []
+    for arg in args:
+        if isinstance(arg, basestring):
+            result += re.split(STRING_DELIMITERS, arg)
+
+        elif isinstance(arg, (list, tuple)):
+            for _arg in arg:
+                if isinstance(arg, basestring):
+                    result += re.split(STRING_DELIMITERS, arg)
+
+                # A list inside a list? - use recursion
+                elif isinstance(_arg, (list, tuple)):
+                    result += parse_list(_arg)
+
+                else:
+                    # Convert whatever it is to a string and work with it
+                    result += parse_list(str(_arg))
+        else:
+            # Convert whatever it is to a string and work with it
+            result += parse_list(str(arg))
+
+    # apply as well as make the list unique by converting it
+    # to a set() first. filter() eliminates any empty entries
+    return filter(bool, list(set(result)))
+
+
+def find(search_dir, regex_filter=None, prefix_filter=None,
+                suffix_filter=None, fsinfo=False,
+               followlinks=False, min_depth=None, max_depth=None,
+              case_sensitive=False, *args, **kwargs):
+    """Returns a dict object of the files found in the download
+       directory. You can additionally pass in filters as a list or
+       string) to filter the results returned.
+
+          ex:
+          {
+             '/full/path/to/file.mkv': {
+                 'basename': 'file.mkv',
+                 'dirname': '/full/path/to',
+                 # identify the filename (without applied extension)
+                 'filename': 'file',
+                 # always tolower() applied to:
+                 'extension': 'mkv',
+
+                 # If fullstatus == True then the following additional
+                 # content is provided.
+
+                 # file size is in bytes
+                 'size': 10000,
+                 # accessed date
+                 'accessed': datetime(),
+                 # created date
+                 'created': datetime(),
+                 # created date
+                 'modified': datetime(),
+             }
+          }
+
+    """
+
+    # Internal Tracking of Directory Depth
+    current_depth = kwargs.get('__current_depth', 1)
+    root_dir = kwargs.get('__root_dir', search_dir)
+
+    # Build file list
+    files = {}
+    if isinstance(search_dir, (list, tuple)):
+        for _dir in search_dir:
+            # use recursion to build a master (unique) list
+            files = dict(files.items() + find(
+                search_dir=_dir,
+                regex_filter=regex_filter,
+                prefix_filter=prefix_filter,
+                suffix_filter=suffix_filter,
+                fsinfo=fsinfo,
+                followlinks=followlinks,
+                min_depth=min_depth,
+                max_depth=max_depth,
+                case_sensitive=case_sensitive,
+                # Internal Current Directory Depth tracking
+                __current_depth=current_depth,
+                __root_dir=root_dir,
+            ).items())
+        return files
+
+    elif not isinstance(search_dir, basestring):
+        # Unsupported
+        return {}
+
+    # Change all filters strings lists (if they aren't already)
+    if regex_filter is None:
+        regex_filter = tuple()
+    if isinstance(regex_filter, basestring):
+        regex_filter = (regex_filter,)
+    elif isinstance(regex_filter, re._pattern_type):
+        regex_filter = (regex_filter,)
+    if suffix_filter is None:
+        suffix_filter = tuple()
+    if isinstance(suffix_filter, basestring):
+        suffix_filter = (suffix_filter, )
+    if prefix_filter is None:
+        prefix_filter = tuple()
+    if isinstance(prefix_filter, basestring):
+        prefix_filter = (prefix_filter, )
+
+    # clean prefix list
+    if prefix_filter:
+        prefix_filter = parse_list(prefix_filter)
+
+    # clean up suffix list
+    if suffix_filter:
+        suffix_filter = parse_list(suffix_filter)
+
+    # Precompile any defined regex definitions
+    if regex_filter:
+        _filters = []
+        for f in regex_filter:
+            if not isinstance(f, re._pattern_type):
+                flags = re.MULTILINE
+                if not case_sensitive:
+                    flags |= re.IGNORECASE
+                try:
+                    _filters.append(re.compile(f, flags=flags))
+
+                except:
+                    logger.error(
+                        'Invalid regular expression: "%s"' % f,
+                    )
+                    return {}
+            else:
+                # precompiled already
+                _filters.append(f)
+        # apply
+        regex_filter = _filters
+
+    if current_depth == 1:
+        # noise reduction; only display this notice once (but not on
+        # each recursive call)
+        logger.debug("get_files('%s') with %d filter(s)" % (
+            search_dir,
+            len(prefix_filter) + len(suffix_filter) + len(regex_filter),
+        ))
+
+    if not dirname(search_dir):
+        search_dir = join(root_dir, search_dir)
+
+    if isfile(search_dir):
+        fname = basename(search_dir)
+        dname = abspath(dirname(search_dir))
+        filtered = False
+        if regex_filter:
+            filtered = True
+            for regex in regex_filter:
+                if regex.search(fname):
+                    logger.debug('Allowed %s (regex)' % fname)
+                    filtered = False
+                    break
+
+        if not filtered and prefix_filter:
+            filtered = True
+            for prefix in prefix_filter:
+                if case_sensitive:
+                    if fname[0:len(prefix)] == prefix:
+                        logger.debug('Allowed %s (prefix)' % fname)
+                        filtered = False
+                        break
+                else:
+                    # Not Case Sensitive
+                    if fname[0:len(prefix)].lower() == prefix.lower():
+                        logger.debug('Allowed %s (prefix)' % fname)
+                        filtered = False
+                        break
+
+        if not filtered and suffix_filter:
+            filtered = True
+            for suffix in suffix_filter:
+                if case_sensitive:
+                    if fname[-len(suffix):] == suffix:
+                        # Allowed
+                        filtered = False
+                        break
+                else:
+                    # Not Case Sensitive
+                    if fname[-len(suffix):].lower() == suffix.lower():
+                        logger.debug('Allowed %s (suffix)' % fname)
+                        filtered = False
+                        break
+
+        if filtered:
+            # File does not meet implied filters
+            return {}
+
+        # Update our search_dir
+        search_dir = join(dname, fname)
+
+        # If we reach here, we can prepare a file using the data
+        # we fetch
+        _file = {
+            search_dir: stat(search_dir, fsinfo=fsinfo, mime=False),
+        }
+        if _file[search_dir] is None:
+            del files[search_dir]
+            logger.warning(
+                'The file %s became inaccessible' % fname,
+            )
+            return {}
+
+        return _file
+
+    elif not isdir(search_dir):
+        return {}
+
+    # For depth matching
+    search_dir = normpath(search_dir)
+    current_depth += 1
+
+    # Get Directory entries
+    dirents = [d for d in listdir(search_dir) \
+              if d not in ('..', '.')]
+
+    for dirent in dirents:
+        # Store Path
+        fullpath = join(search_dir, dirent)
+
+        if isdir(fullpath):
+            # Min and Max depth handling
+            if max_depth and max_depth < current_depth:
+                continue
+
+            if min_depth and min_depth > current_depth:
+                continue
+
+            if not followlinks and islink(fullpath):
+                # honor followlinks
+                continue
+
+            # use recursion to build a master (unique) list
+            files = dict(files.items() + find(
+                search_dir=fullpath,
+                regex_filter=regex_filter,
+                prefix_filter=prefix_filter,
+                suffix_filter=suffix_filter,
+                fsinfo=fsinfo,
+                followlinks=followlinks,
+                min_depth=min_depth,
+                max_depth=max_depth,
+                case_sensitive=case_sensitive,
+                # Internal Current Directory Depth tracking
+                __current_depth=current_depth,
+                __root_dir=root_dir,
+            ).items())
+            continue
+
+        elif not isfile(fullpath):
+            # Unknown Type
+            continue
+
+        filtered = False
+
+        # Apply filters to match filed
+        if regex_filter:
+            filtered = True
+            for regex in regex_filter:
+                if regex.search(dirent):
+                    logger.debug('Allowed %s (regex)' % dirent)
+                    filtered = False
+                    break
+
+            if filtered:
+                # Denied
+                continue
+
+        if not filtered and prefix_filter:
+            filtered = True
+            for prefix in prefix_filter:
+                if dirent[0:len(prefix)] == prefix:
+                    logger.debug('Allowed %s (prefix)' % dirent)
+                    filtered = False
+                    break
+
+            if filtered:
+                # Denied
+                continue
+
+        if not filtered and suffix_filter:
+            filtered = True
+            for suffix in suffix_filter:
+                if dirent[-len(suffix):] == suffix:
+                    logger.debug('Allowed %s (suffix)' % dirent)
+                    filtered = False
+                    break
+
+            if filtered:
+                # Denied
+                continue
+
+        # If we reach here, we store the file found
+        files[fullpath] = stat(dirent, fsinfo=fsinfo, mime=False)
+        if files[fullpath] is None:
+            # File was not found or recently removed
+            del files[fullpath]
+            logger.warning(
+                'The file %s became inaccessible' % dirent,
+            )
+            continue
+
+    # Return all files
+    return files
