@@ -40,13 +40,11 @@ from newsreap.SocketBase import SocketException
 from newsreap.SocketBase import SignalCaughtException
 from newsreap.Utils import mkdir
 from newsreap.Utils import SEEK_SET
-from newsreap.Utils import SEEK_CUR
 from newsreap.Utils import SEEK_END
 
 # Codecs
 # These define the messages themselves.
 from newsreap.codecs.CodecBase import CodecBase
-from newsreap.codecs.CodecBody import CodecBody
 from newsreap.codecs.CodecHeader import CodecHeader
 from newsreap.codecs.CodecArticleIndex import CodecArticleIndex
 from newsreap.codecs.CodecArticleIndex import XoverGrouping
@@ -138,10 +136,11 @@ NNTP_XOVER_RETRIES = 5
 # are part of python v2.7 but included here for python v2.6
 # support too.
 
-#TODO: Change all references of 'id' to article_id; this sadly exists
+# TODO: Change all references of 'id' to article_id; this sadly exists
 #      everywhere, id is a reserved function id() and is and is pretty
 #      ambiguous.  article_id would explicity identify what the id
 #      represents
+
 
 class NNTPConnection(SocketBase):
     """
@@ -292,7 +291,8 @@ class NNTPConnection(SocketBase):
                 "using default: '%s'." % self._iostream)
             self._iostream = NNTPIOStream.RFC3977_GZIP
 
-        else: # iostream is None (0, or False)
+        else:
+            # iostream is None (0, or False)
             # used RFC3977 Standards but without Compresssion
             logger.info('An invalid iostream was specified; ' +
                 "using default: '%s'." % self._iostream)
@@ -883,7 +883,6 @@ class NNTPConnection(SocketBase):
 
         return self.group_index
 
-
     def next(self, count=50000):
         """
         A wrapper to the xover but using a counter offset based
@@ -909,7 +908,6 @@ class NNTPConnection(SocketBase):
         # Return results
         return response
 
-
     def prev(self, count=50000):
         """
         A wrapper to the xover but using a counter offset based
@@ -934,7 +932,6 @@ class NNTPConnection(SocketBase):
 
         # Return results
         return response
-
 
     def xover(self, group=None, start=None, end=None,
               sort=XoverGrouping.BY_POSTER_TIME):
@@ -1046,7 +1043,6 @@ class NNTPConnection(SocketBase):
             # TODO: Debug; wtf is going on
             return None
 
-
     def stat(self, id, full=None, group=None):
         """
         A Simple check to return True of False on whether an article
@@ -1084,7 +1080,7 @@ class NNTPConnection(SocketBase):
             # Force decoders to just be the header
             response = self.send(
                 'HEAD <%s>' % id,
-                decoders=[CodecHeader(encoding=self.encoding),],
+                decoders=[CodecHeader(encoding=self.encoding), ],
             )
 
             if response.is_success(multiline=True):
@@ -1095,7 +1091,9 @@ class NNTPConnection(SocketBase):
             if self._backups:
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
-                logger.warning('ARTICLE <%s> not found; checking backups.' % id)
+                logger.warning(
+                    'ARTICLE <%s> not found; checking backups.' % id,
+                )
                 return next((b.article for b in self._backups \
                         if b.stat(id, group) not in (None, False)), None)
 
@@ -1115,7 +1113,6 @@ class NNTPConnection(SocketBase):
 
         # Return
         return True
-
 
     def get(self, id, tmp_dir, group=None):
         """
@@ -1179,10 +1176,10 @@ class NNTPConnection(SocketBase):
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
                 return next((b.article for b in self._backups \
-                        if b.get(id, tmp_dir, group) != None), None)
+                        if b.get(id, tmp_dir, group) is not None), None)
             return None
 
-        else: #response.code in NNTPResponseCode.SERVER_ERROR:
+        else:  # response.code in NNTPResponseCode.SERVER_ERROR:
             # Close our connection
             self.close()
 
@@ -1192,7 +1189,7 @@ class NNTPConnection(SocketBase):
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
                 return next((b.article for b in self._backups \
-                        if b.get(id, tmp_dir, group) != None), None)
+                        if b.get(id, tmp_dir, group) is not None), None)
             return None
 
         # If we reach here, we have data we can work with; build our article
@@ -1200,64 +1197,66 @@ class NNTPConnection(SocketBase):
         article = NNTPArticle(id=id)
         article.load_response(response)
 
-        #if self._data.tell() >= self._data_len and self.article_eod:
-        #    # No more data; we're done
-        #    return None
+        # if self._data.tell() >= self._data_len and self.article_eod:
+        #     # No more data; we're done
+        #     return None
 
-        #if 'name' in self.article and len(self.article['name']) > 1:
-        #    self.article_fname = basename(self.article['name'])
-        #else:
-        #    self.article_fname = '%s.msg' % id
+        # if 'name' in self.article and len(self.article['name']) > 1:
+        #     self.article_fname = basename(self.article['name'])
+        # else:
+        #     self.article_fname = '%s.msg' % id
 
-        # Temporary filename for retreival)
-        #self.article_fname = '%s.msg' % id
-        # fileout = join(tmp_dir, self.article_fname)
-        # if isfile(fileout):
+        #  Temporary filename for retreival)
+        # self.article_fname = '%s.msg' % id
+        #  fileout = join(tmp_dir, self.article_fname)
+        #  if isfile(fileout):
+        #      try:
+        #          unlink(fileout)
+        #          logger.warning('Filename %s already exists.' % fileout)
+        #      except:
+        #          logger.error(
+        #              'Could not eliminate lingering file %s' % fileout,
+        #          )
+        #          return None
+
+        #  retrieve our content passing in our Article object
+        # response = self._recv(article=article)
+        # if response.code not in NNTPResponseCode.SUCCESS_MULTILINE:
+        #     # We failed to retrieve the content
+        #     logger.error('Failed during data reception.')
+        #     self.close()
+
+        #     if self._backups:
+        #         # Try our backup servers in the sequential order they were
+        #         # added in; if they all fail; then we return None
+        #         return next((b.article for b in self._backups \
+        #                 if b.get(id, tmp_dir, group) != None), None)
+
+        #     # If we reach here; there are no backup servers; so we just
+        #     # return None
+        #     return None
+
+        # logger.debug('Article Info: %s' % str(self.article))
+        # if self.article_encoding == MessageEncoding.YENC:
+        #     if 'crc32' in self.article and
+        #            self.article['crc32'] != decoder.crc32():
+        #         logger.debug('CRC Match %s == %s' % (
+        #             self.article['crc32'],
+        #             decoder.crc32()
+        #         ))
+        #         # TODO: rename file; add .ERROR to extension
+        #         raise YencError('CRC Error', code=E_CRC32)
+
+        # except:
+        #     # we failed; clean up file
         #     try:
         #         unlink(fileout)
-        #         logger.warning('Filename %s already exists.' % fileout)
+        #         logger.debug('Removed partially written file %s' % fileout)
         #     except:
-        #         logger.error('Could not eliminate lingering file %s' % fileout)
-        #         return None
-
-        # retrieve our content passing in our Article object
-        #response = self._recv(article=article)
-        #if response.code not in NNTPResponseCode.SUCCESS_MULTILINE:
-        #    # We failed to retrieve the content
-        #    logger.error('Failed during data reception.')
-        #    self.close()
-
-        #    if self._backups:
-        #        # Try our backup servers in the sequential order they were
-        #        # added in; if they all fail; then we return None
-        #        return next((b.article for b in self._backups \
-        #                if b.get(id, tmp_dir, group) != None), None)
-
-        #    # If we reach here; there are no backup servers; so we just
-        #    # return None
-        #    return None
-
-        #logger.debug('Article Info: %s' % str(self.article))
-        #if self.article_encoding == MessageEncoding.YENC:
-        #    if 'crc32' in self.article and self.article['crc32'] != decoder.crc32():
-        #        logger.debug('CRC Match %s == %s' % (
-        #            self.article['crc32'],
-        #            decoder.crc32()
-        #        ))
-        #        # TODO: rename file; add .ERROR to extension
-        #        raise YencError('CRC Error', code=E_CRC32)
-
-        #except:
-        #    # we failed; clean up file
-        #    try:
-        #        unlink(fileout)
-        #        logger.debug('Removed partially written file %s' % fileout)
-        #    except:
-        #        pass
+        #         pass
 
         # Return the content retrieved
         return article
-
 
     def send(self, command, timeout=None, decoders=None, retries=0):
         """
@@ -1309,9 +1308,11 @@ class NNTPConnection(SocketBase):
             if retries > 0:
                 # We have a retry left; depending on the severity of our return
                 # code, we may try again
-                if response.code in \
-                   (NNTPResponseCode.FETCH_ERROR, NNTPResponseCode.BAD_RESPONSE,
-                    NNTPResponseCode.NO_CONNECTION, NNTPResponseCode.CONNECTION_LOST):
+                if response.code in (
+                    NNTPResponseCode.FETCH_ERROR,
+                    NNTPResponseCode.BAD_RESPONSE,
+                    NNTPResponseCode.NO_CONNECTION,
+                    NNTPResponseCode.CONNECTION_LOST):
                     # If we reach here; our return code is considered
                     # recoverable;
 
@@ -1337,7 +1338,6 @@ class NNTPConnection(SocketBase):
             'Invalid Command: "%s"' % command,
         )
 
-
     def _recv(self, decoders=None, timeout=None):
         """ Receive data, return #bytes, done, skip
 
@@ -1350,11 +1350,13 @@ class NNTPConnection(SocketBase):
 
         if not self.connected:
             logger.debug('_recv() %d: %s' % (
-                NNTPResponseCode.NO_CONNECTION, 'No Connection'
+                NNTPResponseCode.NO_CONNECTION, 'No Connection',
             ))
-            return NNTPResponse(NNTPResponseCode.NO_CONNECTION, 'No Connection')
+            return NNTPResponse(
+                NNTPResponseCode.NO_CONNECTION, 'No Connection',
+            )
 
-        if self.article_eod == True:
+        if self.article_eod is True:
             # We've completed
             return NNTPResponse(self.last_resp_code, self.last_resp_str)
 
@@ -1401,11 +1403,11 @@ class NNTPConnection(SocketBase):
             total_bytes += bytes
             logger.debug('_recv() %d byte(s) read.' % (bytes))
 
-            ## DEBUG START
-            #self._buffer.seek(head_ptr, SEEK_SET)
-            #logger.debug('Characters "%s"' % \
-            #    ", ".join(['0x%0x' % ord(b) for b in self._buffer.read()]))
-            ## DEBUG END
+            # # DEBUG START
+            # self._buffer.seek(head_ptr, SEEK_SET)
+            # logger.debug('Characters "%s"' % \
+            #     ", ".join(['0x%0x' % ord(b) for b in self._buffer.read()]))
+            # # DEBUG END
 
             ##################################################################
             #                                                                #
@@ -1462,7 +1464,9 @@ class NNTPConnection(SocketBase):
                         self.last_resp_code, self.last_resp_str))
 
                     # Return our response
-                    return NNTPResponse(self.last_resp_code, self.last_resp_str)
+                    return NNTPResponse(
+                        self.last_resp_code, self.last_resp_str,
+                    )
 
                 logger.debug('_recv() %d: %s' % (
                     self.last_resp_code, self.last_resp_str))
@@ -1498,7 +1502,7 @@ class NNTPConnection(SocketBase):
             if can_read and total_bytes < self.MAX_BUFFER_SIZE:
                 # Keep storing content until we've either reached the end
                 # or filled our buffer
-                #logger.debug('_recv() Data pending on server...')
+                # logger.debug('_recv() Data pending on server...')
                 continue
 
             ##################################################################
@@ -1533,7 +1537,9 @@ class NNTPConnection(SocketBase):
                 eod_results = EOD_RE.search(data)
                 if eod_results:
                     # We can truncate here to trim the EOD off
-                    self._buffer.truncate(total_bytes-len(eod_results.group(1)))
+                    self._buffer.truncate(
+                        total_bytes-len(eod_results.group(1)),
+                    )
 
                     # Correct Total Length
                     total_bytes = self._buffer.seek(0, SEEK_END)
@@ -1563,7 +1569,9 @@ class NNTPConnection(SocketBase):
                 eol_results = EOL_RE.search(data)
                 if eol_results:
                     # We can truncate here to trim the EOL off
-                    self._buffer.truncate(total_bytes-len(eol_results.group(1)))
+                    self._buffer.truncate(
+                        total_bytes-len(eol_results.group(1)),
+                    )
 
                     # Correct Total Length
                     total_bytes = self._buffer.seek(0, SEEK_END)
@@ -1684,7 +1692,6 @@ class NNTPConnection(SocketBase):
                 # Correct Total Length
                 total_bytes = self._buffer.tell()
 
-
             ##################################################################
             #                                                                #
             #  Step: 4: This step processes the extra content founds from    #
@@ -1759,7 +1766,8 @@ class NNTPConnection(SocketBase):
                 #                     with the decoder; the data is bad.
                 #
                 #     - None:         A graceful way of saying that we're done
-                #                     with the decoder. Like an abort if you will
+                #                     with the decoder. Like an abort if you
+                #                     will
                 #
                 if result is None:
                     # The Codec has completed and has nothing to return for
@@ -1777,7 +1785,9 @@ class NNTPConnection(SocketBase):
                     # We're expecting more data a long as the End of Data
                     # (EOD) flag hasn't been picked up.
                     if not self.article_eod:
-                        logger.debug('Expecting more data to build results with...')
+                        logger.debug(
+                            'Expecting more data to build results with...',
+                        )
                         continue
 
                     # If we reach here, we've reached the end of the line
@@ -1800,7 +1810,8 @@ class NNTPConnection(SocketBase):
 
                 if not isinstance(result, NNTPContent):
                     # We ignore any other return type, Decoders should always
-                    # return an NNTPContent type; anything else is considered moot
+                    # return an NNTPContent type; anything else is considered
+                    # moot
                     continue
 
                 # Add to our NNTPContent() to our decoded set associated with
@@ -1817,7 +1828,6 @@ class NNTPConnection(SocketBase):
 
         logger.debug('Returning Response %s' % response)
         return response
-
 
     def close(self):
         """
@@ -1845,7 +1855,6 @@ class NNTPConnection(SocketBase):
         # content on the socket before closing it
         return super(NNTPConnection, self).close()
 
-
     def _soft_reset(self):
         """
         Reset tracking items
@@ -1872,7 +1881,6 @@ class NNTPConnection(SocketBase):
             except (SocketException, SignalCaughtException):
                 pass
 
-
     def _hard_reset(self, wait=True):
         """
         Drop the connection and re-establish it
@@ -1889,7 +1897,6 @@ class NNTPConnection(SocketBase):
     def __str__(self):
         return '%s://%s@%s:%d' % (
             self.protocol, self.username, self.host, self.port)
-
 
     def __unicode__(self):
         return u'%s://%s@%s:%d' % (
