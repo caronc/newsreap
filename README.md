@@ -6,6 +6,8 @@ you interface with your Usenet providers.
 NewsReap supports features such as:
 * SSL Support
 * Group Searching
+* Multi-Provider support; basically prioritize your Usenet providers and those
+  of higher priority will always be used first.
 * Multithreaded (handles multiple connections simultaneously)
 * Aliases allow you to not only group multiple Usenet groups into 1; you can use aliases to also simplify the reference to the group itself.
 
@@ -149,5 +151,14 @@ items = sock.xover()
 #        usenet servers require this option to be set; but it's
 #        there fore those that do:
 #
-article = sock.get('message-id', work_dir='/tmp', group='alt.binaries.test')
+result = sock.get('message-id', work_dir='/tmp', group='alt.binaries.test')
+
+# - Retrieve a series of articles if you have an nzbfile:
+from newsreap import NNTPnzb
+result = sock.get(
+    NNTPnzb('/path/to/NZBfile', tmp_dir='/tmp'),
+    work_dir='/tmp',
+    group='alt.binaries.test',
+)
+
 ```
