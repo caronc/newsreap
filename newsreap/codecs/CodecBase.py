@@ -17,6 +17,8 @@
 from binascii import crc32
 from os.path import join
 from os.path import isdir
+from os.path import expanduser
+import errno
 
 from newsreap.Utils import mkdir
 from gevent import sleep
@@ -34,7 +36,8 @@ E_CRC32 = 65
 # The mask to apply to all CRC checking
 BIN_MASK = 0xffffffffL
 
-DEFAULT_TMP_DIR = join('.nntp', 'tmp')
+# Default temporary directory to use if none are specified
+DEFAULT_TMP_DIR = expanduser(join('~', '.config', 'newsreap', 'var', 'tmp'))
 
 
 class CodecBase(object):
@@ -71,6 +74,11 @@ class CodecBase(object):
                 logger.info('Created directory: %s' % self.tmp_dir)
             else:
                 logger.error('Failed to created directory: %s' % self.tmp_dir)
+                ## Should not continue under this circumstance
+                # raise IOError((
+                #     errno.EACCES,
+                #     'Failed to create directory: %s' % self.tmp_dir,
+                # ))
 
         # Tracks the lines processed
         self._lines = 0
