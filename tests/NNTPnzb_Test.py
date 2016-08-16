@@ -168,7 +168,6 @@ class NNTPnzb_Test(TestBase):
         assert nzbobj.save(nzbfile) is True
         assert isfile(nzbfile) is True
 
-
     def test_bad_files(self):
         """
         Test different variations of bad file inputs

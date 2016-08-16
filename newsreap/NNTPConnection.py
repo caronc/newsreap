@@ -64,7 +64,7 @@ EOL = '\r\n'
 EOD = '%s.' % EOL
 
 EOL_RE = re.compile(r'([\r]?\n)')
-EOD_RE = re.compile('(\.([\r]?\n))$')
+EOD_RE = re.compile(r'(\.([\r]?\n))$')
 
 # Splitting doesn't work well with the parenthesis
 # the below fixes this

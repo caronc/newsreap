@@ -42,8 +42,8 @@ XML_DOCTYPE = 'nzb'
 NZB_DTD_VERSION = '1.1'
 NZB_XML_DTD = 'http://www.newzbin.com/DTD/nzb/nzb-%s.dtd' % NZB_DTD_VERSION
 NZB_XML_NAMESPACE = 'http://www.newzbin.com/DTD/2003/nzb'
-# If set to PUBLIC then XML_DTD is expected to be on a remote location
-# If set to SYSTEM then the XML_DTD is expected to be local to the system
+
+
 class XMLDTDType(object):
     Public = u'PUBLIC'
     System = u'SYSTEM'
