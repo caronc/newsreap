@@ -29,8 +29,10 @@ import gevent.monkey
 gevent.monkey.patch_all()
 
 from os.path import isfile
-import errno
 from datetime import datetime
+
+import errno
+import re
 
 # Logging
 import logging
@@ -441,6 +443,7 @@ class SocketBase(object):
 
             except ssl.SSLError, e:
                 # Secure Connection Failed
+                self.close()
                 logger.error(
                     "Failed to secure connection using %s / errno=%d" % (
                         SECURE_PROTOCOL_PRIORITY\
@@ -448,13 +451,12 @@ class SocketBase(object):
                         e[0],
                     ),
                 )
-                self.close()
 
                 if self.secure is True:
                     # Fetch next (but only if nothing was explicitly
                     # specified)
                     self.__ssl_version(try_next=True)
-                    raise SocketException('Secure Connection Failed')
+                    continue
 
                 # If we reach here, we had a problem with our secure connection
                 # handshaking and we were explicitly told to only use 1 (one)
@@ -465,7 +467,7 @@ class SocketBase(object):
                 raise SocketRetryLimit('There are no protocols left to try.')
 
             except socket.error, e:
-                # logger.debug("Exception received: %s " % (e));
+                logger.debug("Socket exception received: %s" % (e));
                 if e[0] == errno.EINTR:
                     # Ensure socket is closed
                     self.close()
@@ -1082,28 +1084,22 @@ class SocketBase(object):
                             (host, alias, ips) = \
                                     socket.gethostbyaddr(self._remote_addr)
 
+                            # certificate syntax; a simple flick and we make it
+                            # a regex supported expression
+                            cert_host = cert_host.replace('*.', '.*\\.')
+
                             # If we get here, we've got a hostname to work with
+                            host_match_re = re.compile(cert_host, re.IGNORECASE)
                             matched_host = next((h for h in \
                                           [ host ] + alias + ips
-                                          if h == cert_host), False)
+                                          if host_match_re.match(h) \
+                                                 is not None), False)
 
                             if not matched_host:
                                 raise SocketRetryLimit(
                                     "Certificate for '%s' and does not match." % (
                                         cert_host,
                                 ))
-
-                            # Now we check that the host we're connecting to
-                            # is also in this list
-                            matched_host = next((h for h in \
-                                          [ host ] + alias + ips
-                                          if h == self.host), False)
-
-                            if not matched_host:
-                                raise SocketRetryLimit(
-                                    "The host '%s' does not match remote (%s)." % (
-                                        cert_host, self.host),
-                                )
 
                         # TODO: Store fingerprint (if not stored already)
                         #       If already stored, then verify that it hasn't
@@ -1136,7 +1132,7 @@ class SocketBase(object):
                 if self.can_write(retry_wait) is None:
                     self.close()
                     raise SocketException('Connection broken')
-                    continue
+                continue
 
             if timeout:
                 # Update Elapsed Time
