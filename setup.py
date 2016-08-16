@@ -17,6 +17,7 @@
 #
 
 from setuptools import setup
+from setuptools import find_packages
 
 setup(
     name='newsreap',
@@ -28,7 +29,7 @@ setup(
     keywords='usenet nntp index framework',
     author='Chris Caron',
     author_email='lead2gold@gmail.com',
-    packages=['newsreap', ],
+    packages=find_packages(),
     include_package_data=True,
     scripts=['bin/nr.py', ],
     data_files=[('share/newsreap', ['config.yaml', ]), ],
