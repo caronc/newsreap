@@ -61,11 +61,7 @@ socket.setdefaulttimeout(10.0)
 NNTP_TEST_VAR_PATH = join(dirname(abspath(__file__)), 'var')
 
 # Empty File
-DEFAULT_EMPTY_FILE = join(
-    NNTP_TEST_VAR_PATH,
-    'NNTPConnection',
-    'emptyfile.msg',
-)
+DEFAULT_EMPTY_FILE = join(NNTP_TEST_VAR_PATH, 'emptyfile.msg')
 
 # Article ID
 ARTICLE_ID_RE = re.compile(r'\s*<*\s*(?P<id>[^>]+)>?.*')
@@ -84,7 +80,7 @@ NNTP_DEFAULT_MAP = {
     },
     re.compile('LIST ACTIVE'): {
         'response': '215 Newsgroups in form "group high low flags".',
-        'file': join(NNTP_TEST_VAR_PATH, 'grouplist'),
+        'file': join(NNTP_TEST_VAR_PATH, 'group.list'),
     },
     re.compile('GROUP alt.binaries.l2g.znb'): {
         'response': '211 709278590 69039573 778318162 alt.binaries.l2g.znb',

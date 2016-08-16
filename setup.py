@@ -30,6 +30,10 @@ setup(
     author='Chris Caron',
     author_email='lead2gold@gmail.com',
     packages=find_packages(),
+    package_data={
+        'newsreap': ['var/*'],
+        'tests': ['var/*.*', 'var/*/*'],
+    },
     include_package_data=True,
     scripts=['bin/nr.py', ],
     data_files=[('share/newsreap', ['config.yaml', ]), ],

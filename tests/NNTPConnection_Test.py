@@ -50,7 +50,7 @@ from newsreap.NNTPIOStream import NNTPIOStream
 VAR_PATH = join(dirname(abspath(__file__)), 'var')
 
 # Empty File
-EMPTY_FILE = join(VAR_PATH, 'NNTPConnection', 'emptyfile.msg')
+EMPTY_FILE = join(VAR_PATH, 'emptyfile.msg')
 
 
 class NNTPConnection_Test(TestBase):

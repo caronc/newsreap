@@ -186,13 +186,13 @@ class Codec_Groups(TestBase):
     def test_decoding_01(self):
         """
         Open a stream to a file we can read for decoding; This test
-        specifically focuses on var/grouplist
+        specifically focuses on var/group.list
         """
 
         # Initialize Codec
         ch_py = CodecGroups()
 
-        encoded_filepath = join(self.var_dir, 'grouplist')
+        encoded_filepath = join(self.var_dir, 'group.list')
         assert isfile(encoded_filepath)
 
         # Read data and decode it
@@ -205,7 +205,7 @@ class Codec_Groups(TestBase):
         assert isinstance(ch_py.decoded, NNTPMetaContent)
         assert isinstance(ch_py.decoded.content, list)
 
-        # The number of lines in grouplist parsed should all be valid
+        # The number of lines in group.list parsed should all be valid
         assert len(ch_py.decoded.content) == ch_py._total_lines
 
         # Test our reset
