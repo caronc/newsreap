@@ -23,6 +23,7 @@ from zlib import error as ZlibException
 from os.path import isdir
 from io import BytesIO
 from datetime import datetime
+from blist import sortedset
 
 from newsreap.NNTPHeader import NNTPHeader
 from newsreap.NNTPArticle import NNTPArticle
@@ -41,6 +42,8 @@ from newsreap.SocketBase import SignalCaughtException
 from newsreap.Utils import mkdir
 from newsreap.Utils import SEEK_SET
 from newsreap.Utils import SEEK_END
+
+from newsreap.NNTPnzb import NNTPnzb
 
 # Codecs
 # These define the messages themselves.
@@ -1116,6 +1119,52 @@ class NNTPConnection(SocketBase):
 
     def get(self, id, tmp_dir, group=None):
         """
+        A wrapper to the _get call allowing support for more then one type
+        of object (oppose to just _get() which only accepts the message id
+
+        """
+
+        if isinstance(id, basestring):
+            # We're dealing a Message-ID (Article-ID)
+            return self._get(id=id, tmp_dir=tmp_dir, group=group)
+
+        elif isinstance(id, NNTPnzb):
+            # We're dealing with an NZB File
+            if not id.is_valid():
+                return None
+
+
+            for seg in id:
+                # A sorted set of segments
+                articles = sortedset(key=lambda x: x.key())
+                while len(seg):
+                    # Basically we will pop each article our of our
+                    # NNTPSegmentedPost() object and replace its decoded
+                    # content with our retrieved results
+                    nzb_article = seg.pop()
+
+                    # retrieve it's content if we can
+                    fetched_article = self._get(
+                        id=nzb_article,
+                        tmp_dir=tmp_dir,
+                        group=group,
+                    )
+
+                    if fetched_article:
+                        # Store information from our nzb_article over top of
+                        # the contents in the new article we retrieved
+                        articles.add(fetched_article)
+
+                    else:
+                        # Uh oh, we failed to get anything; so just add
+                        # our current article generated from the nzb file
+                        articles.add(nzb_article)
+
+                    # Replace our articles in the segment
+                    seg.articles = articles
+
+    def _get(self, id, tmp_dir, group=None):
+        """
         Download a specified message to the tmp_dir specified.
         This function returns an NNTPArticle() object if it can.
 
@@ -1723,7 +1772,7 @@ class NNTPConnection(SocketBase):
                     codec_active = next((d for d in decoders
                               if d.detect(data) is not None), None)
                     if codec_active:
-                        logger.debug('Decoding using %s' % codec_active)
+                        logger.debug('Decoding using %s' % type(codec_active))
 
                 # Based on previous check; we may actually have an active codec
                 # now if we don't have one yet; well want to store the content

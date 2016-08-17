@@ -365,6 +365,9 @@ class CodecYenc(CodecBase):
         """
 
         # Build a string using the data we know
+        if self.decoded:
+            return str(self.decoded)
+
         if 'begin' in self._meta:
             fname = self._meta.get('name', 'Unknown.File')
         else:

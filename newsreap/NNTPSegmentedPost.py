@@ -107,8 +107,14 @@ class NNTPSegmentedPost(object):
         elif not isinstance(self.groups, set):
             raise AttributeError("Invalid group set specified.")
 
-        # A sorted set of segments
-        self.segments = sortedset(key=lambda x: x.key())
+        # A sorted set of articles
+        self.articles = sortedset(key=lambda x: x.key())
+
+    def pop(self, index=0):
+        """
+        Pops an Article at the specified index out of the segment table
+        """
+        return self.articles.pop(index)
 
     def add(self, article):
         """
@@ -123,7 +129,7 @@ class NNTPSegmentedPost(object):
         # we just capture the length of our list before
         # and after so that we can properly return a True/False
         # value
-        _bcnt = len(self.segments)
+        _bcnt = len(self.articles)
 
         if not article.groups and self.groups:
             article.groups = set(self.groups)
@@ -134,21 +140,21 @@ class NNTPSegmentedPost(object):
         if not article.poster and self.poster:
             article.poster = self.poster
 
-        self.segments.add(article)
+        self.articles.add(article)
 
-        return len(self.segments) > _bcnt
+        return len(self.articles) > _bcnt
 
     def files(self):
         """
         Returns a list of the files within article
         """
-        return [ x.keys() for x in self.segments ]
+        return [ x.keys() for x in self.articles ]
 
     def size(self):
         """
         return the total size of our articles
         """
-        return sum(a.size() for a in self.segments)
+        return sum(a.size() for a in self.articles)
 
     def key(self):
         """
@@ -163,13 +169,13 @@ class NNTPSegmentedPost(object):
         """
 
         # Ensure our stream is open with read
-        return iter(self.segments)
+        return iter(self.articles)
 
     def __len__(self):
         """
-        Return the length of the segments
+        Return the length of the articles
         """
-        return len(self.segments)
+        return len(self.articles)
 
     def __lt__(self, other):
         """
@@ -194,7 +200,7 @@ class NNTPSegmentedPost(object):
         Return an unambigious version of the object
         """
 
-        return '<NNTPSegmentedPost filename="%s" segments=%d />' % (
+        return '<NNTPSegmentedPost filename="%s" articles=%d />' % (
             self.filename,
-            len(self.segments),
+            len(self.articles),
         )

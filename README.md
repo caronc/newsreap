@@ -125,6 +125,7 @@ The core of this tool wraps around it's framework it provides
 
 ```python
 from newsreap import NNTPConnection
+from newsreap import NNTPnzb
 
 # Create an NNTP Connection
 sock = NNTPConnection(
@@ -151,10 +152,9 @@ items = sock.xover()
 #        usenet servers require this option to be set; but it's
 #        there fore those that do:
 #
-result = sock.get('message-id', work_dir='/tmp', group='alt.binaries.test')
+result = sock.get('message-id', tmp_dir='/tmp', group='alt.binaries.test')
 
 # - Retrieve a series of articles if you have an nzbfile:
-from newsreap import NNTPnzb
 result = sock.get(
     NNTPnzb('/path/to/NZBfile', tmp_dir='/tmp'),
     work_dir='/tmp',

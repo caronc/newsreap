@@ -444,7 +444,7 @@ class SocketBase(object):
             except ssl.SSLError, e:
                 # Secure Connection Failed
                 self.close()
-                logger.error(
+                logger.debug(
                     "Failed to secure connection using %s / errno=%d" % (
                         SECURE_PROTOCOL_PRIORITY\
                             [self.secure_protocol_idx][1],
@@ -637,7 +637,7 @@ class SocketBase(object):
 
         except ssl.SSLError, e:
             # Secure Connection Failed
-            logger.error(
+            logger.debug(
                 "Failed to secure connection using %s / errno=%d" % (
                     SECURE_PROTOCOL_PRIORITY\
                         [self.secure_protocol_idx][1],
@@ -1086,7 +1086,9 @@ class SocketBase(object):
 
                             # certificate syntax; a simple flick and we make it
                             # a regex supported expression
-                            cert_host = cert_host.replace('*.', '.*\\.')
+                            cert_host = cert_host\
+                                    .replace('.', '\\.')\
+                                    .replace('*\\.', '.*\\.')
 
                             # If we get here, we've got a hostname to work with
                             host_match_re = re.compile(cert_host, re.IGNORECASE)
@@ -1101,13 +1103,24 @@ class SocketBase(object):
                                         cert_host,
                                 ))
 
+                        except socket.herror, e:
+                            if e[0] == 2:
+                                raise SocketRetryLimit(
+                                    "Certificate for '%s' could not be resolved." % (
+                                        self._remote_addr,
+                                ))
+
+                            # raise anything else
+                            raise
+
+
                         # TODO: Store fingerprint (if not stored already)
                         #       If already stored, then verify that it hasn't
                         #       changed.
 
                         except IndexError:
                             raise SocketRetryLimit(
-                                'Certificate common name not defined!',
+                                'Certificate hostname not defined!',
                             )
 
                 # We're done
