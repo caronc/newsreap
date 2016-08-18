@@ -59,6 +59,9 @@ class NNTPArticle_Test(TestBase):
         # Prepare Article
         article = NNTPArticle(id='random-id')
 
+        # There is no data so our article can't be valid
+        assert article.is_valid() is False
+
         # Load and Check
         assert article.load_response(response) is True
         assert article.header is None
@@ -67,6 +70,9 @@ class NNTPArticle_Test(TestBase):
         assert str(article) == 'random-id'
         assert unicode(article) == u'random-id'
         assert article.size() == 0
+
+        # Now there is data, but it's an empty Object so it can't be valid
+        assert article.is_valid() is False
 
         result = re.search(' Message-ID=\"(?P<id>[^\"]+)\"', repr(article))
         assert result is not None

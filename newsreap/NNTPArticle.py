@@ -142,6 +142,19 @@ class NNTPArticle(object):
 
         return True
 
+    def is_valid(self):
+        """
+        Iterates over article content an returns True if all of it is valid
+        based on it's crc32/md5 and/or whatever mechanism is used to determine
+        a NNTPContents validity
+        """
+        if len(self.decoded) == 0:
+            # No articles means no validity
+            return False
+
+        return next((False for c in self.decoded \
+                     if c.is_valid() is False), True)
+
     def files(self):
         """
         Returns a list of the files within article

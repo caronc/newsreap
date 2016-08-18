@@ -168,6 +168,9 @@ class NNTPContent_Test(TestBase):
 
         assert aa.load(temp_file) is True
 
+        # Loaded files area always valid
+        assert aa.is_valid() is True
+
         # Ascii Content read line by line
         lineno = 1
         for line in aa:
@@ -188,7 +191,6 @@ class NNTPContent_Test(TestBase):
         del aa
         # but now it doesn't
         assert isfile(temp_file) == False
-
 
     def test_binary_article_iterations(self):
         """
@@ -211,9 +213,15 @@ class NNTPContent_Test(TestBase):
         # Content
         ba = NNTPBinaryContent()
 
+        # No items means not valid
+        assert ba.is_valid() is False
+
         assert ba.load('unknown_file') is False
 
-        temp_file = join(self.tmp_dir,'NNTPContent_Test-test_iterations.tmp')
+        # a failed load means not valid
+        assert ba.is_valid() is False
+
+        temp_file = join(self.tmp_dir, 'NNTPContent_Test-test_iterations.tmp')
 
         with open(temp_file, 'wb') as fd:
             fd.write(bobj.getvalue())

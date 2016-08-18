@@ -143,8 +143,6 @@ class NNTPnzb(NNTPContent):
         #
         self.padding_multiplier = 2
 
-
-
     def save(self, nzbfile=None, pretty=True, dtd_type=XMLDTDType.Public):
         """
         Write an nzbfile to the file and path specified. If no path is
@@ -427,8 +425,7 @@ class NNTPnzb(NNTPContent):
 
                 self._lazy_is_valid = dtd.validate(nzb)
 
-        return (super(NNTPnzb, self).is_valid() and \
-                self._lazy_is_valid is True)
+        return self._lazy_is_valid is True
 
     def escape_xml(self, unescaped_xml, encoding=None):
         """

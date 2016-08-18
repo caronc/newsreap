@@ -54,10 +54,15 @@ class NNTPSegmentedPost_Test(TestBase):
         """
         # create an object
         segobj = NNTPSegmentedPost('mytestfile')
+        # Not valid because there are no entries
+        assert segobj.is_valid() is False
         article = NNTPArticle()
 
         assert segobj.add(article) is True
         assert len(segobj) == 1
+
+        # Not valid because the entry added is not loaded or retrieved
+        assert segobj.is_valid() is False
 
         # Duplicates are ignored (we can't add the same file twice)
         assert segobj.add(article) is False

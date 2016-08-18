@@ -1157,7 +1157,9 @@ class NNTPConnection(SocketBase):
 
                     else:
                         # Uh oh, we failed to get anything; so just add
-                        # our current article generated from the nzb file
+                        # our current article generated from the nzb file.
+                        # Mark the object invalid and re-add it
+                        nzb_article._is_valid = False
                         articles.add(nzb_article)
 
                     # Replace our articles in the segment

@@ -132,22 +132,23 @@ class NNTPContent(object):
         # contents out of cache and onto disk)
         self._dirty = False
 
+        # A flag that can be toggled if the data stored is
+        # corrupted in some way. Such as through CRC Failing
+        # or part construction (a part missing perhaps, etc)
+        # if all is good, then we just leave the flag as is
+        self._is_valid = False
+
         # The name is used to describe the file
         if not filename:
             self.filename = ''
 
         else:
             if isfile(filename):
-                self.load(filename)
+                if self.load(filename):
+                    self._is_valid = True
 
             # Store our file
             self.filename = basename(filename)
-
-        # A flag that can be toggled if the data stored is
-        # corrupted in some way. Such as through CRC Failing
-        # or part construction (a part missing perhaps, etc)
-        # if all is good, then we just leave the flag as is
-        self._is_valid = True
 
     def getvalue(self):
         """
@@ -312,12 +313,15 @@ class NNTPContent(object):
         the file afterwards, then make sure to set detached to False.
         """
 
-        if not isfile(filepath):
-            return False
+        # Reset Flag
+        self._is_valid = False
 
         if self.stream is not None:
             # Close any existing open file
             self.close()
+
+        if not isfile(filepath):
+            return False
 
         if not self._detached and self.filepath:
             # We're changing so it's better we unlink this (but only
@@ -333,6 +337,9 @@ class NNTPContent(object):
 
         # Assign new file
         self.filepath = filepath
+
+        # Set Flag
+        self._is_valid = True
 
         return True
 
@@ -382,7 +389,6 @@ class NNTPContent(object):
         elif isfile(filepath):
             # It's a file; just make sure we're dealing with a full pathname
             filepath = abspath(expanduser(filepath))
-
 
         if isfile(filepath):
             if not append:

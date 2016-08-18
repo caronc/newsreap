@@ -144,6 +144,47 @@ class NNTPSegmentedPost(object):
 
         return len(self.articles) > _bcnt
 
+    def is_valid(self):
+        """
+        Iterates over article content an returns True if all of it is valid
+        based on it's crc32/md5 and/or whatever mechanism is used to determine
+        a NNTPContents validity
+        """
+        if len(self.articles) == 0:
+            # No articles means no validity
+            return False
+
+        return next((False for c in self.articles \
+                     if c.is_valid() is False), True)
+
+    def split(self, size=81920):
+        """
+        If there is one Article() and one (valid) NNTPContent() object within
+        it, this object will split the Article() into several and break apart
+        the contents of the file into several pieces.
+
+        This function returns True if this action was successful, otherwise
+        this function returns False.  Newly split content is 'not' in a detached
+        form meaning content is removed if the object goes out of scope
+        """
+
+        #TODO
+        return False
+
+    def join(self):
+        """
+        If there are more then one Article() objects containing one valid()
+        NNTPContent() object, they can be joined together into one single
+        Article() object.
+
+        This function returns True if this action was successful, otherwise
+        this function returns False.  Newly joined content is 'not' in a detached
+        form meaning content is removed if the object goes out of scope
+        """
+
+        # TODO
+        return False
+
     def files(self):
         """
         Returns a list of the files within article
