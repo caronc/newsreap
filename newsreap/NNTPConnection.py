@@ -2,7 +2,7 @@
 #
 # Simplifies communication to and from an NNTP Server
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -492,7 +492,7 @@ class NNTPConnection(SocketBase):
 
         # STUB: TODO
         # payload should be a class that takes all the required
-        # items nessisary to post. It should also take a ByteIO
+        # items nessisary to post. It should also take a BytesIO
         # stream it can use to to upload with.  Or a filename
         # and the class will take care of opening it, streaming it's
         # contents and closing it afterwards.

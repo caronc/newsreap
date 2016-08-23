@@ -167,9 +167,10 @@ class NNTPYencArticle_Test(TestBase):
 
         # Save our file to disk
         new_filepath = join(self.tmp_dir, 'copied.txt')
-        filepath = iter(article.decoded).next().save(new_filepath, copy=True)
-        assert isfile(filepath) is True
-        assert iter(article.decoded).next().filepath != filepath
+        assert iter(article.decoded).next().save(new_filepath, copy=True) \
+                is True
+        assert isfile(new_filepath) is True
+        assert iter(article.decoded).next().filepath != new_filepath
 
         try:
             # Makes sure the file doesn't already exist
@@ -178,10 +179,9 @@ class NNTPYencArticle_Test(TestBase):
             pass
 
         old_filepath = iter(article.decoded).next().filepath
-        filepath = iter(article.decoded).next().save(new_filepath)
-        assert filepath != old_filepath
+        assert iter(article.decoded).next().save(new_filepath) is True
         assert isfile(old_filepath) is False
-        assert iter(article.decoded).next().filepath == filepath
+        assert isfile(new_filepath) is True
         assert iter(article.decoded).next().filepath == new_filepath
 
         # cleanup our file
@@ -237,7 +237,7 @@ class NNTPYencArticle_Test(TestBase):
 
             # TODO: update the article function so it's much easier to get
             # an iterator to decoded list
-            filename=iter(iter(articles).next().decoded).next().filename,
+            filepath=iter(iter(articles).next().decoded).next().filename,
             tmp_dir=self.tmp_dir,
         )
 

@@ -2,7 +2,7 @@
 #
 # A NNTP Binary File Representation
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -20,7 +20,8 @@ class NNTPBinaryContent(NNTPContent):
     """
     A Binary file representation
     """
-    def __init__(self, filename=None, part=1, tmp_dir=None, *args, **kwargs):
+    def __init__(self, filepath=None, part=None,
+                 tmp_dir=None, *args, **kwargs):
         super(NNTPBinaryContent, self).__init__(
-            filename=filename,
+            filepath=filepath,
             part=part, tmp_dir=tmp_dir, sort_no=10000, *args, **kwargs)

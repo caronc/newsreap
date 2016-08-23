@@ -2,7 +2,7 @@
 #
 # A Codec for handling UU encoded messages
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -165,7 +165,7 @@ class CodecUU(CodecBase):
 
                     # Create our binary instance
                     self.decoded = NNTPBinaryContent(
-                        filename=_meta['name'],
+                        filepath=_meta['name'],
                         tmp_dir=self.tmp_dir,
                     )
 

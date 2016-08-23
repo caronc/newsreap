@@ -45,7 +45,7 @@ class CodecAscii(CodecBase):
         # Our Ascii Object we can reference while we store our
         # text content
         self.decoded = NNTPAsciiContent(
-            filename='.message',
+            filepath='.message',
             tmp_dir=self.tmp_dir,
         )
 
@@ -105,7 +105,7 @@ class CodecAscii(CodecBase):
 
         # Reset our decoded content
         self.decoded = NNTPAsciiContent(
-            filename='.message',
+            filepath='.message',
             tmp_dir=self.tmp_dir,
         )
 

@@ -16,6 +16,8 @@
 # GNU Lesser General Public License for more details.
 
 from blist import sortedset
+from datetime import datetime
+from copy import deepcopy
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
@@ -62,8 +64,8 @@ class NNTPArticle(object):
         # The Poster
         self.poster = poster
 
-        # TODO: Rename id to article_id (readability and id is a
-        # reserved keyword)
+        # TODO: Rename id to article_id (readability and id is a reserved
+        # keyword)
         # The Article Message-ID
         self.id = kwargs.get(u'id', '')
 
@@ -74,24 +76,9 @@ class NNTPArticle(object):
         except:
             self.no = int(kwargs.get(u'no', 1000))
 
-        ## The size (used with segments)
-        #self._size = kwargs.get(u'size', 0)
-        #if not isinstance(self._size, int):
-        #    try:
-        #        self._size = int(self._size)
-
-        #    except (TypeError, ValueError):
-        #        self._size = 0
-
-        #if self._size < 0:
-        #    # Since we do calculations based on this size
-        #    # there is no reason we should set this value to
-        #    # anything less then zero.
-        #    self._size = 0
-
-        # Track the groups this article resides in
+        # Track the groups this article resides in.
         # This is populated for meta information when an article is
-        # retrieved; but its contents are used when posting an article
+        # retrieved; but its contents are also used when posting an article.
         self.groups = groups
         if not self.groups:
             self.groups = set()
@@ -104,8 +91,6 @@ class NNTPArticle(object):
 
         elif not isinstance(self.groups, set):
             raise AttributeError("Invalid group set specified.")
-
-            # else: we simpy don't support it
 
         # A hash of header entries
         self.header = NNTPHeader()
@@ -142,6 +127,65 @@ class NNTPArticle(object):
 
         return True
 
+    def split(self, size=81920, mem_buf=1048576):
+        """
+        Split returns a set of NNTPArticle() objects containing the split
+        version of the data it already represents.
+
+        Even if the object can't be split any further given the parameters, a
+        set of at least 1 entry will always be returned.  None is returned if
+        an error occurs. None is also returned if split() is called while there
+        is more then one NNTPContent objects since it makes the situation
+        Ambiguous.
+        """
+        if len(self) > 1:
+            # Ambiguous
+            return None
+
+        if len(self) == 0:
+            # Nothing to split
+            return None
+
+        content = next((False for c in self.decoded \
+                     if isinstance(c, NNTPContent)), None)
+
+        if not content:
+            # Well this isn't good
+            return None
+
+        # Split our content
+        new_content = content.split(size=size, mem_buf=mem_buf)
+
+        if new_content is None:
+            # something bad happened
+            return None
+
+        # If we get here, we have content to work with.  We need to generate
+        # a list of articles based on our existing one.
+        articles = sortedset()
+        for no, c in enumerate(new_content):
+            a = NNTPArticle(
+                # TODO: Apply Subject Template here which the user can set when
+                # initializing htis function
+                subject=self.subject,
+                poster=self.poster,
+                groups=self.groups,
+                # Increment our index #
+                no=self.no+no,
+            )
+
+            # Set our header to be a copy of what we already have
+            a.header = deepcopy(self.header)
+
+            # Store our NNTPContent() object
+            a.add(c)
+
+            # Store our Article
+            articles.add(a)
+
+        # Return our articles
+        return articles
+
     def is_valid(self):
         """
         Iterates over article content an returns True if all of it is valid
@@ -176,6 +220,16 @@ class NNTPArticle(object):
         for a in self.decoded:
             if isinstance(a, NNTPBinaryContent):
                 a.detach()
+        return
+
+    def attach(self):
+        """
+        Detach the article stored on disk from being further managed by this
+        class
+        """
+        for a in self.decoded:
+            if isinstance(a, NNTPBinaryContent):
+                a.attach()
         return
 
     def add(self, content):
@@ -219,6 +273,19 @@ class NNTPArticle(object):
         Handles less than for storing in btrees
         """
         return self.key() < other.key()
+
+    def __eq__(self, other):
+        """
+        Handles equality
+
+        """
+        return self.__dict__ == other.__dict__
+
+    def __getitem__(self, index):
+        """
+        Support accessing NNTPContent objects by index
+        """
+        return self.decoded[index]
 
     def __str__(self):
         """

@@ -2,7 +2,7 @@
 #
 # A container for controlling content found within an article
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -14,15 +14,21 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import errno
+import hashlib
+
 from os import unlink
 from os import fdopen
 from os.path import join
 from os.path import getsize
 from os.path import basename
+from os.path import dirname
 from os.path import abspath
 from os.path import expanduser
 from os.path import isdir
 from os.path import isfile
+from io import BytesIO
+from blist import sortedset
 from tempfile import mkstemp
 from shutil import move as _move
 from shutil import copy as _copy
@@ -31,6 +37,8 @@ from shutil import Error as ShutilError
 from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
 from newsreap.Utils import mkdir
 from newsreap.Utils import bytes_to_strsize
+from newsreap.Utils import strsize_to_bytes
+
 from newsreap.Utils import SEEK_SET
 from newsreap.Utils import SEEK_END
 from newsreap.NNTPSettings import DEFAULT_BLOCK_SIZE as BLOCK_SIZE
@@ -48,6 +56,7 @@ class NNTPFileMode(object):
     """
     BINARY_RO = 'rb'
     BINARY_WO = 'wb'
+    BINARY_WO_TRUNCATE = 'wb'
     BINARY_RW = 'r+b'
     BINARY_RW_TRUNCATE = 'w+b'
     ASCII_R = 'r'
@@ -74,14 +83,20 @@ class NNTPContent(object):
 
     """
 
-    def __init__(self, filename=None, part=1, tmp_dir=None,
-                 sort_no=10000, *args, **kwargs):
+    def __init__(self, filepath=None, part=None, tmp_dir=None,
+                 sort_no=10000, unique=False, *args, **kwargs):
         """
         Initialize NNTP Content
 
         If a filepath is specified, it can be either a stream (already opened
         file or ByteIO or StringIO class is fine too), or it can be a path to
         a filename which will be open in 'wb' mode.
+
+        if unique is set to True, then if the file passed in already exists,
+        a temporary file is used instead. But the filename info isn't lost.
+
+        Set the unique to True when you don't want to accidently over-write
+        or alter a file you may already be working with.
         """
 
         # The sort is used with sorting; different filetypes/content types
@@ -97,11 +112,13 @@ class NNTPContent(object):
         self.sort_no = sort_no
 
         # Store part
-        try:
-            self.part = int(part)
+        self.part = part
+        if self.part is not None:
+            try:
+                self.part = int(part)
 
-        except (ValueError, TypeError):
-            self.part = 1
+            except (ValueError, TypeError):
+                self.part = None
 
         # The filepath is automatically set up when the temporary file is
         # created
@@ -138,17 +155,22 @@ class NNTPContent(object):
         # if all is good, then we just leave the flag as is
         self._is_valid = False
 
-        # The name is used to describe the file
-        if not filename:
+        # Set blocksize as a variable for those who want to tweak it
+        # later on.  This controls the maximum amount of content read
+        # from a file in one chunk (thus how much memory will be occupied
+        # when called).  Setting this too high will utilize a lot of
+        # memory if concurrent calls are made but will be faster if your
+        # system can handle it.
+        self._block_size = BLOCK_SIZE
+
+        if not filepath:
             self.filename = ''
 
         else:
-            if isfile(filename):
-                if self.load(filename):
-                    self._is_valid = True
+            self.filename = basename(filepath)
 
-            # Store our file
-            self.filename = basename(filename)
+            if not unique and isfile(filepath):
+                self.load(filepath)
 
     def getvalue(self):
         """
@@ -253,6 +275,7 @@ class NNTPContent(object):
             # Create our stream
             try:
                 self.stream = open(filepath, mode)
+
                 self.filepath = filepath
                 if self._detached is None:
                     self._detached = True
@@ -303,25 +326,32 @@ class NNTPContent(object):
 
         return True
 
-    def load(self, filepath, detached=True):
+    def load(self, filepath):
         """
         This causes the function to point to the file specified and acts in a
         detached manner to it.
 
-        By identifing the detached flag, to true we don't try to remove the
-        file when this object is destroyed.  If you want this script to handle
-        the file afterwards, then make sure to set detached to False.
+        Loaded files are 'always' detached; if the file already existed in the
+        filesystem it would be silly to tie it to the scope of this object.
+
+        If the filepath identifie is an NNTPContent() object, then it is copied
+        into an 'attached' NNTPContent() object.
+
+        If the filepath identified is a set, sortedset or list of
+        NNTPContent() objects, a new single 'attached' file will be generated
+        based on the contains passed in.  NNTPContent() objects are
+        automatically combined/merged based on their ordering by automating
+        the use of the .append() function of this class for the caller.
+
         """
 
-        # Reset Flag
-        self._is_valid = False
-
         if self.stream is not None:
+            if self.filemode == NNTPFileMode.BINARY_WO_TRUNCATE:
+                # Truncate remaining portions of the file
+                self.truncate()
+
             # Close any existing open file
             self.close()
-
-        if not isfile(filepath):
-            return False
 
         if not self._detached and self.filepath:
             # We're changing so it's better we unlink this (but only
@@ -332,8 +362,46 @@ class NNTPContent(object):
             except:
                 pass
 
-        # Set Detached flag
-        self._detached = detached
+        # Set Detached since we don't want to obstruct our newly loaded
+        # file in any way
+        self._detached = True
+
+        # Reset Valid Flag
+        self._is_valid = False
+
+        if isinstance(filepath, NNTPContent):
+            # Support NNTPContent object copying; by simply storing
+            # the object in a list, we are able to catch it in the
+            # next check
+            self.part = filepath.part
+            filepath = [filepath]
+
+
+        if isinstance(filepath, (set, sortedset, list)):
+            # Perform merge if we detected a set of NNTPContent objects
+            count = 0
+            for content in filepath:
+                if isinstance(content, NNTPContent):
+                    self.append(content)
+                    count += 1
+
+            if count == 0 or len(filepath) != count:
+                # Return True if we iterated over everything
+                return False
+
+            # update our filepath to be that of the file that was actually
+            # created
+            filepath = self.filepath
+
+            # Our file is not detached in this state
+            self._detached = False
+
+        elif not isfile(filepath):
+            # we can't load the file so reset some common variables
+            self.filepath = None
+            self.filename = ''
+
+            return False
 
         # Assign new file
         self.filepath = filepath
@@ -341,9 +409,12 @@ class NNTPContent(object):
         # Set Flag
         self._is_valid = True
 
+        # Store our filename
+        self.filename = basename(filepath)
+
         return True
 
-    def save(self, filepath=None, copy=False, append=False):
+    def save(self, filepath=None, copy=False):
         """
         This function writes the content to disk using the filename
         specified.
@@ -356,12 +427,10 @@ class NNTPContent(object):
         If no filepath is specified, then the detected filename and
         tmp_dir specified during the objects initialization is used instead.
 
-        The function returns the filepath the content was successfully
-        written (saved) to, otherwise None is returned.
-
-        If append is set to True, the content is appended to the file
-        (if one already exists)
-
+        The function returns True if it successfully saved the file and
+        False otherwise. If you never passed in a filepath, then the path
+        that was last loaded is saved to instead and the file is automatically
+        detached from the Object.
         """
         if filepath is None:
             if not isdir(self.tmp_dir):
@@ -391,7 +460,7 @@ class NNTPContent(object):
             filepath = abspath(expanduser(filepath))
 
         if isfile(filepath):
-            if not append:
+            if self.filepath != filepath:
                 try:
                     unlink(filepath)
                     logger.warning('%s already existed (removed).' % (
@@ -402,22 +471,13 @@ class NNTPContent(object):
                         '%s already existed (and could not be removed).' % (
                         filepath,
                     ))
-                    return None
-            else:
-                # we're not moving or copying, we're appending
-                with open(filepath, NNTPFileMode.BINARY_RW) as target:
-                    self.stream.seek(0L, SEEK_END)
-                    logger.debug('Appending %s to %s.' % (
-                        self,
-                        filepath,
-                    ))
-                    for chunk in self:
-                        # TODO: Handle out of disk space here
-                        target.write(chunk)
-
-                return filepath
+                    return False
 
         # else: treat it as full path and filename included
+        if not isdir(dirname(filepath)):
+            # Attempt to pre-create save path
+            if not mkdir(dirname(filepath)):
+                return False
 
         if self.stream:
             # close the file if it's open
@@ -432,25 +492,171 @@ class NNTPContent(object):
             action = _move
             action_str = "move"
 
-        try:
-            action(self.filepath, filepath)
-            if not copy:
-                # Detach File
-                self._detached = True
-                # Update filepath
-                self.filepath = filepath
+        if self.filepath != filepath:
+            try:
+                action(self.filepath, filepath)
 
-            logger.debug('%s(%s, %s)' % (
-                action_str, self.filepath, filepath,
-            ))
+                logger.debug('%s(%s, %s)' % (
+                    action_str, self.filepath, filepath,
+                ))
 
-            return filepath
+            except ShutilError, e:
+                logger.debug('%s(%s, %s) exception %s' % (
+                    action_str, self.filepath, filepath, str(e),
+                ))
+                return False
 
-        except ShutilError, e:
-            logger.debug('%s(%s, %s) exception %s' % (
-                action_str, self.filepath, filepath, str(e),
-            ))
+        if not copy:
+            # If we reach here, we want to treat moves() as an official
+            # way of saving/writing the file to it's final destination
+            # and therefore we can update our object
 
+            # Detach File
+            self._detached = True
+            # Update filepath
+            self.filepath = filepath
+            # Update filename
+            self.filename = basename(filepath)
+
+        return True
+
+    def path(self):
+        """
+        Always returns a filepath of the file, if one hasn't been created yet
+        then one is automatically generated and returned.
+        """
+        if not self.filepath:
+            # Create a Temporary File
+            _, self.filepath = mkstemp(dir=self.tmp_dir)
+
+        return self.filepath
+
+    def split(self,  size=81920, mem_buf=1048576):
+        """Returns a set of NNTPContent() objects containing the split version
+        of this object based on the criteria specified.
+
+        Even if the object can't be split any further given the parameters, a
+        set of at least 1 entry will always be returned.  None is returned if
+        an error occurs.
+
+        """
+        # File Length
+        file_size = len(self)
+        if file_size == 0:
+            # Object can not be split
+            return None
+
+        if not isinstance(size, int):
+            # try to support other types
+            size = strsize_to_bytes(size)
+
+        if not size or size < 0:
+            return None
+
+        if not isinstance(mem_buf, int):
+            # try to support other types
+            mem_buf = strsize_to_bytes(mem_buf)
+
+        if not mem_buf or mem_buf < 0:
+            return None
+
+        # Initialize Part #
+        part = 1
+
+        # A lists of NNTPContent() objects to return
+        objs = set()
+
+        if not self.open(mode=NNTPFileMode.BINARY_RO):
+            return None
+
+        # Create our first object
+        obj = NNTPContent(
+            filepath=self.filename,
+            part=part,
+            tmp_dir=self.tmp_dir,
+            sort_no=self.sort_no,
+        )
+
+        # Open the new file
+        obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
+
+        # File length of our first object
+        f_length = 0
+
+        # Total Bytes Read
+        total_bytes = 0
+
+        # Now read our chunks as per our memory restrictions
+        while True:
+
+            if total_bytes == 0:
+                # Read memory chunk
+                data = BytesIO(self.stream.read(mem_buf-total_bytes))
+
+                # Retrieve length of our buffer
+                total_bytes = data.seek(0L, SEEK_END)
+
+                # Reset our pointer to the head of our data stream
+                data.seek(0L, SEEK_SET)
+
+                if total_bytes == 0:
+                    if f_length > 0:
+                        # Store our last object before we wrap up
+                        obj.close()
+                        objs.add(obj)
+                    # Return our list of NNTPContent() objects
+                    return objs
+
+            while total_bytes > 0 and size-f_length > 0:
+                # Store content up to our alotted amount
+                block_size = size-f_length
+                if total_bytes < block_size:
+                    block_size = total_bytes
+
+                try:
+                    obj.write(data.read(block_size))
+
+                except IOError, e:
+                    if e[0] is errno.ENOSPC:
+                        # most probably a disk space issue
+                        logger.error(
+                            'Ran out of disk space while writing %s.' % \
+                            (obj.filepath),
+                        )
+                    else:
+                        # most probably a disk space issue
+                        logger.error(
+                            'An I/O error (%d) occured while writing %s to disk.' % \
+                            (e[0], obj.filepath),
+                        )
+                    return None
+
+                f_length += block_size
+                total_bytes -= block_size
+
+            if f_length == size:
+                # We're done
+                obj.close()
+                objs.add(obj)
+
+                # Increment our part
+                part += 1
+
+                # Create our first object
+                obj = NNTPContent(
+                    filepath=self.filename,
+                    part=part,
+                    tmp_dir=self.tmp_dir,
+                    sort_no=self.sort_no,
+                )
+
+                # Open the new file
+                obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
+
+                # File length of our first object
+                f_length = 0
+
+        # code will never reach here
         return None
 
     def write(self, data, eof=True):
@@ -528,7 +734,7 @@ class NNTPContent(object):
                 logger.debug('Appending content %s' % entry)
 
                 while True:
-                    buf = entry.stream.read(BLOCK_SIZE)
+                    buf = entry.stream.read(self._block_size)
                     if not buf:
                         # Set dirty flag
                         self._dirty = True
@@ -539,14 +745,27 @@ class NNTPContent(object):
 
         return True
 
-    def detach(self, close=True):
+    def is_attached(self):
+        """
+        Simply returns whether or not the file is attached to the object or
+        not.  Files that are attached are destroyed when the object goes
+        out of scope.
+
+        """
+        return not self._detached
+
+    def detach(self):
         """
         Detach the article stored on disk from being further managed by this class
         """
-        if close:
-            self.close()
-
         self._detached = True
+        return
+
+    def attach(self):
+        """
+        Attach the file and it's data directly to this objects life expectancy
+        """
+        self._detached = False
         return
 
     def remove(self):
@@ -563,25 +782,64 @@ class NNTPContent(object):
             except:
                 pass
 
-    def path(self):
-        """
-        Return the full path
-        """
-        return self.filepath
-
     def key(self):
         """
         Returns a key that can be used for sorting with:
             lambda x : x.key()
         """
-        return '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
+        if self.part is not None:
+            return '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
+        else:
+            return '%.5d/%s/' % (self.sort_no, self.filename)
+
+    def md5(self):
+        """
+        Simply return the md5 hash value associated with the content file.
+
+        If the file can't be accessed, then None is returned.
+        """
+        md5 = hashlib.md5()
+        if self.open(mode=NNTPFileMode.BINARY_RO):
+            for chunk in iter(
+                lambda: self.stream.read(128*md5.block_size), b''):
+                md5.update(chunk)
+            return md5.digest()
+        return None
+
+    def sha1(self):
+        """
+        Simply return the sha1 hash value associated with the content file.
+
+        If the file can't be accessed, then None is returned.
+        """
+        sha1 = hashlib.sha1()
+        if self.open(mode=NNTPFileMode.BINARY_RO):
+            for chunk in iter(
+                lambda: self.stream.read(128*sha1.block_size), b''):
+                sha1.update(chunk)
+            return sha1.digest()
+        return None
+
+    def sha256(self):
+        """
+        Simply return the sha256 hash value associated with the content file.
+
+        If the file can't be accessed, then None is returned.
+        """
+        sha256 = hashlib.sha256()
+        if self.open(mode=NNTPFileMode.BINARY_RO):
+            for chunk in iter(
+                lambda: self.stream.read(128*sha256.block_size), b''):
+                sha256.update(chunk)
+            return sha256.digest()
+        return None
 
     def next(self):
         """
         Python 2 support
         Support stream type functions and iterations
         """
-        data = self.stream.read(BLOCK_SIZE)
+        data = self.stream.read(self._block_size)
         if not data:
             self.close()
             raise StopIteration()
@@ -593,7 +851,7 @@ class NNTPContent(object):
         Python 3 support
         Support stream type functions and iterations
         """
-        data = self.stream.read(BLOCK_SIZE)
+        data = self.stream.read(self._block_size)
         if not data:
             self.close()
             raise StopIteration()
@@ -611,7 +869,7 @@ class NNTPContent(object):
 
     def __len__(self):
         """
-        Returns the length of the article
+        Returns the length of the content
         """
         if not self.filepath:
             # If there is no filepath, then we're probably dealing with a
@@ -629,8 +887,9 @@ class NNTPContent(object):
                 # yet at all so just return 0
                 length = 0
         else:
-            if self.stream and self._dirty:
+            if self.stream and self._dirty is True:
                 self.stream.flush()
+                self._dirty = False
 
             # Get the size
             length = getsize(self.filepath)
@@ -669,17 +928,25 @@ class NNTPContent(object):
         """
         Return a printable version of the file being read
         """
-        if self.part > 0:
+        if self.part is not None:
             return '%s.%.5d' % (self.filename, self.part)
+
         return self.filename
 
     def __repr__(self):
         """
         Return a printable version of the file being read
         """
-        return '<NNTPContent sort=%d filename="%s" part=%d len=%s />' % (
-            self.sort_no,
-            self.filename,
-            self.part,
-            bytes_to_strsize(len(self)),
-        )
+        if self.part is not None:
+            return '<NNTPContent sort=%d filename="%s" part=%d len=%s />' % (
+                self.sort_no,
+                self.filename,
+                self.part,
+                bytes_to_strsize(len(self)),
+            )
+        else:
+            return '<NNTPContent sort=%d filename="%s" len=%s />' % (
+                self.sort_no,
+                self.filename,
+                bytes_to_strsize(len(self)),
+            )

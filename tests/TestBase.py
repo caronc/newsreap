@@ -27,6 +27,7 @@ import unittest
 import yaml
 
 from os import kill
+from os import urandom
 from os.path import join
 from os.path import exists
 from os.path import isdir
@@ -132,26 +133,36 @@ class TestBase(unittest.TestCase):
 
         return True
 
-    def touch(self, path, size=None, time=None):
+    def touch(self, path, size=None, random=False, time=None):
         """Simplify the dynamic creation of files or the updating of their
         modified time.  If a size is specified, then a file of that size
         will be created on the disk. If the file already exists, then the
         size= attribute is ignored (for safey reasons).
 
+        if random is set to true, then the file created is actually
+        created using tons of randomly generated content.  This is MUCH
+        slower but nessisary for certain tests.
+
         """
 
-        if not isdir(dirname(abspath(path))):
-            mkdir(dirname(abspath(path)), 0700)
+        path = abspath(path)
+        if not isdir(dirname(path)):
+            mkdir(dirname(path), 0700)
 
         if not exists(path):
-            f = open(path, "wb")
-
             size = strsize_to_bytes(size)
-            if isinstance(size, int) and size > 0:
-                f.seek(size-1)
-                f.write("\0")
 
-            f.close()
+            if not random:
+                f = open(path, "wb")
+                if isinstance(size, int) and size > 0:
+                    f.seek(size-1)
+                    f.write("\0")
+                f.close()
+
+            else: # fill our file with randomly generaed content
+                with open(path, 'wb') as f:
+                    # Fill our file with garbage
+                    f.write(urandom(size))
 
         # Update our path
         utime(path, time)

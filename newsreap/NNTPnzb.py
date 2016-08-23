@@ -22,6 +22,7 @@ from os.path import basename
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPContent import NNTPFileMode
 from newsreap.NNTPArticle import NNTPArticle
+from newsreap.NNTPEmptyContent import NNTPEmptyContent
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 from HTMLParser import HTMLParser
 from xml.sax.saxutils import escape as sax_escape
@@ -106,7 +107,6 @@ class NNTPnzb(NNTPContent):
         self.encoding = encoding
 
         # Track segmented files when added
-        # TODO: add method for adding to segmented files list
         self.segments = sortedset(key=lambda x: x.key())
 
         # Initialize our parent
@@ -266,11 +266,17 @@ class NNTPnzb(NNTPContent):
                     if pretty:
                         indent = ''.ljust(self.padding_multiplier*3, self.padding)
 
-                    for segment in content:
+                    for part, segment in enumerate(content):
+                        # use enumerated content and not the part assigned.
+                        # this is by design because it gives developers the
+                        # ability to add/remove items from the segments and
+                        # only use the part numbers for their own personal
+                        # ordering.
+
                         self.write('%s<segment bytes="%d" number="%d">%s</segment>%s' % (
                             indent,
                             len(segment),
-                            segment.part,
+                            part+1,
                             self.escape_xml(content.id),
                             eol,
                         ))
@@ -337,6 +343,7 @@ class NNTPnzb(NNTPContent):
 
                 self.xml_root.clear()
                 self.xml_root = None
+                self.xml_itr_count = 0
                 self.xml_iter = None
 
             except IndexError:
@@ -366,6 +373,7 @@ class NNTPnzb(NNTPContent):
             except IOError:
                 logger.warning('NZB-File is missing: %s' % self.filepath)
                 self.xml_root = None
+                self.xml_itr_count = 0
                 # Mark situation
                 self._lazy_is_valid = False
 
@@ -395,6 +403,31 @@ class NNTPnzb(NNTPContent):
                     'Cannot calculate GID from NZB-File: %s' % self.filepath)
 
         return self._lazy_gid
+
+    def load(self, filepath=None, detached=True):
+        """
+        Loads segments into memory (this object)
+        """
+
+        # Reset all entries
+        self.segments = sortedset(key=lambda x: x.key())
+        if filepath is not None:
+            # Reset our variables
+            self._lazy_is_valid = False
+            self._lazy_file_count = None
+            self._lazy_is_valid = None
+            self._lazy_gid = None
+            self.close()
+
+            if not super(NNTPnzb, self)\
+               .load(filepath=filepath, detached=detached):
+                return False
+
+        for sp in self:
+            # Load our segmented post entries into memory
+            self.add(sp)
+
+        return True
 
     def is_valid(self):
         """
@@ -440,12 +473,12 @@ class NNTPnzb(NNTPContent):
 
         return sax_escape(unescaped_xml, {"'": "&apos;", "\"": "&quot;"})
 
-    def add(self, object):
+    def add(self, obj):
         """
         Adds an NNTPSegmentedPost to an nzb object
         """
 
-        if not isinstance(object, NNTPSegmentedPost):
+        if not isinstance(obj, NNTPSegmentedPost):
             return False
 
         # duplicates are ignored in a blist and therefore
@@ -453,10 +486,11 @@ class NNTPnzb(NNTPContent):
         # and after so that we can properly return a True/False
         # value
         _bcnt = len(self.segments)
-        self.segments.add(object)
+        self.segments.add(obj)
 
-        return len(self.segments) > _bcnt
+        self._lazy_file_count = len(self.segments)
 
+        return self._lazy_file_count > _bcnt
 
     def unescape_xml(self, escaped_xml, encoding=None):
         """
@@ -491,10 +525,12 @@ class NNTPnzb(NNTPContent):
         except StopIteration:
             # let this pass through
             self.xml_root = None
+            self.xml_itr_count = 0
 
         except IOError:
             logger.warning('NZB-File is missing: %s' % self.filepath)
             self.xml_root = None
+            self.xml_itr_count = 0
             # Mark situation
             self._lazy_is_valid = False
 
@@ -515,6 +551,7 @@ class NNTPnzb(NNTPContent):
             #       /19f0a477c935b402c93395f8c0cb561646f4bdc3
             # So we can relax and return ok results here
             self.xml_root = None
+            self.xml_itr_count = 0
 
         except Exception as e:
             logger.error("NZB-File '%s' is corrupt" % self.filepath)
@@ -525,6 +562,7 @@ class NNTPnzb(NNTPContent):
         if self.xml_root is None or len(self.xml_root) == 0:
             self.xml_iter = None
             self.xml_root = None
+            self.xml_itr_count = 0
             raise StopIteration()
 
         if self.meta is None:
@@ -545,11 +583,11 @@ class NNTPnzb(NNTPContent):
                 namespaces=NZB_LXML_NAMESPACES,
         )]
 
+        _filename = self.meta.get('name', 'unknown').decode(self.encoding)
+
         # Initialize a NNTPSegmented File Object using the data we read
         _file = NNTPSegmentedPost(
-            u'%s.%.3d' % (
-                self.meta.get('name', u'unknown'), self.xml_itr_count,
-            ),
+            u'%s.%.3d' % (_filename, self.xml_itr_count),
             poster=self.unescape_xml(
                 self.xml_root.attrib.get('poster', '')).decode(self.encoding),
             epoch=self.xml_root.attrib.get('date', '0'),
@@ -568,6 +606,8 @@ class NNTPnzb(NNTPContent):
             _cur_index = int(segment.attrib.get('number', _last_index+1))
             try:
                 _size = int(segment.attrib.get('bytes'))
+                if _size < 0:
+                    _size = 0
 
             except (TypeError, ValueError):
                 _size = 0
@@ -577,7 +617,15 @@ class NNTPnzb(NNTPContent):
                 poster=_file.poster,
                 id=self.unescape_xml(segment.text),
                 no=_cur_index,
-                size=_size,
+            )
+
+            # Store our empty content Placeholder
+            article.add(
+                NNTPEmptyContent(
+                    filepath=_filename,
+                    part=self.xml_itr_count,
+                    size=_size,
+                )
             )
 
             # Add article
@@ -653,6 +701,12 @@ class NNTPnzb(NNTPContent):
         """
         self._lazy_file_count = sum(1 for c in self)
         return self._lazy_file_count
+
+    def __getitem__(self, index):
+        """
+        Support accessing NNTPSegmentedPost objects by index
+        """
+        return self.segments[index]
 
     def __repr__(self):
         """

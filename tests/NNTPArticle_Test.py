@@ -104,6 +104,10 @@ class NNTPArticle_Test(TestBase):
         assert isinstance(article.header, NNTPHeader)
         assert len(article.decoded) == 1
 
+        for no, decoded in enumerate(article.decoded):
+            # Test equality
+            assert article[no] == decoded
+
     def test_group(self):
         """
         Tests the group variations

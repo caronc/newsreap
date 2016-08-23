@@ -350,11 +350,11 @@ class CodecYENC_Test(TestBase):
         articles_c.sort()
 
         article_py = NNTPBinaryContent(
-            filename=articles_py[0].filename,
+            filepath=articles_py[0].filename,
             save_dir=self.out_dir,
         )
         article_c = NNTPBinaryContent(
-            filename=articles_c[0].filename,
+            filepath=articles_c[0].filename,
             save_dir=self.out_dir,
         )
 

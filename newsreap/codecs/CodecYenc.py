@@ -251,7 +251,7 @@ class CodecYenc(CodecBase):
 
                     # Create our binary instance
                     self.decoded = NNTPBinaryContent(
-                        filename=_meta['name'],
+                        filepath=_meta['name'],
                         part=self._part_no,
                         tmp_dir=self.tmp_dir,
                     )

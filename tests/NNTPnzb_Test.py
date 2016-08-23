@@ -63,6 +63,13 @@ class NNTPnzb_Test(TestBase):
         for article in nzbobj:
             assert isinstance(article, NNTPSegmentedPost)
 
+        # However until content is loaded into memory we can't use the indexes
+        try:
+            _ = nzbobj[0]
+            assert False
+        except IndexError:
+            assert True
+
         # Test Length (this particular file we know has 55 entries
         # If we don't hardcode this check, we could get it wrong below
         assert len(nzbobj) == 55
@@ -74,6 +81,26 @@ class NNTPnzb_Test(TestBase):
         assert nzbobj.is_valid() is True
 
         assert nzbobj.gid() == '8c6b3a3bc8d925cd63125f7bea31a5c9'
+
+        # use load() to load all of the NZB entries into memory
+        # This is never nessisary to do unless you plan on modifying the NZB
+        # file. Those reading the tests to learn how the code works, if you're
+        # only going to parse the nzbfile for it's entries, just run a
+        # for loop over the object (without ever calling load() to use the
+        # least amount of memory and only parse line by line on demand
+        nzbobj.load()
+
+        # Count should still 55
+        assert len(nzbobj) == 55
+
+        # Test enumeration works too
+        for no, article in enumerate(nzbobj):
+            assert isinstance(article, NNTPSegmentedPost)
+            assert str(nzbobj[no]) == str(article)
+
+        for no, segment in enumerate(nzbobj.segments):
+            # Test equality
+            assert nzbobj[no] == segment
 
     def test_gid_retrievals(self):
         """

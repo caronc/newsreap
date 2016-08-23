@@ -15,10 +15,14 @@
 # GNU Lesser General Public License for more details.
 
 from blist import sortedset
+from datetime import datetime
+from os.path import basename
+
 from newsreap.NNTPArticle import NNTPArticle
+from newsreap.NNTPContent import NNTPContent
+from newsreap.NNTPContent import NNTPFileMode
 from newsreap.NNTPArticle import DEFAULT_NNTP_SUBJECT
 from newsreap.NNTPArticle import DEFAULT_NNTP_POSTER
-from datetime import datetime
 
 # Logging
 import logging
@@ -84,6 +88,11 @@ class NNTPSegmentedPost(object):
         self.subject = subject
         self.groups = groups
 
+        # When writing files, this is the memory buffer to fill when
+        # dealing with very large files. If this is set to None, then
+        # no buffer is used. Default 500K
+        self.mem_buffer = 512000
+
         if not isinstance(self.utc, datetime):
             # Convert into datetime
             try:
@@ -118,10 +127,8 @@ class NNTPSegmentedPost(object):
 
     def add(self, article):
         """
-        Add an article
+        Add an NNTPArticle()
         """
-        # TODO: This function should support NNTPContent types too which we can
-        # generaate an Article from and still add it
         if not isinstance(article, NNTPArticle):
             return False
 
@@ -157,7 +164,7 @@ class NNTPSegmentedPost(object):
         return next((False for c in self.articles \
                      if c.is_valid() is False), True)
 
-    def split(self, size=81920):
+    def split(self, size=81920, mem_buf=1048576):
         """
         If there is one Article() and one (valid) NNTPContent() object within
         it, this object will split the Article() into several and break apart
@@ -167,9 +174,17 @@ class NNTPSegmentedPost(object):
         this function returns False.  Newly split content is 'not' in a detached
         form meaning content is removed if the object goes out of scope
         """
+        if len(self.articles) > 1:
+            # Not possible to split a post that is already split
+            return False
 
-        #TODO
-        return False
+        articles = self.articles[0].split(size=size, mem_buf=mem_buf)
+        if articles is None:
+            return False
+
+        # Otherwise store our goods
+        self.articles = articles
+        return True
 
     def join(self):
         """
@@ -208,7 +223,6 @@ class NNTPSegmentedPost(object):
         """
         Grants usage of the next()
         """
-
         # Ensure our stream is open with read
         return iter(self.articles)
 
@@ -223,6 +237,19 @@ class NNTPSegmentedPost(object):
         Handles less than for storing in btrees
         """
         return str(self.filename) < str(other.filename)
+
+    def __eq__(self, other):
+        """
+        Handles equality
+
+        """
+        return self.__dict__ == other.__dict__
+
+    def __getitem__(self, index):
+        """
+        Support accessing NNTPArticle objects by index
+        """
+        return self.articles[index]
 
     def __str__(self):
         """
@@ -240,7 +267,6 @@ class NNTPSegmentedPost(object):
         """
         Return an unambigious version of the object
         """
-
         return '<NNTPSegmentedPost filename="%s" articles=%d />' % (
             self.filename,
             len(self.articles),
