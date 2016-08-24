@@ -90,13 +90,13 @@ class NNTPContent_Test(TestBase):
         aa = NNTPAsciiContent(
             filepath="ascii.file",
             part=2,
-            tmp_dir=self.tmp_dir,
+            work_dir=self.tmp_dir,
         )
 
         ba = NNTPBinaryContent(
             filepath="binary.file",
             part="10",
-            tmp_dir=self.tmp_dir,
+            work_dir=self.tmp_dir,
         )
 
         # Check our parts
@@ -280,9 +280,9 @@ class NNTPContent_Test(TestBase):
         """
         Test errors that are generated out of the split function
         """
-        tmp_dir = join(self.tmp_dir, 'NNTPContent_Test.chunk')
+        work_dir = join(self.tmp_dir, 'NNTPContent_Test.chunk')
         # Now we want to load it into a NNTPContent object
-        content = NNTPContent(tmp_dir=tmp_dir)
+        content = NNTPContent(work_dir=work_dir)
 
         # Nothing to split gives an error
         assert content.split() is None
@@ -293,7 +293,7 @@ class NNTPContent_Test(TestBase):
         assert isfile(tmp_file)
 
         # Now we want to load it into a NNTPContent object
-        content = NNTPContent(filepath=tmp_file, tmp_dir=self.tmp_dir)
+        content = NNTPContent(filepath=tmp_file, work_dir=self.tmp_dir)
 
         # No size to split on gives an error
         assert content.split(size=0) is None
@@ -321,7 +321,7 @@ class NNTPContent_Test(TestBase):
         assert isfile(tmp_file) is True
 
         # Now we want to load it into a NNTPContent object
-        content = NNTPContent(filepath=tmp_file, tmp_dir=self.tmp_dir)
+        content = NNTPContent(filepath=tmp_file, work_dir=self.tmp_dir)
 
         # Loaded files are always detached; The following is loaded
         # because the path exists.
@@ -341,7 +341,7 @@ class NNTPContent_Test(TestBase):
         assert len(results) == 2
 
         # Now lets merge them into one again
-        content = NNTPContent(tmp_dir=self.tmp_dir)
+        content = NNTPContent(work_dir=self.tmp_dir)
         assert content.load(results) is True
 
         # NNTPContent() sets as well as individual objects passed into
@@ -382,7 +382,7 @@ class NNTPContent_Test(TestBase):
         assert isfile(tmp_file) is True
 
         # Now we want to load it into a NNTPContent object
-        content = NNTPContent(filepath=tmp_file, tmp_dir=self.tmp_dir)
+        content = NNTPContent(filepath=tmp_file, work_dir=self.tmp_dir)
 
         md5 = content.md5()
         sha1 = content.sha1()
@@ -401,7 +401,7 @@ class NNTPContent_Test(TestBase):
         # Now it should
         assert isfile(tmp_file_2) is True
         # Now we'll open the new file we created
-        content_2 = NNTPContent(filepath=tmp_file_2, tmp_dir=self.tmp_dir)
+        content_2 = NNTPContent(filepath=tmp_file_2, work_dir=self.tmp_dir)
 
         md5_2 = content_2.md5()
         sha1_2 = content_2.sha1()
@@ -431,7 +431,7 @@ class NNTPContent_Test(TestBase):
         # File should exist now
         assert isfile(tmp_file) is True
         # Now we want to load it into a NNTPContent object
-        content = NNTPContent(filepath=tmp_file, tmp_dir=self.tmp_dir)
+        content = NNTPContent(filepath=tmp_file, work_dir=self.tmp_dir)
         # Test our file exists
         assert len(content) == strsize_to_bytes('5M')
         # By default our load makes it so our file is NOT attached
@@ -486,3 +486,38 @@ class NNTPContent_Test(TestBase):
         assert content.path() != _filepath
         assert content.path() == tmp_file_copy2
 
+    def test_writes(self):
+        """
+        More overhead then a normal write() but none the less, using the
+        write() in this class keeps things simple since the file is
+        automatically opened if it was otherwise closed
+        """
+
+        # First we create a 1MB file
+        tmp_file = join(self.tmp_dir, 'NNTPContent_Test.write', 'tmp.file')
+        # File should not already exist
+        assert isfile(tmp_file) is False
+
+        # Now we want to create our NNTPContent() object surrouding this
+        # file that does not exist.
+        content = NNTPContent(filepath=tmp_file, work_dir=dirname(tmp_file))
+        # It's worth noting that this file will 'still' not exist
+        assert isfile(tmp_file) is False
+        # we'll write data
+
+        data = 'hello\r\n'
+        content.write(data)
+
+        # It's worth noting that this file will ''STILL'' not exist
+        assert isfile(tmp_file) is False
+
+        # Save content
+        assert content.save() is True
+
+        # Now the file 'will' exist
+        assert isfile(tmp_file) is True
+
+        # Open our file and verify it is the data we saved.
+        with open(tmp_file) as f:
+            data_read = f.read()
+        assert data == data_read

@@ -46,7 +46,7 @@ class CodecUU_Test(TestBase):
         Make sure we fail on bad headers
         """
         # Initialize Codec
-        ud = CodecUU(tmp_dir=self.tmp_dir, out_dir=self.out_dir)
+        ud = CodecUU(work_dir=self.tmp_dir, out_dir=self.out_dir)
 
         # Make sure we don't pick up on yenc content
         assert ud.detect(
@@ -67,7 +67,7 @@ class CodecUU_Test(TestBase):
         Test that we can pick up the uu headers correctly
         """
         # Initialize Codec
-        ud = CodecUU(tmp_dir=self.tmp_dir, out_dir=self.out_dir)
+        ud = CodecUU(work_dir=self.tmp_dir, out_dir=self.out_dir)
         uu_meta = ud.detect("begin 775 mybinary.dat")
         assert uu_meta is not None
         assert len(uu_meta) == 3

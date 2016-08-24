@@ -81,7 +81,7 @@ class NNTPnzb(NNTPContent):
 
     """
 
-    def __init__(self, nzbfile=None, encoding=XML_ENCODING, tmp_dir=None, *args, **kwargs):
+    def __init__(self, nzbfile=None, encoding=XML_ENCODING, work_dir=None, *args, **kwargs):
         """
         Initialize NNTP NZB object
 
@@ -110,7 +110,7 @@ class NNTPnzb(NNTPContent):
         self.segments = sortedset(key=lambda x: x.key())
 
         # Initialize our parent
-        super(NNTPnzb, self).__init__(tmp_dir=tmp_dir, *args, **kwargs)
+        super(NNTPnzb, self).__init__(work_dir=work_dir, *args, **kwargs)
 
         # Used for it's ability to convert to and
         self._htmlparser = None

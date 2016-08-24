@@ -367,7 +367,7 @@ class NNTPManager(object):
         return request
 
 
-    def get(self, id, tmp_dir, group=None, block=True):
+    def get(self, id, work_dir, group=None, block=True):
         """
         Queue's an NNTPRequest for processing and returns it's
         response if block is set to True.
@@ -395,7 +395,7 @@ class NNTPManager(object):
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
             # ('function, (*args), (**kwargs) )
-            ('get', (id, tmp_dir), {'group': group}),
+            ('get', (id, work_dir), {'group': group}),
         ])
 
         # Append to Queue for processing

@@ -115,9 +115,9 @@ except ImportError:
 
 class CodecYenc(CodecBase):
 
-    def __init__(self, descriptor=None, tmp_dir=None, *args, **kwargs):
+    def __init__(self, descriptor=None, work_dir=None, *args, **kwargs):
         super(CodecYenc, self).__init__(descriptor=descriptor,
-            tmp_dir=tmp_dir, *args, **kwargs)
+            work_dir=work_dir, *args, **kwargs)
 
         # Tracks part no; defaults to 1 and shifts if it's determined
         # that we're another part
@@ -253,7 +253,7 @@ class CodecYenc(CodecBase):
                     self.decoded = NNTPBinaryContent(
                         filepath=_meta['name'],
                         part=self._part_no,
-                        tmp_dir=self.tmp_dir,
+                        work_dir=self.work_dir,
                     )
 
                 elif _meta['key'] == 'part':

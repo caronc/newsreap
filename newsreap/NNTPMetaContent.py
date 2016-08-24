@@ -21,13 +21,13 @@ class NNTPMetaContent(NNTPContent):
     """
     An NNTP Meta representation
     """
-    def __init__(self, filepath=None, part=0, tmp_dir=None, sort_no=2500,
+    def __init__(self, filepath=None, part=0, work_dir=None, sort_no=2500,
                  *args, **kwargs):
 
         super(NNTPMetaContent, self).__init__(
             filepath=filepath,
             part=part,
-            tmp_dir=tmp_dir, sort_no=sort_no, *args, **kwargs)
+            work_dir=work_dir, sort_no=sort_no, *args, **kwargs)
 
         self.content = list()
         self._iter = None

@@ -49,8 +49,8 @@ class CodecUU(CodecBase):
     """
     This codec is used to manage all UUEncoded content found on an NNTP Server.
     """
-    def __init__(self, tmp_dir=None, *args, **kwargs):
-        super(CodecUU, self).__init__(tmp_dir=tmp_dir, *args, **kwargs)
+    def __init__(self, work_dir=None, *args, **kwargs):
+        super(CodecUU, self).__init__(work_dir=work_dir, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
         self._meta = {}
@@ -166,7 +166,7 @@ class CodecUU(CodecBase):
                     # Create our binary instance
                     self.decoded = NNTPBinaryContent(
                         filepath=_meta['name'],
-                        tmp_dir=self.tmp_dir,
+                        work_dir=self.work_dir,
                     )
 
                     # Open our file for writing

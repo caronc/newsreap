@@ -1117,7 +1117,7 @@ class NNTPConnection(SocketBase):
         # Return
         return True
 
-    def get(self, id, tmp_dir, group=None):
+    def get(self, id, work_dir, group=None):
         """
         A wrapper to the _get call allowing support for more then one type
         of object (oppose to just _get() which only accepts the message id
@@ -1126,7 +1126,7 @@ class NNTPConnection(SocketBase):
 
         if isinstance(id, basestring):
             # We're dealing a Message-ID (Article-ID)
-            return self._get(id=id, tmp_dir=tmp_dir, group=group)
+            return self._get(id=id, work_dir=work_dir, group=group)
 
         elif isinstance(id, NNTPnzb):
             # We're dealing with an NZB File
@@ -1146,7 +1146,7 @@ class NNTPConnection(SocketBase):
                     # retrieve it's content if we can
                     fetched_article = self._get(
                         id=nzb_article,
-                        tmp_dir=tmp_dir,
+                        work_dir=work_dir,
                         group=group,
                     )
 
@@ -1165,9 +1165,9 @@ class NNTPConnection(SocketBase):
                     # Replace our articles in the segment
                     seg.articles = articles
 
-    def _get(self, id, tmp_dir, group=None):
+    def _get(self, id, work_dir, group=None):
         """
-        Download a specified message to the tmp_dir specified.
+        Download a specified message to the work_dir specified.
         This function returns an NNTPArticle() object if it can.
 
         None is returned if the content could not be retrieved due
@@ -1186,8 +1186,8 @@ class NNTPConnection(SocketBase):
                 logger.error('Could not select group %s' % group)
                 return None
 
-        if not isdir(tmp_dir) and not mkdir(tmp_dir):
-            logger.error('Could not create directory %s' % tmp_dir)
+        if not isdir(work_dir) and not mkdir(work_dir):
+            logger.error('Could not create directory %s' % work_dir)
             return None
 
         # Prepare our Decoders
@@ -1195,14 +1195,14 @@ class NNTPConnection(SocketBase):
         if not self.use_body:
             # BODY calls pull down header information too
             decoders.append(
-                CodecHeader(tmp_dir=tmp_dir, encoding=self.encoding),
+                CodecHeader(work_dir=work_dir, encoding=self.encoding),
             )
 
         decoders.extend([
             # Yenc Encoder/Decoder
-            CodecYenc(tmp_dir=tmp_dir),
+            CodecYenc(work_dir=work_dir),
             # UUEncoder/Decoder
-            CodecUU(tmp_dir=tmp_dir),
+            CodecUU(work_dir=work_dir),
         ])
 
         if self.use_body:
@@ -1227,7 +1227,7 @@ class NNTPConnection(SocketBase):
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
                 return next((b.article for b in self._backups \
-                        if b.get(id, tmp_dir, group) is not None), None)
+                        if b.get(id, work_dir, group) is not None), None)
             return None
 
         else:  # response.code in NNTPResponseCode.SERVER_ERROR:
@@ -1240,7 +1240,7 @@ class NNTPConnection(SocketBase):
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
                 return next((b.article for b in self._backups \
-                        if b.get(id, tmp_dir, group) is not None), None)
+                        if b.get(id, work_dir, group) is not None), None)
             return None
 
         # If we reach here, we have data we can work with; build our article
@@ -1259,7 +1259,7 @@ class NNTPConnection(SocketBase):
 
         #  Temporary filename for retreival)
         # self.article_fname = '%s.msg' % id
-        #  fileout = join(tmp_dir, self.article_fname)
+        #  fileout = join(work_dir, self.article_fname)
         #  if isfile(fileout):
         #      try:
         #          unlink(fileout)
@@ -1281,7 +1281,7 @@ class NNTPConnection(SocketBase):
         #         # Try our backup servers in the sequential order they were
         #         # added in; if they all fail; then we return None
         #         return next((b.article for b in self._backups \
-        #                 if b.get(id, tmp_dir, group) != None), None)
+        #                 if b.get(id, work_dir, group) != None), None)
 
         #     # If we reach here; there are no backup servers; so we just
         #     # return None

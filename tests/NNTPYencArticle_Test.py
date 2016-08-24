@@ -144,7 +144,7 @@ class NNTPYencArticle_Test(TestBase):
 
         assert sock.connect() is True
         assert sock._iostream == NNTPIOStream.RFC3977_GZIP
-        article = sock.get('5', tmp_dir=self.tmp_dir, group=self.common_group)
+        article = sock.get('5', work_dir=self.tmp_dir, group=self.common_group)
         assert sock.group_name == self.common_group
         assert isinstance(article, NNTPArticle) is True
         assert len(article.decoded) == 1
@@ -198,7 +198,7 @@ class NNTPYencArticle_Test(TestBase):
         # )
         # assert sock.connect() is True
         # assert sock._iostream == NNTPIOStream.RFC3977_GZIP
-        # assert sock.get('5', tmp_dir=self.tmp_dir, group='alt.binaries.test')
+        # assert sock.get('5', work_dir=self.tmp_dir, group='alt.binaries.test')
 
         # Invalid Password
         # assert sock.connect() is False
@@ -225,9 +225,9 @@ class NNTPYencArticle_Test(TestBase):
 
         # We intententionally fetch the content out of order
         # ideally we'd want 20 followed by 21
-        articles.add(sock.get(id='21', tmp_dir=self.tmp_dir, group=self.common_group))
+        articles.add(sock.get(id='21', work_dir=self.tmp_dir, group=self.common_group))
         assert sock.group_name == self.common_group
-        articles.add(sock.get(id='20', tmp_dir=self.tmp_dir))
+        articles.add(sock.get(id='20', work_dir=self.tmp_dir))
         assert sock.group_name == self.common_group
 
         newfile = NNTPBinaryContent(
@@ -238,7 +238,7 @@ class NNTPYencArticle_Test(TestBase):
             # TODO: update the article function so it's much easier to get
             # an iterator to decoded list
             filepath=iter(iter(articles).next().decoded).next().filename,
-            tmp_dir=self.tmp_dir,
+            work_dir=self.tmp_dir,
         )
 
         for article in articles:

@@ -2,7 +2,7 @@
 #
 # A decoder to handle for handling group fetches
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -53,12 +53,12 @@ class CodecGroups(CodecBase):
     on an NNTP Server.
     """
 
-    def __init__(self, descriptor=None, tmp_dir=None, *args, **kwargs):
+    def __init__(self, descriptor=None, work_dir=None, *args, **kwargs):
         super(CodecGroups, self).__init__(descriptor=descriptor,
-            tmp_dir=tmp_dir, *args, **kwargs)
+            work_dir=work_dir, *args, **kwargs)
 
         # Our Decoded Content
-        self.decoded = NNTPMetaContent(tmp_dir=self.tmp_dir)
+        self.decoded = NNTPMetaContent(work_dir=self.work_dir)
 
     def detect(self, line, relative=True):
         """
@@ -160,7 +160,7 @@ class CodecGroups(CodecBase):
         super(CodecGroups, self).reset()
 
         # Reset Our Result set
-        self.decoded = NNTPMetaContent(tmp_dir=self.tmp_dir)
+        self.decoded = NNTPMetaContent(work_dir=self.work_dir)
 
     def __str__(self):
         """

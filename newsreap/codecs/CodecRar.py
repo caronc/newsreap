@@ -46,13 +46,13 @@ class CodecRar(CodecFile):
     files any other way
     """
 
-    def __init__(self, tmp_dir=None,
+    def __init__(self, work_dir=None,
                  rar_path=DEFAULT_RAR_PATH,
                  unrar_path=DEFAULT_UNRAR_PATH, *args, **kwargs):
         """
         Initialize the Codec
         """
-        super(CodecRar, self).__init__(tmp_dir=tmp_dir, *args, **kwargs)
+        super(CodecRar, self).__init__(work_dir=work_dir, *args, **kwargs)
 
         # Initalize Paths
         self._rar = rar_path

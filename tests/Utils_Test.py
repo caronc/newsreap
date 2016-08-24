@@ -219,18 +219,18 @@ class Utils_Test(TestBase):
 
         """
 
-        tmp_dir = join(self.tmp_dir, 'Utils_Test.mkdir', 'dirA')
+        work_dir = join(self.tmp_dir, 'Utils_Test.mkdir', 'dirA')
         # The directory should not exist
-        assert isdir(tmp_dir) is False
+        assert isdir(work_dir) is False
 
         # mkdir() should be successful
-        assert mkdir(tmp_dir) is True
+        assert mkdir(work_dir) is True
 
         # The directory should exist now
-        assert isdir(tmp_dir) is True
+        assert isdir(work_dir) is True
 
         # mkdir() gracefully handles 2 calls to the same location
-        assert mkdir(tmp_dir) is True
+        assert mkdir(work_dir) is True
 
         # Create Temporary file 1KB in size
         tmp_file = join(self.tmp_dir, 'Utils_Test.mkdir', '2KB')
@@ -243,27 +243,27 @@ class Utils_Test(TestBase):
         assert mkdir(tmp_file) is False
 
         # And reference a new directory (not created yet) within
-        new_tmp_dir = join(tmp_dir, 'subdir')
+        new_work_dir = join(work_dir, 'subdir')
 
         # Confirm our directory doesn't exist
-        assert isdir(new_tmp_dir) is False
+        assert isdir(new_work_dir) is False
 
         # Now we'll protect our original directory
-        chmod(tmp_dir, 0000)
+        chmod(work_dir, 0000)
 
         # mkdir() will fail because of permissions, but incase it doesn't work
         # as planned, just store the result in a variable.  We'll flip our
         # permission back first
-        result = mkdir(new_tmp_dir)
+        result = mkdir(new_work_dir)
 
         # reset the permission
-        chmod(tmp_dir, 0700)
+        chmod(work_dir, 0700)
 
         # Our result should yield a failed result
         assert result is False
 
         # Confirm that the directory was never created:
-        assert isdir(new_tmp_dir) is False
+        assert isdir(new_work_dir) is False
 
     def test_pushd_popd(self):
         """
@@ -273,16 +273,16 @@ class Utils_Test(TestBase):
         """
 
         # Temporary directory to work with
-        tmp_dir = join(self.tmp_dir, 'Utils_Test.pushd', 'newdir')
+        work_dir = join(self.tmp_dir, 'Utils_Test.pushd', 'newdir')
 
         # Ensure it doesn't already exist
-        assert isdir(tmp_dir) is False
+        assert isdir(work_dir) is False
 
         # Store our current directory
         cur_dir = getcwd()
 
         try:
-            with pushd(tmp_dir):
+            with pushd(work_dir):
                 # We should throw an exeption here and never make it to the assert
                 # call below
                 assert False
@@ -293,17 +293,17 @@ class Utils_Test(TestBase):
             assert getcwd() == cur_dir
 
         # Now we'll make the directory
-        with pushd(tmp_dir, create_if_missing=True):
+        with pushd(work_dir, create_if_missing=True):
             # We're in a new directory
-            assert getcwd() == tmp_dir
+            assert getcwd() == work_dir
 
         # We're back to where we were
         assert getcwd() == cur_dir
 
         try:
-            with pushd(tmp_dir, create_if_missing=True):
+            with pushd(work_dir, create_if_missing=True):
                 # We're in a new directory
-                assert getcwd() == tmp_dir
+                assert getcwd() == work_dir
                 # Throw an exception
                 raise Exception
 

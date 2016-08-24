@@ -22,10 +22,10 @@ class NNTPEmptyContent(NNTPContent):
     helps with sorting and/or validation by holding information that may have
     been extract from an nzbfile or other source.
     """
-    def __init__(self, filepath=None, part=None, tmp_dir=None, size=0, *args, **kwargs):
+    def __init__(self, filepath=None, part=None, work_dir=None, size=0, *args, **kwargs):
         super(NNTPEmptyContent, self).__init__(
             filepath=filepath,
-            part=part, tmp_dir=tmp_dir, sort_no=5000, *args, **kwargs)
+            part=part, work_dir=work_dir, sort_no=5000, *args, **kwargs)
 
         # Store size
         try:

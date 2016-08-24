@@ -38,15 +38,15 @@ class CodecAscii(CodecBase):
     on an NNTP Server. It doesn't do much but store/track ascii data
     """
 
-    def __init__(self, descriptor=None, tmp_dir=None, *args, **kwargs):
+    def __init__(self, descriptor=None, work_dir=None, *args, **kwargs):
         super(CodecAscii, self).__init__(descriptor=descriptor,
-            tmp_dir=tmp_dir, *args, **kwargs)
+            work_dir=work_dir, *args, **kwargs)
 
         # Our Ascii Object we can reference while we store our
         # text content
         self.decoded = NNTPAsciiContent(
             filepath='.message',
-            tmp_dir=self.tmp_dir,
+            work_dir=self.work_dir,
         )
 
 
@@ -106,7 +106,7 @@ class CodecAscii(CodecBase):
         # Reset our decoded content
         self.decoded = NNTPAsciiContent(
             filepath='.message',
-            tmp_dir=self.tmp_dir,
+            work_dir=self.work_dir,
         )
 
 

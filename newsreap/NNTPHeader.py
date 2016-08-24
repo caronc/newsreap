@@ -2,7 +2,7 @@
 #
 # A NNTP Article Header Representation
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -20,9 +20,9 @@ class NNTPHeader(NNTPMetaContent):
     """
     A Header representation of an NNTP Article
     """
-    def __init__(self, tmp_dir=None, *args, **kwargs):
+    def __init__(self, work_dir=None, *args, **kwargs):
         super(NNTPHeader, self).__init__(
-            tmp_dir=tmp_dir, sort_no=100, *args, **kwargs)
+            work_dir=work_dir, sort_no=100, *args, **kwargs)
 
         # Initialize our header
         self.content = dict()

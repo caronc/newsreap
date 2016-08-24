@@ -83,7 +83,7 @@ class NNTPContent(object):
 
     """
 
-    def __init__(self, filepath=None, part=None, tmp_dir=None,
+    def __init__(self, filepath=None, part=None, work_dir=None,
                  sort_no=10000, unique=False, *args, **kwargs):
         """
         Initialize NNTP Content
@@ -129,10 +129,10 @@ class NNTPContent(object):
         self.filemode = None
 
         # Prepare temporary folder we intend to use by default
-        if tmp_dir:
-            self.tmp_dir = abspath(expanduser(tmp_dir))
+        if work_dir:
+            self.work_dir = abspath(expanduser(work_dir))
         else:
-            self.tmp_dir = DEFAULT_TMP_DIR
+            self.work_dir = DEFAULT_TMP_DIR
 
         # A Stream object
         self.stream = None
@@ -239,12 +239,12 @@ class NNTPContent(object):
             filepath = self.filepath
 
         elif not filepath:
-            if not isdir(self.tmp_dir):
+            if not isdir(self.work_dir):
                 # create directory
-                mkdir(self.tmp_dir)
+                mkdir(self.work_dir)
 
             # Create a Temporary File
-            fileno, self.filepath = mkstemp(dir=self.tmp_dir)
+            fileno, self.filepath = mkstemp(dir=self.work_dir)
             try:
                 self.stream = fdopen(fileno, mode)
                 if self._detached is None:
@@ -425,7 +425,7 @@ class NNTPContent(object):
         and remains in it's current detached state (whatever it was).
 
         If no filepath is specified, then the detected filename and
-        tmp_dir specified during the objects initialization is used instead.
+        work_dir specified during the objects initialization is used instead.
 
         The function returns True if it successfully saved the file and
         False otherwise. If you never passed in a filepath, then the path
@@ -433,14 +433,14 @@ class NNTPContent(object):
         detached from the Object.
         """
         if filepath is None:
-            if not isdir(self.tmp_dir):
+            if not isdir(self.work_dir):
                 # create directory
-                mkdir(self.tmp_dir)
+                mkdir(self.work_dir)
 
             if self.filename:
-                filepath = join(self.tmp_dir, self.filename)
+                filepath = join(self.work_dir, self.filename)
             else:
-                filepath = join(self.tmp_dir, basename(self.filepath))
+                filepath = join(self.work_dir, basename(self.filepath))
 
         elif isdir(filepath):
             if self.filename:
@@ -449,11 +449,11 @@ class NNTPContent(object):
                     basename(self.filename),
                 )
             else:
-                if not isdir(self.tmp_dir):
+                if not isdir(self.work_dir):
                     # create directory
-                    mkdir(self.tmp_dir)
+                    mkdir(self.work_dir)
 
-                filepath = join(self.tmp_dir, basename(self.filepath))
+                filepath = join(self.work_dir, basename(self.filepath))
 
         elif isfile(filepath):
             # It's a file; just make sure we're dealing with a full pathname
@@ -527,7 +527,7 @@ class NNTPContent(object):
         """
         if not self.filepath:
             # Create a Temporary File
-            _, self.filepath = mkstemp(dir=self.tmp_dir)
+            _, self.filepath = mkstemp(dir=self.work_dir)
 
         return self.filepath
 
@@ -573,7 +573,7 @@ class NNTPContent(object):
         obj = NNTPContent(
             filepath=self.filename,
             part=part,
-            tmp_dir=self.tmp_dir,
+            work_dir=self.work_dir,
             sort_no=self.sort_no,
         )
 
@@ -646,7 +646,7 @@ class NNTPContent(object):
                 obj = NNTPContent(
                     filepath=self.filename,
                     part=part,
-                    tmp_dir=self.tmp_dir,
+                    work_dir=self.work_dir,
                     sort_no=self.sort_no,
                 )
 

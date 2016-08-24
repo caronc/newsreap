@@ -2,7 +2,7 @@
 #
 # A Base Codec Class for deciphering data read from the an NNTP Server
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -42,7 +42,7 @@ DEFAULT_TMP_DIR = expanduser(join('~', '.config', 'newsreap', 'var', 'tmp'))
 
 class CodecBase(object):
 
-    def __init__(self, tmp_dir=None, throttle_cycles=8000, throttle_time=0.2,
+    def __init__(self, work_dir=None, throttle_cycles=8000, throttle_time=0.2,
                  *args, **kwargs):
         """
         The dir identfies the directory to store our sessions in
@@ -63,21 +63,21 @@ class CodecBase(object):
         # Our Decoded content should get placed here
         self.decoded = None
 
-        if tmp_dir is None:
-            self.tmp_dir = DEFAULT_TMP_DIR
+        if work_dir is None:
+            self.work_dir = DEFAULT_TMP_DIR
         else:
-            self.tmp_dir = tmp_dir
+            self.work_dir = work_dir
 
-        if not isdir(self.tmp_dir):
+        if not isdir(self.work_dir):
             # create directory
-            if mkdir(self.tmp_dir):
-                logger.info('Created directory: %s' % self.tmp_dir)
+            if mkdir(self.work_dir):
+                logger.info('Created directory: %s' % self.work_dir)
             else:
-                logger.error('Failed to created directory: %s' % self.tmp_dir)
+                logger.error('Failed to created directory: %s' % self.work_dir)
                 ## Should not continue under this circumstance
                 # raise IOError((
                 #     errno.EACCES,
-                #     'Failed to create directory: %s' % self.tmp_dir,
+                #     'Failed to create directory: %s' % self.work_dir,
                 # ))
 
         # Tracks the lines processed

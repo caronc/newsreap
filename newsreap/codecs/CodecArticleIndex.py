@@ -2,7 +2,7 @@
 #
 # A decoder to handle for handling xover (article indexes) fetches
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -83,12 +83,12 @@ class CodecArticleIndex(CodecBase):
     """
 
     def __init__(self, descriptor=None, filters=None, sort=None,
-                 encoding=None, tmp_dir=None, *args, **kwargs):
+                 encoding=None, work_dir=None, *args, **kwargs):
         super(CodecArticleIndex, self).__init__(descriptor=descriptor,
-            tmp_dir=tmp_dir, *args, **kwargs)
+            work_dir=work_dir, *args, **kwargs)
 
         # Our Meta Content
-        self.decoded = NNTPMetaContent(tmp_dir=self.tmp_dir)
+        self.decoded = NNTPMetaContent(work_dir=self.work_dir)
 
         # Switch our content subvalue to be a sorteddict()
         self.decoded.content = sorteddict()
@@ -280,7 +280,7 @@ class CodecArticleIndex(CodecBase):
         super(CodecArticleIndex, self).reset()
 
         # Our Meta Content
-        self.decoded = NNTPMetaContent(tmp_dir=self.tmp_dir)
+        self.decoded = NNTPMetaContent(work_dir=self.work_dir)
 
         # Switch our decoded subvalue to be a sorteddict()
         self.decoded.content = sorteddict()
