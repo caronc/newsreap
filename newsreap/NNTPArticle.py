@@ -127,6 +127,13 @@ class NNTPArticle(object):
 
         return True
 
+    def raw(self):
+        """
+        Returns the raw message for posting
+        """
+        self.header.raw()
+        #TODO
+
     def split(self, size=81920, mem_buf=1048576):
         """
         Split returns a set of NNTPArticle() objects containing the split

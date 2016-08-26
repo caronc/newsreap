@@ -13,7 +13,7 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
-
+import re
 from newsreap.NNTPMetaContent import NNTPMetaContent
 
 class NNTPHeader(NNTPMetaContent):
@@ -27,20 +27,19 @@ class NNTPHeader(NNTPMetaContent):
         # Initialize our header
         self.content = dict()
 
-
     def __setitem__(self, key, item):
         """
         Mimic Dictionary:  dict[key] = value
         """
+        key = self.__fmt_key(key)
         self.content[key] = item
-
 
     def __getitem__(self, key):
         """
         Mimic Dictionary:  value = dict[key]
         """
+        key = self.__fmt_key(key)
         return self.content[key]
-
 
     def clear(self):
         """
@@ -48,20 +47,18 @@ class NNTPHeader(NNTPMetaContent):
         """
         return self.content.clear()
 
-
     def copy(self):
         """
         Mimic Dictionary:  dict.copy()
         """
         return self.content.copy()
 
-
-    def has_key(self, k):
+    def has_key(self, key):
         """
         Mimic Dictionary:  dict.has_key(key)
         """
-        return self.content.has_key(k)
-
+        key = self.__fmt_key(key)
+        return self.content.has_key(key)
 
     def update(self, *args, **kwargs):
         """
@@ -69,13 +66,11 @@ class NNTPHeader(NNTPMetaContent):
         """
         return self.content.update(*args, **kwargs)
 
-
     def keys(self):
         """
         Mimic Dictionary:  dict.keys()
         """
         return self.content.keys()
-
 
     def iterkeys(self):
         """
@@ -83,13 +78,11 @@ class NNTPHeader(NNTPMetaContent):
         """
         return self.content.iterkeys()
 
-
     def itervalues(self):
         """
         Mimic Dictionary:  dict.itervalues()
         """
         return self.content.itervalues()
-
 
     def key(self):
         """
@@ -98,13 +91,11 @@ class NNTPHeader(NNTPMetaContent):
         """
         return '%.5d/Header/' % self.sort_no
 
-
     def values(self):
         """
         Mimic Dictionary:  dict.values()
         """
         return self.content.values()
-
 
     def items(self):
         """
@@ -112,13 +103,42 @@ class NNTPHeader(NNTPMetaContent):
         """
         return self.content.items()
 
-
-    def pop(self, k, d=None):
+    def pop(self, key, d=None):
         """
         Mimic Dictionary:  dict.pop(key, default)
         """
-        return self.content.pop(k, d)
+        key = self.__fmt_key(key)
+        return self.content.pop(key, d)
 
+    def __fmt_key(self, key):
+        """Formats the hash key for more consistent hits; hence fetching the
+        'Message-ID' key should still be fetched even if the user indexes
+        with 'message-id'.
+        """
+        def _fmt(_k):
+            return _k.group(1) + _k.group(2).upper()
+
+        return re.sub(
+            # Flip -id to ID (short for Identifier)
+            # Flip -crc to CRC (short for Cyclic Redundancy Check)
+            r'([_-])((id|crc)([^a-z0-9]|$))',
+            _fmt,
+            re.sub(r'(^|\s|[_-])(\S)', _fmt, key.strip().lower()),
+            flags=re.IGNORECASE,
+        )
+
+    def __len__(self):
+        """
+        Returns the number of header entries
+        """
+        return len(self.content)
+
+    def __delitem__(self, key):
+        """
+        allows the deletion of header keys
+        """
+        key = self.__fmt_key(key)
+        del self.content[key]
 
     def __repr__(self):
         """

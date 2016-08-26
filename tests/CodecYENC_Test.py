@@ -39,6 +39,7 @@ except ImportError:
 
 from newsreap.codecs.CodecYenc import CodecYenc
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
+from newsreap.NNTPAsciiContent import NNTPAsciiContent
 
 
 class CodecYENC_Test(TestBase):
@@ -228,25 +229,25 @@ class CodecYENC_Test(TestBase):
         # Force to operate in python (manual/slow) mode
         CodecYenc.FAST_YENC_SUPPORT = False
         with open(encoded_filepath, 'r') as fd_in:
-            article_py = decoder.decode(fd_in)
+            content_py = decoder.decode(fd_in)
 
         # our content should be valid
-        assert isinstance(article_py, NNTPBinaryContent)
+        assert isinstance(content_py, NNTPBinaryContent)
 
         # Force to operate with the C extension yenc
         # This require the extensions to be installed
         # on the system
         CodecYenc.FAST_YENC_SUPPORT = True
         with open(encoded_filepath, 'r') as fd_in:
-            article_c = decoder.decode(fd_in)
+            content_c = decoder.decode(fd_in)
 
         # our content should be valid
-        assert isinstance(article_c, NNTPBinaryContent)
+        assert isinstance(content_c, NNTPBinaryContent)
 
-        # Verify the actual article itself reports itself
+        # Verify the actual content itself reports itself
         # as being okay (structurally)
-        assert article_py.is_valid() is True
-        assert article_c.is_valid() is True
+        assert content_py.is_valid() is True
+        assert content_c.is_valid() is True
 
         # Confirm that our output from our python implimentation
         # matches that of our yenc C version.
@@ -256,8 +257,8 @@ class CodecYENC_Test(TestBase):
             decoded = fd_in.read()
 
         # Compare our processed content with the expected results
-        assert decoded == article_py.getvalue()
-        assert decoded == article_c.getvalue()
+        assert decoded == content_py.getvalue()
+        assert decoded == content_c.getvalue()
 
     def test_decoding_yenc_multi_part(self):
         """
@@ -310,17 +311,17 @@ class CodecYENC_Test(TestBase):
         # Initialize Codec
         decoder = CodecYenc()
 
-        articles_py = []
-        articles_c = []
+        contents_py = []
+        contents_c = []
 
         # Force to operate in python (manual/slow) mode
         CodecYenc.FAST_YENC_SUPPORT = False
         with open(encoded_filepath_1, 'r') as fd_in:
-            articles_py.append(decoder.decode(fd_in))
+            contents_py.append(decoder.decode(fd_in))
         with open(encoded_filepath_2, 'r') as fd_in:
-            articles_py.append(decoder.decode(fd_in))
+            contents_py.append(decoder.decode(fd_in))
 
-        for x in articles_py:
+        for x in contents_py:
             # Verify our data is good
             assert x.is_valid() is True
 
@@ -329,11 +330,11 @@ class CodecYENC_Test(TestBase):
         # on the system
         CodecYenc.FAST_YENC_SUPPORT = True
         with open(encoded_filepath_1, 'r') as fd_in:
-            articles_c.append(decoder.decode(fd_in))
+            contents_c.append(decoder.decode(fd_in))
         with open(encoded_filepath_2, 'r') as fd_in:
-            articles_c.append(decoder.decode(fd_in))
+            contents_c.append(decoder.decode(fd_in))
 
-        for x in articles_c:
+        for x in contents_c:
             # Verify our data is good
             assert x.is_valid() is True
 
@@ -346,26 +347,70 @@ class CodecYENC_Test(TestBase):
             decoded = fd_in.read()
 
         # Assemble (TODO)
-        articles_py.sort()
-        articles_c.sort()
+        contents_py.sort()
+        contents_c.sort()
 
-        article_py = NNTPBinaryContent(
-            filepath=articles_py[0].filename,
+        content_py = NNTPBinaryContent(
+            filepath=contents_py[0].filename,
             save_dir=self.out_dir,
         )
-        article_c = NNTPBinaryContent(
-            filepath=articles_c[0].filename,
+        content_c = NNTPBinaryContent(
+            filepath=contents_c[0].filename,
             save_dir=self.out_dir,
         )
 
         # append() takes a list or another NNTPContent
-        # and appends it's content to the end of the article
-        article_py.append(articles_py)
-        article_c.append(articles_py)
+        # and appends it's content to the end of the content
+        content_py.append(contents_py)
+        content_c.append(contents_py)
 
-        assert len(article_py) == len(decoded)
-        assert len(article_c) == len(decoded)
+        assert len(content_py) == len(decoded)
+        assert len(content_c) == len(decoded)
 
         # Compare our processed content with the expected results
-        assert article_py.getvalue() == decoded
-        assert article_c.getvalue() == decoded
+        assert content_py.getvalue() == decoded
+        assert content_c.getvalue() == decoded
+
+    def test_yenc_v1_3_encoding(self):
+        """
+        Test the encoding of data; this is nessisary prior to a post
+        """
+
+        # A simple test for ensuring that the yenc
+        # library exists; otherwise we want this test
+        # to fail; the below line will handle this for
+        # us; we'll let the test fail on an import error
+        import yenc
+
+        # First we take a binary file
+        binary_filepath = join(self.var_dir, 'joystick.jpg')
+        assert isfile(binary_filepath)
+
+        # Initialize Codec
+        encoder_c = CodecYenc()
+
+        content_c = encoder_c.encode(binary_filepath)
+
+        # We should have gotten an ASCII Content Object
+        assert isinstance(content_c, NNTPAsciiContent) is True
+
+        # We should actually have content associated with out data
+        assert len(content_c) > 0
+
+        # Now we should be able to perform the same tasks again without
+        # using the C libraries
+        CodecYenc.FAST_YENC_SUPPORT = False
+
+        # Initialize Codec
+        encoder_py = CodecYenc()
+
+        content_py = encoder_py.encode(binary_filepath)
+
+        # We should have gotten an ASCII Content Object
+        assert isinstance(content_py, NNTPAsciiContent) is True
+
+        # We should actually have content associated with out data
+        assert len(content_py) > 0
+
+        # We generate the same output
+        assert content_py.crc32() == content_c.crc32()

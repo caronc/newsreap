@@ -170,8 +170,7 @@ class SocketBase(object):
         self._certfile = kwargs.get('certfile', None)
 
         # For Statistics
-        self.bytes_in = 0
-        self.bytes_out = 0
+        self.stat_connect_time = None
 
         # Calculated through connections
         self._local_addr = None
@@ -278,9 +277,8 @@ class SocketBase(object):
         # reset our peer certificate
         self.peer_certificate = None
 
-        # reset stats
-        self.bytes_in = 0
-        self.bytes_out = 0
+        # Reset Connect Time Stat
+        self.stat_connect_time = None
 
         # reset remote connection details only
         # we keep the local ones so we can re-use them
@@ -498,7 +496,10 @@ class SocketBase(object):
             # Throttle retry
             sleep(retry_wait)
 
+        # Connection Established
+        self.stat_connect_time = datetime.now()
         self.connected = True
+
         return True
 
     def listen(self, timeout=None, retry_wait=1.00, reuse_port=True):
@@ -735,9 +736,6 @@ class SocketBase(object):
                     bytes_read += len(data)
                     total_data.append(data)
 
-                    # Statistical Purposes
-                    self.bytes_in += bytes_read
-
                 # If we reach here, then we aren't using timeouts and the
                 # socket returned nothing...
                 if not data:
@@ -746,7 +744,6 @@ class SocketBase(object):
                     if data:
                         # Store data
                         bytes_read += len(data)
-                        self.bytes_in += len(data)
                         total_data.append(data)
 
                     # if not timeout:
@@ -798,7 +795,6 @@ class SocketBase(object):
                 if data:
                     # Store data
                     bytes_read += len(data)
-                    self.bytes_in += len(data)
                     total_data.append(data)
 
                 if not timeout:
@@ -851,9 +847,6 @@ class SocketBase(object):
 
                 # Handle content received
                 tot_bytes += bytes_sent
-
-                # Statistical Purposes
-                self.bytes_out += bytes_sent
 
             except Timeout:
                 # Timeout occurred; Sleep for a little bit

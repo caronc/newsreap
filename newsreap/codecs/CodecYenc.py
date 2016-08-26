@@ -2,7 +2,7 @@
 #
 # A Codec for handling yEnc encoded NNTP Articles
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -17,7 +17,9 @@
 import re
 from os.path import basename
 
+from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
+from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.Utils import SEEK_SET
 
 from newsreap.codecs.CodecBase import BIN_MASK
@@ -30,6 +32,8 @@ import logging
 from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
+# Defines the new line delimiter
+EOL = '\r\n'
 
 # Check for =ybegin, =yend and =ypart
 YENC_RE = re.compile(
@@ -73,6 +77,7 @@ class YencError(Exception):
 try:
     # Yenc Support
     from _yenc import decode_string
+    from _yenc import encode_string
     FAST_YENC_SUPPORT = True
 
     # Monkey Patch CodecError (assumes yEnc v0.4)
@@ -91,37 +96,45 @@ except ImportError:
 
     # A Translation Map
     YENC42 = ''.join(map(lambda x: chr((x-42) & 255), range(256)))
+    YDEC42 = ''.join(map(lambda x: chr((42+x) & 255), range(256)))
 
-    # a map that identifies all of the special keywords used by
-    # yEnc which need a special conversion done to them before
-    # We use the curses.ascii table to make our code easier to read
-    from curses import ascii
     YENC_DECODE_SPECIAL_MAP = dict([('=%s' % chr(k+64), chr(k)) for k in (
         # Non-Printable
-        ascii.NUL, ascii.LF, ascii.CR, ascii.SP, ascii.TAB,
+        ord('\0'), ord('\r'), ord('\n'),  ord(' '), ord('\t'),
 
         # Printable
         ord('.'), ord('='),
     )] + [
         # Ignore Types (we simply ignore these types if they are found)
-        (chr(ascii.LF), ''), (chr(ascii.CR), ''),
+        (chr('\r'), ''), (chr('\n'), ''),
     ])
+
+    # A map used for encoding content
+    YENC_ENCODE_SPECIAL_MAP = dict([(chr(k), '=%s' % chr(k+64)) for k in (
+        # Non-Printable
+        ord('\0'), ord('\r'), ord('\n'),  ord(' '), ord('\t'),
+
+        # Printable
+        ord('.'), ord('='),
+    )])
 
     # Compile our map into a decode table
     YENC_DECODE_SPECIAL_RE = re.compile(
         r'(' + r'|'.join(YENC_DECODE_SPECIAL_MAP.keys()) + r')',
     )
 
+    # Compile our map into a encode table
+    YENC_ENCODE_SPECIAL_RE = re.compile(
+        r'(' + r'|'.join(YENC_ENCODE_SPECIAL_MAP.keys()) + r')',
+    )
+
 
 class CodecYenc(CodecBase):
 
-    def __init__(self, descriptor=None, work_dir=None, *args, **kwargs):
+    def __init__(self, descriptor=None, work_dir=None,
+                 linelen=128, *args, **kwargs):
         super(CodecYenc, self).__init__(descriptor=descriptor,
             work_dir=work_dir, *args, **kwargs)
-
-        # Tracks part no; defaults to 1 and shifts if it's determined
-        # that we're another part
-        self._part_no = 1
 
         # Used for internal meta tracking when using the decode()
         self._meta = {}
@@ -129,6 +142,145 @@ class CodecYenc(CodecBase):
         # Our Binary Object we can reference while we decode
         # content
         self.decoded = None
+
+        # Used for encoding
+        self.linelen = linelen
+
+
+    def encode(self, content, mem_buf=1048576):
+        """
+        Encodes an NNTPContent object passed in
+        """
+
+        if isinstance(content, NNTPContent):
+            # Create our ascii instance
+            encoded = NNTPAsciiContent(
+                filepath=content.filename,
+                part=content.part,
+                total_parts=content.total_parts,
+                begin=content.begin(),
+                end=content.end(),
+                total_size=self._total_size(),
+                sort_no=content.sort_no,
+                work_dir=self.work_dir,
+                # We want to ensure we're working with a unique attached file
+                unique=True,
+            )
+
+        else:
+            # Create our ascii instance
+            _encoded = NNTPAsciiContent(
+                work_dir=self.work_dir,
+                # We want to ensure we're working with a unique attached file
+                unique=True,
+            )
+
+            content = NNTPContent(
+                filepath=content,
+                work_dir=self.work_dir,
+            )
+
+        if not content.open():
+            return None
+
+        results = ""
+
+		# yEnc (v1.3) begin
+        fmt_ybegin = '=ybegin part=%d total=%d line=%d size=%d name=%s%s' % (
+            content.part, content.total_parts, self.linelen,
+            len(content), content.filename, EOL,
+        )
+        # yEnc part
+        fmt_ypart = '=ypart begin=%d end=%d' % (
+            content.begin() + 1,
+            content.end(),
+        )
+
+        if isinstance(content._parent, NNTPContent):
+            # yEnc end
+            fmt_yend = '=yend size=%d part=%d pcrc32=%s crc32=%s' % (
+                content.end() - content.begin(), content.part,
+                content.crc32(), content._parent.crc32(),
+            )
+
+        else:
+            # yEnc end
+            fmt_yend = '=yend size=%d part=%d pcrc32=%s' % (
+                content.end() - content.begin(), content.part,
+                content.crc32(),
+            )
+
+        # Write =ybegin line
+        _encoded.write(fmt_ybegin + EOL)
+        # Write =ypart line
+        _encoded.write(fmt_ypart + EOL)
+
+        # We need to parse the content until we either reach
+        # the end of the file or get to an 'end' tag
+        while True:
+            # Read in our data
+            data = content.stream.read(mem_buf)
+            if not data:
+                # We're done
+                break
+
+            if FAST_YENC_SUPPORT:
+                try:
+                    _results, self._crc, self._escape = \
+                            encode_string(data, self._crc, self._escape)
+
+                    results += _results
+
+                except YencError:
+                    logger.error("Failed to Yenc %s." % content)
+                    return None
+            else:
+                # The slow and painful way, the below looks complicated
+                # but it really isn't at the the end of the day; yEnc is
+                # pretty basic;
+                #  - first we translate the all of the characters by adding
+                #    42 to their value with the exception of a few special
+                #    characters that are explitely reserved for the yEnc
+                #    language (and conflict with the NNTP Server language).
+                #
+                #  - next, we need to apply our ENCODE_SPECIAL_MAP to be
+                #    sure to handle the characters that are reserved as
+                #    special keywords used by both NNTP Servers and the yEnc
+                #    protocol itself.
+                #
+                #  - finally we want to prevent our string from going on for
+                #    to many characters (horizontally).  So we need to split
+                #    our content up
+                #
+                results += YENC_ENCODE_SPECIAL_RE.sub(
+                    lambda x: YENC_ENCODE_SPECIAL_MAP[x.group()],
+                    data.translate(YDEC42),
+                )
+
+            # Insert a new line as per defined settings
+            for i in range(0, len(results), self.linelen):
+                _encoded.write(results[i:i+self.linelen] + EOL)
+
+            # Save the last half we couldn't append
+            if len(results) % self.linelen:
+                results = results[-len(results) % self.linelen + 1:]
+
+            else:
+                # reset string
+                results = ''
+
+        # We're done reading our data
+        content.close()
+
+        if len(results):
+            # We still have content left in our buffer
+            _encoded.write(results + EOL)
+
+        # Write footer
+        _encoded.write(fmt_yend + EOL)
+
+        # Return our encoded object
+        return _encoded
 
     def detect(self, line, relative=True):
         """
@@ -247,12 +399,12 @@ class CodecYenc(CodecBase):
                         continue
 
                     # Save part no globally if present (for sorting)
-                    self._part_no = _meta.get('part', 1)
+                    self._part = _meta.get('part', 1)
 
                     # Create our binary instance
                     self.decoded = NNTPBinaryContent(
                         filepath=_meta['name'],
-                        part=self._part_no,
+                        part=self._part,
                         work_dir=self.work_dir,
                     )
 
@@ -265,10 +417,10 @@ class CodecYenc(CodecBase):
                         continue
 
                     # Save part no globally if present (for sorting)
-                    self._part_no = _meta.get('part', self._part_no)
+                    self._part = _meta.get('part', self._part)
 
                     # Update our Binary File if nessisary
-                    self.decoded.part = self._part_no
+                    self.decoded.part = self._part
 
                 continue
 
@@ -284,7 +436,7 @@ class CodecYenc(CodecBase):
 
                 except YencError:
                     logger.warning(
-                        "Corruption on line %d." % \
+                        "Yenc corruption detected on line %d." % \
                         self._lines,
                     )
 
@@ -327,7 +479,7 @@ class CodecYenc(CodecBase):
         self._meta = {}
 
         # Reset part information
-        self._part_no = 1
+        self._part = 1
 
         if self.decoded:
             # close article when complete
@@ -344,7 +496,7 @@ class CodecYenc(CodecBase):
 
         # Tracks part no; defaults to 1 and shifts if it's determined
         # that we're another part
-        self._part_no = 1
+        self._part = 1
 
         # Used for internal meta tracking when using the decode()
         self._meta = {}
@@ -357,7 +509,7 @@ class CodecYenc(CodecBase):
         """
         Sorts by part number
         """
-        return self._part_no < other._part_no
+        return self._part < other._part
 
     def __str__(self):
         """

@@ -166,7 +166,7 @@ class CodecHeader(CodecBase):
             # To keep things fast; we specifically place content directly
             # into the content object to avoid the extra un-nessisary
             # function call per line
-            self.decoded.content[header['key']] = header['value']
+            self.decoded[header['key']] = header['value']
 
         # Returns true because we're still expecting more content
         return True

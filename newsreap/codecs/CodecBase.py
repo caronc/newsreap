@@ -18,7 +18,6 @@ from binascii import crc32
 from os.path import join
 from os.path import isdir
 from os.path import expanduser
-import errno
 
 from newsreap.Utils import mkdir
 from gevent import sleep
@@ -56,9 +55,13 @@ class CodecBase(object):
         # CRC Masking
         self._crc = BIN_MASK
 
+        self._escape = 0
+
+        # Track the number of bytes encoded
+        self._encoded = 0
+
         # Track the number of bytes decoded
         self._decoded = 0
-        self._escape = 0
 
         # Our Decoded content should get placed here
         self.decoded = None
@@ -91,7 +94,6 @@ class CodecBase(object):
         self.throttle_time = throttle_time
         self.throttle_iter = 0
 
-
     def decode_loop(self):
         """
         Throttle system usage
@@ -105,14 +107,12 @@ class CodecBase(object):
             sleep(self.throttle_time)
         return True
 
-
     def _calc_crc(self, decoded):
         """
         Calculate the CRC based on the decoded content passed in
         """
         self._escape = crc32(decoded, self._escape)
         self._crc = (self._escape ^ -1)
-
 
     def detect(self, line, relative=True):
         """
@@ -136,7 +136,6 @@ class CodecBase(object):
         # Until this is over-ridden, it is always assumed the codec
         # can not handle the the line in question
         return None
-
 
     def decode(self, stream):
         """
@@ -163,26 +162,20 @@ class CodecBase(object):
         """
         return False
 
-
     def encode(self, stream):
         """
         A function must be written that will read from the
-        stream and encodes the contents
+        stream and encodes the contents it's provided.
+
+        The function should return an NNTPContent object or None if
+        it can't perform the encoding.
         """
-        return False
-
-
-    def len(self):
-        """ Returns the total number of decoded bytes
-        """
-        return self._decoded
-
+        return None
 
     def crc32(self):
         """ Returns the calculated crc32 string for the decoded data.
         """
         return "%08x" % (self._crc ^ BIN_MASK)
-
 
     def reset(self, *args, **kwargs):
         """ Simply resets the internal variables of the class
@@ -206,13 +199,16 @@ class CodecBase(object):
 
         return None
 
+    def __len__(self):
+        """ Returns the total number of decoded bytes
+        """
+        return self._decoded
 
     def __str__(self):
         """
         Return a printable version of the codec
         """
         return repr(self)
-
 
     def __repr__(self):
         """

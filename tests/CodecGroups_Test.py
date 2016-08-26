@@ -37,7 +37,7 @@ except ImportError:
 from newsreap.codecs.CodecGroups import CodecGroups
 from newsreap.NNTPMetaContent  import NNTPMetaContent
 
-class Codec_Groups(TestBase):
+class CodecGroups_Test(TestBase):
 
     def test_bad_groups(self):
         """
@@ -45,18 +45,18 @@ class Codec_Groups(TestBase):
         """
         # Initialize Codec
         ch = CodecGroups()
-        assert ch.detect("alt.binaries.l2g") == None
-        assert ch.detect("alt.binaries.l2g 0 bad y") == None
-        assert ch.detect("alt.binaries.l2g bad 0 y") == None
-        assert ch.detect("alt.binaries.l2g bad 0 y also bad") == None
-        assert ch.detect("alt.binaries.l2g character bad y") == None
-        assert ch.detect("alt.binaries.l2g -1 0 y") == None
-        assert ch.detect("alt.binaries.l2g 0 -1 y") == None
+        assert ch.detect("alt.binaries.l2g") is None
+        assert ch.detect("alt.binaries.l2g 0 bad y") is None
+        assert ch.detect("alt.binaries.l2g bad 0 y") is None
+        assert ch.detect("alt.binaries.l2g bad 0 y also bad") is None
+        assert ch.detect("alt.binaries.l2g character bad y") is None
+        assert ch.detect("alt.binaries.l2g -1 0 y") is None
+        assert ch.detect("alt.binaries.l2g 0 -1 y") is None
 
         # Empty lines are not valid
-        assert ch.detect("") == None
+        assert ch.detect("") is None
         # white space
-        assert ch.detect("    ") == None
+        assert ch.detect("    ") is None
 
 
     def test_good_groups(self):

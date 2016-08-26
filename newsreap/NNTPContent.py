@@ -28,11 +28,12 @@ from os.path import expanduser
 from os.path import isdir
 from os.path import isfile
 from io import BytesIO
-from blist import sortedset
 from tempfile import mkstemp
 from shutil import move as _move
 from shutil import copy as _copy
 from shutil import Error as ShutilError
+from binascii import crc32
+from blist import sortedset
 
 from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
 from newsreap.Utils import mkdir
@@ -83,7 +84,8 @@ class NNTPContent(object):
 
     """
 
-    def __init__(self, filepath=None, part=None, work_dir=None,
+    def __init__(self, filepath=None, part=None, total_parts=None,
+                 begin=None, end=None, total_size=None, work_dir=None,
                  sort_no=10000, unique=False, *args, **kwargs):
         """
         Initialize NNTP Content
@@ -118,7 +120,78 @@ class NNTPContent(object):
                 self.part = int(part)
 
             except (ValueError, TypeError):
-                self.part = None
+                self.part = 1
+
+        # Tracks parts (most used for posting/encoding)
+        self.total_parts = None
+        if total_parts is not None:
+            try:
+                self.total_parts = int(total_parts)
+
+            except (ValueError, TypeError):
+                raise AttributeError(
+                    "Invalid total_parts specified (%s)." % \
+                    str(total_parts),
+                )
+
+        if self.total_parts > self.part:
+            raise AttributeError(
+                "Invalid parts/total_parts specified (%s/%s)." % (
+                str(part), str(total_parts),
+            ))
+
+        # Used for tracking the indexes (head/tail) that make
+        # up the block of data this NNTPContent object represents.
+        # this is only used if split() is called
+        self._begin = 0
+        if begin is not None:
+            try:
+                self._begin = int(begin)
+
+            except (ValueError, TypeError):
+                raise AttributeError(
+                    "Invalid begin specified (%s)." % \
+                    str(begin),
+                )
+
+        self._end = None
+        if end is not None:
+            try:
+                self._end = int(end)
+
+            except (ValueError, TypeError):
+                raise AttributeError(
+                    "Invalid end specified (%s)." % \
+                    str(end),
+                )
+
+        if (begin is None and isinstance(end, int)) or \
+           (end is None and isinstance(begin, int)):
+            raise AttributeError(
+                "Invalid begin/end specified (%s/%s)." % (
+                str(begin), str(end),
+            ))
+
+        if begin is not None and begin >= end:
+            raise AttributeError(
+                "Begin (%d) value can not be larger than End (%d)." % (
+                begin, end,
+            ))
+
+        # Tracks total_size (used for posting when we have parts of files
+        self._total_size = None
+        if total_size is not None:
+            try:
+                self._total_size = int(total_size)
+
+            except (ValueError, TypeError):
+                raise AttributeError(
+                    "Invalid total_size specified (%s)." % \
+                    str(total_size),
+                )
+
+        # Default filename
+        self.filename = ''
 
         # The filepath is automatically set up when the temporary file is
         # created
@@ -163,8 +236,22 @@ class NNTPContent(object):
         # system can handle it.
         self._block_size = BLOCK_SIZE
 
+        # Reserved for split() function which populates any children
+        # spawned from this object with a pointer back to this as
+        # object as a reference.
+        self._parent = None
+
+        # TODO: all md5, crc32, len() calls etc should all cache their results
+        # here and retrieve from here if present. If a write() or load() is
+        # made, the cache should be destroyed. The cache is only populated on
+        # demand.
+        self._lazy_cache = {}
+
         if not filepath:
-            self.filename = ''
+            return
+
+        elif isinstance(filepath, file):
+            self.stream = filepath
 
         else:
             self.filename = basename(filepath)
@@ -300,8 +387,13 @@ class NNTPContent(object):
             # assume we're dealing with an already open stream and therefore
             # we work in a detached state
             self.stream = filepath
-            self.filepath = None
-            self.filemode = None
+            self.filepath = filepath.get('name')
+            self.filemode = filepath.get('mode')
+
+            if self.filepath:
+                self.filename = basename(self.filepath)
+            else:
+                self.filename = ''
 
             # You can never have an attached file without a filepath
             self._detached = False
@@ -369,13 +461,27 @@ class NNTPContent(object):
         # Reset Valid Flag
         self._is_valid = False
 
+        # Defines the part of a file this NNTPContent() represents. This is
+        # usually always going to be always set to 1 (one) unless split() is
+        # called. split() causes  the file to be segmented into multiple
+        # smaller ones.
+        self.part = 1
+
+        # This is the total number of parts that make up a segmented
+        # NNTPContent object when segmented (from split() call). If split() is
+        # never called then the total_parts will always be that of 1
+        self.total_parts = 1
+
+        self._total_size = None
+        self._begin = 0
+        self._end = None
+
         if isinstance(filepath, NNTPContent):
             # Support NNTPContent object copying; by simply storing
             # the object in a list, we are able to catch it in the
             # next check
             self.part = filepath.part
             filepath = [filepath]
-
 
         if isinstance(filepath, (set, sortedset, list)):
             # Perform merge if we detected a set of NNTPContent objects
@@ -531,7 +637,7 @@ class NNTPContent(object):
 
         return self.filepath
 
-    def split(self,  size=81920, mem_buf=1048576):
+    def split(self, size=81920, mem_buf=1048576):
         """Returns a set of NNTPContent() objects containing the split version
         of this object based on the criteria specified.
 
@@ -563,19 +669,34 @@ class NNTPContent(object):
         # Initialize Part #
         part = 1
 
+        # Initialize Total Part #
+        total_parts, partial = divmod(len(self), size)
+        if partial:
+            total_parts += 1
+
         # A lists of NNTPContent() objects to return
         objs = set()
 
         if not self.open(mode=NNTPFileMode.BINARY_RO):
             return None
 
+        # Calculate the total length of our data
+        total_size = len(self)
+
         # Create our first object
         obj = NNTPContent(
             filepath=self.filename,
             part=part,
+            total_parts=total_parts,
+            begin=0,
+            end=size,
+            total_size=total_size,
             work_dir=self.work_dir,
             sort_no=self.sort_no,
         )
+
+        # Create a pointer to the parent
+        obj._parent = self
 
         # Open the new file
         obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
@@ -646,9 +767,16 @@ class NNTPContent(object):
                 obj = NNTPContent(
                     filepath=self.filename,
                     part=part,
+                    total_parts=total_parts,
+                    begin=(part*size),
+                    end=((part*size)+size),
+                    total_size=total_size,
                     work_dir=self.work_dir,
                     sort_no=self.sort_no,
                 )
+
+                # Create a pointer to the parent
+                obj._parent = self
 
                 # Open the new file
                 obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
@@ -658,6 +786,7 @@ class NNTPContent(object):
 
         # code will never reach here
         return None
+
 
     def write(self, data, eof=True):
         """
@@ -675,8 +804,13 @@ class NNTPContent(object):
 
         self.stream.write(data)
 
-        # Set dirty flag
-        self._dirty = True
+        if not self._dirty:
+            # Set dirty flag
+            self._dirty = True
+
+            # We can't trust self._end anymore now because content was
+            # written to the file.
+            self._end = None
 
     def read(self, n=-1):
         """
@@ -745,6 +879,35 @@ class NNTPContent(object):
 
         return True
 
+    def begin(self):
+        """
+        Returns the beginning ptr; this is nessisary when building encoded
+        parts to be posted on an NNTPServer
+        """
+        if self._begin:
+            return self._begin
+        return 1
+
+    def end(self):
+        """
+        Returns the end ptr; this is nessisary when building encoded
+        parts to be posted on an NNTPServer
+        """
+        if self._end is None:
+            self._end = self._begin + len(self)
+        return self._end
+
+    def total_size(self):
+        """
+        Returns the total size of the entire object (all parts included).
+        This result is the same as len() if there is only 1 part to
+        the entire object
+        """
+        if self.total_parts <= 1:
+            return len(self)
+
+        return self.end() - self.begin()
+
     def is_attached(self):
         """
         Simply returns whether or not the file is attached to the object or
@@ -791,6 +954,30 @@ class NNTPContent(object):
             return '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
         else:
             return '%.5d/%s/' % (self.sort_no, self.filename)
+
+    def crc32(self):
+        """
+        A little bit old-fashioned, but some encodings like yEnc require that
+        a crc32 value be used.  This calculates it based on the file
+        """
+        # block size defined as 2**16
+        block_size = 65536
+
+        # The mask to apply to all CRC checking
+        BIN_MASK = 0xffffffffL
+
+        # Initialize
+        _escape = 0
+        _crc = BIN_MASK
+
+        if self.open(mode=NNTPFileMode.BINARY_RO):
+            for chunk in iter(
+                lambda: self.stream.read(block_size), b''):
+                _escape = crc32(chunk, _escape)
+                _crc = (_escape ^ -1)
+
+            return "%08x" % (_crc ^ BIN_MASK)
+        return None
 
     def md5(self):
         """
