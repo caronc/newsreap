@@ -114,16 +114,19 @@ class NNTPContent(object):
         self.sort_no = sort_no
 
         # Store part
-        self.part = part
-        if self.part is not None:
+        self.part = 1
+        if part is not None:
             try:
                 self.part = int(part)
 
             except (ValueError, TypeError):
-                self.part = 1
+                raise AttributeError(
+                    "Invalid part specified (%s)." % \
+                    str(part),
+                )
 
         # Tracks parts (most used for posting/encoding)
-        self.total_parts = None
+        self.total_parts = 1
         if total_parts is not None:
             try:
                 self.total_parts = int(total_parts)
@@ -134,11 +137,11 @@ class NNTPContent(object):
                     str(total_parts),
                 )
 
-        if self.total_parts > self.part:
-            raise AttributeError(
-                "Invalid parts/total_parts specified (%s/%s)." % (
-                str(part), str(total_parts),
-            ))
+            if self.total_parts < self.part:
+                raise AttributeError(
+                    "Invalid parts/total_parts specified (%s/%s)." % (
+                    str(part), str(total_parts),
+                ))
 
         # Used for tracking the indexes (head/tail) that make
         # up the block of data this NNTPContent object represents.
@@ -667,7 +670,7 @@ class NNTPContent(object):
             return None
 
         # Initialize Part #
-        part = 1
+        part = 0
 
         # Initialize Total Part #
         total_parts, partial = divmod(len(self), size)
@@ -682,24 +685,6 @@ class NNTPContent(object):
 
         # Calculate the total length of our data
         total_size = len(self)
-
-        # Create our first object
-        obj = NNTPContent(
-            filepath=self.filename,
-            part=part,
-            total_parts=total_parts,
-            begin=0,
-            end=size,
-            total_size=total_size,
-            work_dir=self.work_dir,
-            sort_no=self.sort_no,
-        )
-
-        # Create a pointer to the parent
-        obj._parent = self
-
-        # Open the new file
-        obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
 
         # File length of our first object
         f_length = 0
@@ -734,6 +719,28 @@ class NNTPContent(object):
                 if total_bytes < block_size:
                     block_size = total_bytes
 
+                if f_length == 0:
+                    # Increment our part
+                    part += 1
+
+                    # Create a new object
+                    obj = NNTPContent(
+                        filepath=self.filename,
+                        part=part,
+                        total_parts=total_parts,
+                        begin=(part*size),
+                        end=((part*size)+size),
+                        total_size=total_size,
+                        work_dir=self.work_dir,
+                        sort_no=self.sort_no,
+                    )
+
+                    # Create a pointer to the parent
+                    obj._parent = self
+
+                    # Open the new file
+                    obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
+
                 try:
                     obj.write(data.read(block_size))
 
@@ -760,28 +767,7 @@ class NNTPContent(object):
                 obj.close()
                 objs.add(obj)
 
-                # Increment our part
-                part += 1
-
-                # Create our first object
-                obj = NNTPContent(
-                    filepath=self.filename,
-                    part=part,
-                    total_parts=total_parts,
-                    begin=(part*size),
-                    end=((part*size)+size),
-                    total_size=total_size,
-                    work_dir=self.work_dir,
-                    sort_no=self.sort_no,
-                )
-
-                # Create a pointer to the parent
-                obj._parent = self
-
-                # Open the new file
-                obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
-
-                # File length of our first object
+                # File length reset
                 f_length = 0
 
         # code will never reach here
