@@ -28,8 +28,11 @@ gevent.monkey.patch_all()
 #        keyerror-in-module-threading-after-a-successful-py-test-run
 
 import re
+from blist import sortedset
 from os.path import dirname
 from os.path import abspath
+from os.path import join
+from os.path import isfile
 
 try:
     from tests.TestBase import TestBase
@@ -43,6 +46,7 @@ from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPHeader import NNTPHeader
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPResponse import NNTPResponse
+from newsreap.Utils import strsize_to_bytes
 
 
 class NNTPArticle_Test(TestBase):
@@ -191,3 +195,91 @@ class NNTPArticle_Test(TestBase):
         assert(len(article.groups) == 2)
         assert('convert.lead.2.gold' in article.groups)
         assert('convert.lead.2.gold.again' in article.groups)
+
+    def test_article_splitting(self):
+        """
+        Tests that articles can split
+        """
+        # Duplicates groups are are removed automatically
+        article = NNTPArticle(
+            subject='split-test',
+            poster='<noreply@newsreap.com>',
+            groups='alt.binaries.l2g',
+        )
+
+        # Nothing to split gives an error
+        assert article.split() is None
+
+        tmp_file = join(self.tmp_dir, 'NNTPArticle_Test.chunk', '1MB.rar')
+        # The file doesn't exist at first
+        assert not isfile(tmp_file)
+        # Create it
+        assert self.touch(tmp_file, size='1MB')
+        # Now it does
+        assert isfile(tmp_file)
+
+        # Now we want to load it into a NNTPContent object
+        content = NNTPBinaryContent(filepath=tmp_file, work_dir=self.tmp_dir)
+
+        # Add our object to our article
+        assert article.add(content) is True
+
+        # No size to split on gives an error
+        assert article.split(size=0) is None
+        assert article.split(size=-1) is None
+        assert article.split(size=None) is None
+        assert article.split(size='bad_string') is None
+
+        # Invalid Memory Limit
+        assert article.split(mem_buf=0) is None
+        assert article.split(mem_buf=-1) is None
+        assert article.split(mem_buf=None) is None
+        assert article.split(mem_buf='bad_string') is None
+
+        # We'll split it in 2
+        results = article.split(strsize_to_bytes('512K'))
+
+        # Tests that our results are expected
+        assert isinstance(results, sortedset)
+        assert len(results) == 2
+
+        # Test that the parts were assigned correctly
+        for i, content in enumerate(results):
+            # We should only have one content object
+            assert len(content) == 1
+            # Our content object should correctly have the part and
+            # total part contents populated correctly
+            assert content[0].part == (i+1)
+            assert content[0].total_parts == len(results)
+
+    def test_posting_content(self):
+        """
+        Tests the group variations
+        """
+        # Duplicates groups are are removed automatically
+        article = NNTPArticle(
+            subject='woo-hoo',
+            poster='<noreply@newsreap.com>',
+            id='random-id',
+            groups='alt.binaries.l2g',
+        )
+
+        # First we create a 512K file
+        tmp_file = join(
+            self.tmp_dir, 'NNTPArticle_Test.posting', 'file.tmp')
+        # File should not already exist
+        assert isfile(tmp_file) is False
+        # Create a random file
+        assert self.touch(tmp_file, size='512K', random=True) is True
+        # File should exist now
+        assert isfile(tmp_file) is True
+
+        # Now we want to load it into a NNTPContent object
+        content = NNTPBinaryContent(filepath=tmp_file, work_dir=self.tmp_dir)
+        assert article.add(content) is True
+
+        # Now we want to split the file up
+        results = article.split('128K')
+        # Tests that our results are expected
+        assert isinstance(results, sortedset)
+        assert len(results) == 4

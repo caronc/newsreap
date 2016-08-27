@@ -23,6 +23,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
+from blist import sortedset
 from os.path import join
 from os.path import dirname
 from os.path import isfile
@@ -331,13 +332,13 @@ class NNTPContent_Test(TestBase):
         results = content.split(strsize_to_bytes('512K'))
 
         # Tests that our results are expected
-        assert isinstance(results, set)
+        assert isinstance(results, sortedset)
         assert len(results) == 2
 
         # We support passing the string format directly in too
         results = content.split('512K')
         # Tests that our results are expected
-        assert isinstance(results, set)
+        assert isinstance(results, sortedset)
         assert len(results) == 2
 
         # Now lets merge them into one again

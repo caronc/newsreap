@@ -16,12 +16,20 @@
 # GNU Lesser General Public License for more details.
 
 from blist import sortedset
-from datetime import datetime
 from copy import deepcopy
+from itertools import chain
+from string import ascii_uppercase
+from string import digits
+from string import ascii_lowercase
+from random import choice
+from datetime import datetime
+
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.NNTPHeader import NNTPHeader
+from newsreap.NNTPSettings import NNTP_EOL
+from newsreap.NNTPSettings import NNTP_EOD
 
 # Logging
 import logging
@@ -127,14 +135,35 @@ class NNTPArticle(object):
 
         return True
 
-    def raw(self):
+    def post_iter(self, update_headers=True):
         """
-        Returns the raw message for posting
+        Returns NNTP string as it would be required for posting
         """
-        self.header.raw()
-        #TODO
 
-    def split(self, size=81920, mem_buf=1048576):
+        if update_headers:
+            self.header['Newsgroups'] = ','.join(self.groups)
+            self.header['Subject'] = self.subject
+            self.header['From'] = self.poster
+            self.header['X-Newsposter'] = self.poster
+            self.header['Message-ID'] = '<%s>' % self.msgid()
+
+        args = [
+            iter(self.header.post_iter()),
+        ]
+
+        if len(self.body):
+            args.append(iter(self.body.post_iter()))
+            args.append(NNTP_EOL)
+
+        if len(self.decoded):
+            for entry in self.decoded:
+                args.append(iter(entry.post_iter()))
+                args.append(NNTP_EOL)
+
+        args.extend([NNTP_EOL, NNTP_EOD])
+        return chain(*args)
+
+    def split(self, size=81920, mem_buf=1048576, body_mirror=0):
         """
         Split returns a set of NNTPArticle() objects containing the split
         version of the data it already represents.
@@ -144,6 +173,35 @@ class NNTPArticle(object):
         an error occurs. None is also returned if split() is called while there
         is more then one NNTPContent objects since it makes the situation
         Ambiguous.
+
+        The body_mirror flag has a series of meanings; since we start with a
+        single post before calling this (which goes on and splits the post) we
+        have to decide if we want the contents of our message body to appear
+        in every post. So here is how it breaks down.
+
+        If you set it to False, None then the body content is ignored
+        and nothing is done with it.
+
+        If you set it to True, then the body is copied to every single part.
+
+        If you set it to -X (negative #) then the body is stored in the
+        part generated as if you called the python slice expression:
+            parts[-X].body <-- store body here
+
+        If you set it to X (positive #), then the body is stored in
+        that index value similar to above:
+            parts[X].body <-- store body here
+
+        IndexErrors are automatially and silently handled.  If you access
+        a part that is out of bounds then the bounds are limited to fit
+        automtatically.  For instance, if you specified -100 as the
+        part and there were only 4 parts generated, (-4 is the maximum
+        it could have been) then -4 is used in place of the -100.
+
+        consiquently if you passed in 100 (a positive value). since
+        (positive) indexes are measured started at 0 (zero), this means a
+        with a list of 4 items the largest value can be a 3.  Therefore
+        the index of 3 is used instead.
         """
         if len(self) > 1:
             # Ambiguous
@@ -153,11 +211,12 @@ class NNTPArticle(object):
             # Nothing to split
             return None
 
-        content = next((False for c in self.decoded \
+        content = next((c for c in self.decoded \
                      if isinstance(c, NNTPContent)), None)
 
         if not content:
-            # Well this isn't good
+            # Well this isn't good; we have decoded entries that are not
+            # of type NNTPContent.
             return None
 
         # Split our content
@@ -169,7 +228,8 @@ class NNTPArticle(object):
 
         # If we get here, we have content to work with.  We need to generate
         # a list of articles based on our existing one.
-        articles = sortedset()
+        articles = sortedset(key=lambda x: x.key())
+
         for no, c in enumerate(new_content):
             a = NNTPArticle(
                 # TODO: Apply Subject Template here which the user can set when
@@ -187,8 +247,30 @@ class NNTPArticle(object):
             # Store our NNTPContent() object
             a.add(c)
 
+            if body_mirror is True:
+                # body is mirrored to everything
+                a.body = self.body
+
             # Store our Article
             articles.add(a)
+
+        # Now we transfer over our body if nessisary
+        if isinstance(body_mirror, int):
+            if body_mirror > -1:
+                try:
+                    articles[body_mirror].body = self.body
+
+                except IndexError:
+                    # Store at last entry
+                    articles[-1].body = self.body
+            else:
+                # Negative Number
+                try:
+                    articles[body_mirror].body = self.body
+
+                except IndexError:
+                    # Store at first entry
+                    articles[0].body = self.body
 
         # Return our articles
         return articles
@@ -254,6 +336,32 @@ class NNTPArticle(object):
         self.decoded.add(content)
 
         return len(self.decoded) > _bcnt
+
+    def msgid(self, host=None):
+        """
+        Returns a message ID; if one hasn't been generated yet, it is
+        based on the content in the article and used
+        """
+        if self.id:
+            return self.id
+
+        if not host:
+            # Generate a 32-bit string we can use
+            host = ''.join(
+                choice(
+                    ascii_uppercase + digits + ascii_lowercase,
+                ) for _ in range(32))
+
+        if len(self.decoded):
+            partno = self.decoded[0].part
+        else:
+            partno = 1
+        # If we reach here an ID hasn't been generated yet; generate one
+        self.id = '%s%d@%s' % (
+            datetime.utcnow().strftime('%Y%m%d%H%M%S%f'),
+            partno,
+            host
+        )
 
     def size(self):
         """

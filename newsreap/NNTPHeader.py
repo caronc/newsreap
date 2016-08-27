@@ -14,6 +14,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 import re
+from newsreap.NNTPSettings import NNTP_EOL
 from newsreap.NNTPMetaContent import NNTPMetaContent
 
 class NNTPHeader(NNTPMetaContent):
@@ -40,6 +41,14 @@ class NNTPHeader(NNTPMetaContent):
         """
         key = self.__fmt_key(key)
         return self.content[key]
+
+    def post_iter(self):
+        """
+        Returns NNTP string as it would be required for posting
+        """
+        return NNTP_EOL.join(
+            ['%s: %s' % (k, v) \
+             for k, v in self.content.iteritems()]) + NNTP_EOL + NNTP_EOL
 
     def clear(self):
         """

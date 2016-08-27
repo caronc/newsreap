@@ -678,7 +678,7 @@ class NNTPContent(object):
             total_parts += 1
 
         # A lists of NNTPContent() objects to return
-        objs = set()
+        objs = sortedset(key=lambda x: x.key())
 
         if not self.open(mode=NNTPFileMode.BINARY_RO):
             return None
@@ -940,6 +940,19 @@ class NNTPContent(object):
             return '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
         else:
             return '%.5d/%s/' % (self.sort_no, self.filename)
+
+    def post_iter(self):
+        """
+        Returns NNTP string as it would be required for posting to an
+        NNTP Server
+        """
+        if self.open(mode=NNTPFileMode.BINARY_RO):
+            while 1:
+                data = self.stream.read(self._block_size)
+                if not data:
+                    break
+                yield data
+            self.close()
 
     def crc32(self):
         """

@@ -60,12 +60,9 @@ import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
-# Defines the new line delimiter
-EOL = '\r\n'
-
 # Defines the end of data delimiter
-EOD = '%s.' % EOL
-
+EOL = '\r\n'
+EOD = '\r\n.'
 EOL_RE = re.compile(r'([\r]?\n)')
 EOD_RE = re.compile(r'(\.([\r]?\n))$')
 
@@ -115,9 +112,6 @@ NNTP_RESPONSE_TIMEOUT = 30.0
 # The number of seconds to give the remote NNTP Server to
 # send it's welcome message before aborting the connection
 NNTP_WELCOME_MESSAGE_TIMEOUT = 15.0
-
-# End of Data Marker
-NNTP_EOD = '.'
 
 # Defines the number of lines to scan into a message
 # to try and find the =ybegin entry (identifing a YENC message)

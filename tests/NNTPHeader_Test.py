@@ -82,3 +82,18 @@ class NNTPHeader_Test(TestBase):
         # This simple check just makes sure we don't create a key called
         # My-IDentifier
         assert hdr.keys()[0] == 'My-Identifier'
+
+    def test_post_formating(self):
+        """
+        Test that we properly format the header for posting
+        """
+
+        # Initialize Codec
+        hdr = NNTPHeader()
+        hdr['message-id'] = '<msgid1234>'
+        hdr['Newsgroups'] = 'alt.binaries.test,alt.binaries.test2'
+        hdr['Subject'] = 'Test Subject'
+        hdr['From'] = 'l2g <noreply@newsreap.com>'
+        hdr['X-Newsposter'] = 'newsreap'
+
+        assert isinstance(hdr.post_iter(), basestring)

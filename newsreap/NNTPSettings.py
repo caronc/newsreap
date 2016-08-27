@@ -165,6 +165,12 @@ import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
+# NNTP End Of Line
+NNTP_EOL = '\r\n'
+
+# NNTP End Of Data
+NNTP_EOD = '.\r\n'
+
 # Root path
 if os_name == 'nt':
     ROOT = 'C:\\'
