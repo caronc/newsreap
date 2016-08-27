@@ -18,6 +18,7 @@
 from blist import sortedset
 from copy import deepcopy
 from itertools import chain
+from os.path import isfile
 from string import ascii_uppercase
 from string import digits
 from string import ascii_lowercase
@@ -162,6 +163,38 @@ class NNTPArticle(object):
 
         args.extend([NNTP_EOL, NNTP_EOD])
         return chain(*args)
+
+    def encode(self, encoders):
+        """
+        A wrapper to the encoding of content. The function returns None if
+        a problem occurs, otherwise the function returns an NNTPArtice()
+        object.
+
+        The power of this function comes from the fact you can pass in
+        multiple encoders to have them all fire after one another.
+        """
+        if len(self) == 0:
+            # Nothing to encode
+            return None
+
+        objs = sortedset(key=lambda x: x.key())
+        for content in self:
+            obj = content.encode(encoders)
+            if obj is None:
+                return None
+
+            # Successful, add our object to our new list
+            objs.add(obj)
+
+        # If we reach here we encoded our entire article
+        # Create a copy of our article
+        article = deepcopy(self)
+
+        # In our new copy; store our new encoded content
+        article.decoded = objs
+
+        # Return our article
+        return article
 
     def split(self, size=81920, mem_buf=1048576, body_mirror=0):
         """
@@ -325,6 +358,10 @@ class NNTPArticle(object):
         """
         Used for adding content to the self.decoded class
         """
+        if isinstance(content, basestring) and isfile(content):
+            # Support strings
+            content = NNTPContent(content)
+
         if not isinstance(content, NNTPContent):
             return False
 

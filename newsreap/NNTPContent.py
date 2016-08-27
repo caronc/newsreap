@@ -34,6 +34,7 @@ from shutil import copy as _copy
 from shutil import Error as ShutilError
 from binascii import crc32
 from blist import sortedset
+from types import MethodType
 
 from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
 from newsreap.Utils import mkdir
@@ -421,6 +422,58 @@ class NNTPContent(object):
 
         return True
 
+    def encode(self, encoder):
+        """
+        A wrapper to the encoding of content. The function returns None if
+        a problem occurs, otherwise the function returns an NNTPContent()
+        object.
+
+        The power of this function comes from the fact you can pass in
+        multiple encoders to have them all fire after one another.
+        """
+        # Python does not allow recursive inclusion; since NNTPContent is
+        # included via the codec paths we test if it's an encoder by just
+        # looking for the encode() function
+        if not isinstance(encoder, object):
+            return None
+
+        if not isinstance(encoder, (tuple, sortedset, list)):
+            # work with a tuple for now
+            encoder = ( encoder,  )
+
+        if not isinstance(encoder, (tuple, sortedset, list)):
+            # We expect a list at this point
+            return None
+
+        # Content object we chain to
+        content = self
+
+        for _enc in encoder:
+            # Support Type initializations
+            if isinstance(_enc, type):
+                enc = _enc()
+            else:
+                enc = _enc
+
+            if hasattr(enc, 'encode') and \
+               isinstance(enc.encode, MethodType):
+                # We're dealing with a stream based encoder
+                content = enc.encode(content.filepath)
+                if content is None:
+                    return None
+
+            elif hasattr(enc, 'compress') and \
+               isinstance(enc.compress, MethodType):
+                # We're dealing with a external based encoder
+                content = enc.compress(content.filepath)
+                if content is None:
+                    return None
+            else:
+                # We don't support this
+                return None
+
+        return content
+
     def load(self, filepath):
         """
         This causes the function to point to the file specified and acts in a
@@ -486,7 +539,7 @@ class NNTPContent(object):
             self.part = filepath.part
             filepath = [filepath]
 
-        if isinstance(filepath, (set, sortedset, list)):
+        if isinstance(filepath, (tuple, set, sortedset, list)):
             # Perform merge if we detected a set of NNTPContent objects
             count = 0
             for content in filepath:
