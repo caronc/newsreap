@@ -143,7 +143,8 @@ class CodecYenc(CodecBase):
         # content
         self.decoded = None
 
-        # Used for encoding
+        # Used for encoding; This defines the maximum number of (encoded)
+        # characters to display per line.
         self.linelen = linelen
 
 
@@ -154,7 +155,7 @@ class CodecYenc(CodecBase):
 
         if isinstance(content, NNTPContent):
             # Create our ascii instance
-            encoded = NNTPAsciiContent(
+            _encoded = NNTPAsciiContent(
                 filepath=content.filename,
                 part=content.part,
                 total_parts=content.total_parts,
@@ -186,9 +187,9 @@ class CodecYenc(CodecBase):
         results = ""
 
 		# yEnc (v1.3) begin
-        fmt_ybegin = '=ybegin part=%d total=%d line=%d size=%d name=%s%s' % (
+        fmt_ybegin = '=ybegin part=%d total=%d line=%d size=%d name=%s' % (
             content.part, content.total_parts, self.linelen,
-            len(content), content.filename, EOL,
+            len(content), content.filename,
         )
         # yEnc part
         fmt_ypart = '=ypart begin=%d end=%d' % (
