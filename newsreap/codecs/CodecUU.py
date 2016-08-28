@@ -17,9 +17,12 @@
 import re
 from os.path import basename
 from binascii import a2b_uu
+from binascii import b2a_uu
 from binascii import Error as BinAsciiError
 
+from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
+from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.Utils import SEEK_SET
 from newsreap.codecs.CodecBase import CodecBase
 
@@ -28,14 +31,21 @@ import logging
 from ..Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
+# Defines the new line delimiter
+EOL = '\r\n'
+
 # Check for begin and end
 UUENCODE_RE = re.compile(
-    r'^\s*((?P<key_1>begin)\s+(?P<perm>[0-9]{3,4})?[\s\'"]*(?P<name>.+)[\'"]*|' +\
-    r'(?P<key_2>end)|' +\
-    r'(?P<key_3>`)' +\
+    r'^\s*((?P<key_1>begin)\s+(?P<perm>[0-9]{3,4})?[\s\'"]*(?P<name>.+)[\'"]*|' +
+    r'(?P<key_2>end)|' +
+    r'(?P<key_3>`)' +
     ')\s*$',
     re.IGNORECASE,
 )
+
+# UUEncode has a fixed size of not being able to encode more than 45 bytes at
+# a time. For this reason we need to read our file in 45 byte chunks
+UUENCODE_BLOCK_SIZE = 45
 
 # This is applied to the regular expression matches to convert
 # key matches into 1
@@ -49,7 +59,7 @@ class CodecUU(CodecBase):
     """
     This codec is used to manage all UUEncoded content found on an NNTP Server.
     """
-    def __init__(self, work_dir=None, *args, **kwargs):
+    def __init__(self, work_dir=None, perm=0664, linelen=128, *args, **kwargs):
         super(CodecUU, self).__init__(work_dir=work_dir, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
@@ -58,6 +68,102 @@ class CodecUU(CodecBase):
         # Our Binary Object we can reference while we decode
         # content
         self.decoded = None
+
+        # Permission
+        self.perm = perm
+
+        # Used for encoding; This defines the maximum number of (encoded)
+        # characters to display per line.
+        self.linelen = linelen
+
+
+    def encode(self, content, mem_buf=UUENCODE_BLOCK_SIZE):
+        """
+        Encodes an NNTPContent object passed in
+        """
+
+        if isinstance(content, NNTPContent):
+            # Create our ascii instance
+            _encoded = NNTPAsciiContent(
+                filepath=content.filename,
+                part=content.part,
+                total_parts=content.total_parts,
+                begin=content.begin(),
+                end=content.end(),
+                total_size=self._total_size(),
+                sort_no=content.sort_no,
+                work_dir=self.work_dir,
+                # We want to ensure we're working with a unique attached file
+                unique=True,
+            )
+
+        else:
+            # Create our ascii instance
+            _encoded = NNTPAsciiContent(
+                work_dir=self.work_dir,
+                # We want to ensure we're working with a unique attached file
+                unique=True,
+            )
+
+            content = NNTPContent(
+                filepath=content,
+                work_dir=self.work_dir,
+            )
+
+        if not content.open():
+            return None
+
+        if mem_buf > UUENCODE_BLOCK_SIZE:
+            logger.warning(
+                "mem_buf (%d) reduced to %d due to uuencode limitations" % \
+                mem_buf, UUENCODE_BLOCK_SIZE,
+            )
+            mem_buf = UUENCODE_BLOCK_SIZE
+        results = ""
+
+        # Header/Footer
+        fmt_ubegin = 'begin %o %s' % (self.perm, content.filename)
+        fmt_uend = '`' + EOL + 'end'
+
+        # Write ubegin line
+        _encoded.write(fmt_ubegin + EOL)
+
+        # We need to parse the content until we either reach
+        # the end of the file or get to an 'end' tag
+        while True:
+            # Read in our data
+            data = content.stream.read(UUENCODE_BLOCK_SIZE)
+            if not data:
+                # We're done
+                break
+
+            # Encode content
+            results += b2a_uu(data)
+
+            # Insert a new line as per defined settings
+            for i in range(0, len(results), self.linelen):
+                _encoded.write(results[i:i+self.linelen] + EOL)
+
+            # Save the last half we couldn't append
+            if len(results) % self.linelen:
+                results = results[-len(results) % self.linelen + 1:]
+
+            else:
+                # reset string
+                results = ''
+
+        # We're done reading our data
+        content.close()
+
+        if len(results):
+            # We still have content left in our buffer
+            _encoded.write(results + EOL)
+
+        # Write footer
+        _encoded.write(fmt_uend + EOL)
+
+        # Return our encoded object
+        return _encoded
 
     def detect(self, line, relative=True):
         """
@@ -182,8 +288,8 @@ class CodecUU(CodecBase):
                 decoded = a2b_uu(data)
 
             except BinAsciiError:
-                ## Workaround for broken uuencoders by
-                ## Fredrik Lundh (taken from uu.py code)
+                # Workaround for broken uuencoders by
+                # Fredrik Lundh (taken from uu.py code)
                 nbytes = (((ord(data[0])-32) & 63) * 4 + 5) / 3
 
                 try:
@@ -217,7 +323,7 @@ class CodecUU(CodecBase):
         # Reset our meta tracking
         self._meta = {}
 
-        if  self.decoded:
+        if self.decoded:
             # close article when complete
             self.decoded.close()
 
