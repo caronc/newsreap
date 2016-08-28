@@ -20,10 +20,12 @@ class NNTPAsciiContent(NNTPContent):
     """
     An Ascii file representation
     """
-    def __init__(self, filepath=None, part=None, work_dir=None, *args, **kwargs):
+    def __init__(self, filepath=None, part=None, total_parts=None,
+                 work_dir=None, *args, **kwargs):
         super(NNTPAsciiContent, self).__init__(
             filepath=filepath,
-            part=part, work_dir=work_dir, sort_no=20000, *args, **kwargs)
+            part=part, total_parts=total_parts, work_dir=work_dir,
+            sort_no=20000, *args, **kwargs)
 
 
     def __next__(self):

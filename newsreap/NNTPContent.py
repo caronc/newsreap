@@ -114,6 +114,52 @@ class NNTPContent(object):
         # value so that they sort their content together.
         self.sort_no = sort_no
 
+        # A _unique string is used to ensure our file is always different
+        # from another
+        self._unique = False
+        if unique:
+            # Convert to string for indexing speed in key() calls since
+            # the index is already in string format
+            self._unique = str(id(self))
+
+        # Default filename
+        self.filename = ''
+
+        # The filepath is automatically set up when the temporary file is
+        # created
+        self.filepath = None
+
+        # used to track the filemode (saves on time from opening and closing
+        # un-nessisarily).  These flags are set during an open and a close
+        self.filemode = None
+
+        # Prepare temporary folder we intend to use by default
+        if work_dir:
+            self.work_dir = abspath(expanduser(work_dir))
+        else:
+            self.work_dir = DEFAULT_TMP_DIR
+
+        # A Stream object
+        self.stream = None
+
+        # Detached prevents the article from cleaning up all of
+        # the data it otherwise tracks (such as the article stored
+        # on disk)
+        #
+        # If set to None, then it hasn't been initalized yet
+        self._detached = None
+
+        # Dirty flag is set to true if a write is made; all data
+        # is considered dirty until flush() is called (forcing
+        # contents out of cache and onto disk)
+        self._dirty = False
+
+        # A flag that can be toggled if the data stored is
+        # corrupted in some way. Such as through CRC Failing
+        # or part construction (a part missing perhaps, etc)
+        # if all is good, then we just leave the flag as is
+        self._is_valid = False
+
         # Store part
         self.part = 1
         if part is not None:
@@ -194,44 +240,6 @@ class NNTPContent(object):
                     str(total_size),
                 )
 
-        # Default filename
-        self.filename = ''
-
-        # The filepath is automatically set up when the temporary file is
-        # created
-        self.filepath = None
-
-        # used to track the filemode (saves on time from opening and closing
-        # un-nessisarily).  These flags are set during an open and a close
-        self.filemode = None
-
-        # Prepare temporary folder we intend to use by default
-        if work_dir:
-            self.work_dir = abspath(expanduser(work_dir))
-        else:
-            self.work_dir = DEFAULT_TMP_DIR
-
-        # A Stream object
-        self.stream = None
-
-        # Detached prevents the article from cleaning up all of
-        # the data it otherwise tracks (such as the article stored
-        # on disk)
-        #
-        # If set to None, then it hasn't been initalized yet
-        self._detached = None
-
-        # Dirty flag is set to true if a write is made; all data
-        # is considered dirty until flush() is called (forcing
-        # contents out of cache and onto disk)
-        self._dirty = False
-
-        # A flag that can be toggled if the data stored is
-        # corrupted in some way. Such as through CRC Failing
-        # or part construction (a part missing perhaps, etc)
-        # if all is good, then we just leave the flag as is
-        self._is_valid = False
-
         # Set blocksize as a variable for those who want to tweak it
         # later on.  This controls the maximum amount of content read
         # from a file in one chunk (thus how much memory will be occupied
@@ -252,16 +260,30 @@ class NNTPContent(object):
         self._lazy_cache = {}
 
         if not filepath:
+            # Will use load() or open() which causes temp file
+            # to be created
             return
 
         elif isinstance(filepath, file):
+
+            # store stream
             self.stream = filepath
 
+            # Always detach streams
+            self._detached = True
+
+            if hasattr('name', self.stream):
+                self.filepath = abspath(expanduser(self.stream.name))
+                self.filename = basename(filepath)
+
+            if hasattr('mode', self.stream):
+                # Store our mode
+                self.filemode = self.stream.mode
         else:
             self.filename = basename(filepath)
 
-            if not unique and isfile(filepath):
-                self.load(filepath)
+            if self._unique is False and isfile(filepath):
+                self.load(filepath, sort_no=sort_no)
 
     def getvalue(self):
         """
@@ -462,19 +484,13 @@ class NNTPContent(object):
                 if content is None:
                     return None
 
-            elif hasattr(enc, 'compress') and \
-               isinstance(enc.compress, MethodType):
-                # We're dealing with a external based encoder
-                content = enc.compress(content.filepath)
-                if content is None:
-                    return None
             else:
                 # We don't support this
                 return None
 
         return content
 
-    def load(self, filepath):
+    def load(self, filepath, sort_no=10000):
         """
         This causes the function to point to the file specified and acts in a
         detached manner to it.
@@ -517,20 +533,8 @@ class NNTPContent(object):
         # Reset Valid Flag
         self._is_valid = False
 
-        # Defines the part of a file this NNTPContent() represents. This is
-        # usually always going to be always set to 1 (one) unless split() is
-        # called. split() causes  the file to be segmented into multiple
-        # smaller ones.
-        self.part = 1
-
-        # This is the total number of parts that make up a segmented
-        # NNTPContent object when segmented (from split() call). If split() is
-        # never called then the total_parts will always be that of 1
-        self.total_parts = 1
-
-        self._total_size = None
-        self._begin = 0
-        self._end = None
+        # Reset Unique Flag
+        self._unique = False
 
         if isinstance(filepath, NNTPContent):
             # Support NNTPContent object copying; by simply storing
@@ -990,9 +994,14 @@ class NNTPContent(object):
             lambda x : x.key()
         """
         if self.part is not None:
-            return '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
+            result = '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
         else:
-            return '%.5d/%s/' % (self.sort_no, self.filename)
+            result = '%.5d/%s//' % (self.sort_no, self.filename)
+
+        if self._unique is not False:
+            return result + self._unique
+
+        return result
 
     def post_iter(self):
         """
@@ -1177,10 +1186,11 @@ class NNTPContent(object):
         Return a printable version of the file being read
         """
         if self.part is not None:
-            return '<NNTPContent sort=%d filename="%s" part=%d len=%s />' % (
+            return '<NNTPContent sort=%d filename="%s" part=%d/%d len=%s />' % (
                 self.sort_no,
                 self.filename,
                 self.part,
+                self.total_parts,
                 bytes_to_strsize(len(self)),
             )
         else:

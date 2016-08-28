@@ -19,10 +19,6 @@ from blist import sortedset
 from copy import deepcopy
 from itertools import chain
 from os.path import isfile
-from string import ascii_uppercase
-from string import digits
-from string import ascii_lowercase
-from random import choice
 from datetime import datetime
 
 from newsreap.NNTPContent import NNTPContent
@@ -31,6 +27,7 @@ from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.NNTPHeader import NNTPHeader
 from newsreap.NNTPSettings import NNTP_EOL
 from newsreap.NNTPSettings import NNTP_EOD
+from newsreap.Utils import random_str
 
 # Logging
 import logging
@@ -384,10 +381,7 @@ class NNTPArticle(object):
 
         if not host:
             # Generate a 32-bit string we can use
-            host = ''.join(
-                choice(
-                    ascii_uppercase + digits + ascii_lowercase,
-                ) for _ in range(32))
+            host = random_str(32)
 
         if len(self.decoded):
             partno = self.decoded[0].part

@@ -14,11 +14,14 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import errno
 from binascii import crc32
 from os.path import join
 from os.path import isdir
+from os.path import abspath
 from os.path import expanduser
 
+from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 from newsreap.Utils import mkdir
 from gevent import sleep
 
@@ -34,10 +37,6 @@ E_CRC32 = 65
 
 # The mask to apply to all CRC checking
 BIN_MASK = 0xffffffffL
-
-# Default temporary directory to use if none are specified
-DEFAULT_TMP_DIR = expanduser(join('~', '.config', 'newsreap', 'var', 'tmp'))
-
 
 class CodecBase(object):
 
@@ -69,7 +68,7 @@ class CodecBase(object):
         if work_dir is None:
             self.work_dir = DEFAULT_TMP_DIR
         else:
-            self.work_dir = work_dir
+            self.work_dir = abspath(expanduser(work_dir))
 
         if not isdir(self.work_dir):
             # create directory
@@ -77,11 +76,11 @@ class CodecBase(object):
                 logger.info('Created directory: %s' % self.work_dir)
             else:
                 logger.error('Failed to created directory: %s' % self.work_dir)
-                ## Should not continue under this circumstance
-                # raise IOError((
-                #     errno.EACCES,
-                #     'Failed to create directory: %s' % self.work_dir,
-                # ))
+                # Should not continue under this circumstance
+                raise IOError((
+                    errno.EACCES,
+                    'Failed to create directory: %s' % self.work_dir,
+                ))
 
         # Tracks the lines processed
         self._lines = 0

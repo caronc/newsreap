@@ -39,6 +39,11 @@ from urllib import quote
 from urllib import unquote
 from os.path import expanduser
 
+from random import choice
+from string import ascii_uppercase
+from string import digits
+from string import ascii_lowercase
+
 from datetime import datetime
 
 # File Stats
@@ -674,7 +679,7 @@ def parse_list(self, *args):
 
 
 def find(search_dir, regex_filter=None, prefix_filter=None,
-                suffix_filter=None, fsinfo=False,
+                suffix_filter=None, fsinfo=False, mime=False,
                followlinks=False, min_depth=None, max_depth=None,
               case_sensitive=False, *args, **kwargs):
     """Returns a dict object of the files found in the download
@@ -722,6 +727,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 prefix_filter=prefix_filter,
                 suffix_filter=suffix_filter,
                 fsinfo=fsinfo,
+                mime=mime,
                 followlinks=followlinks,
                 min_depth=min_depth,
                 max_depth=max_depth,
@@ -845,7 +851,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
         # If we reach here, we can prepare a file using the data
         # we fetch
         _file = {
-            search_dir: stat(search_dir, fsinfo=fsinfo, mime=False),
+            search_dir: stat(search_dir, fsinfo=fsinfo, mime=mime),
         }
         if _file[search_dir] is None:
             del files[search_dir]
@@ -890,6 +896,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 prefix_filter=prefix_filter,
                 suffix_filter=suffix_filter,
                 fsinfo=fsinfo,
+                mime=mime,
                 followlinks=followlinks,
                 min_depth=min_depth,
                 max_depth=max_depth,
@@ -944,7 +951,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 continue
 
         # If we reach here, we store the file found
-        files[fullpath] = stat(dirent, fsinfo=fsinfo, mime=False)
+        files[fullpath] = stat(fullpath, fsinfo=fsinfo, mime=mime)
         if files[fullpath] is None:
             # File was not found or recently removed
             del files[fullpath]
@@ -985,3 +992,12 @@ def pushd(newdir, create_if_missing=False, perm=0775):
     finally:
         # Fall back to previous directory popd()
         chdir(prevdir)
+
+def random_str(count=16, seed=ascii_uppercase + digits + ascii_lowercase):
+    """
+    Generates a random string. This code is based on a great stackoverflow
+    post here: http://stackoverflow.com/questions/2257441/\
+                    random-string-generation-with-upper-case-\
+                    letters-and-digits-in-python
+    """
+    return ''.join(choice(seed) for _ in range(count))

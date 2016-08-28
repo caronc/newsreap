@@ -276,6 +276,9 @@ PROCESSING_VARIABLES = {
 # Keyword used in configuration to host all of the defined NNTP Servers
 PROCESSING_LIST_KEY = 'processing'
 
+# Default temporary directory to use if none are specified
+DEFAULT_TMP_DIR = expanduser(join('~', '.config', 'newsreap', 'var', 'tmp'))
+
 
 class NNTPSettings(NNTPDatabase):
     """

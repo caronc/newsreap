@@ -20,8 +20,15 @@ class NNTPBinaryContent(NNTPContent):
     """
     A Binary file representation
     """
-    def __init__(self, filepath=None, part=None,
+    def __init__(self, filepath=None, part=None, total_parts=None,
+                 begin=None, end=None, total_size=None,
                  work_dir=None, *args, **kwargs):
+        """ Intitialize NNTPBinaryContent
+        """
+
         super(NNTPBinaryContent, self).__init__(
             filepath=filepath,
-            part=part, work_dir=work_dir, sort_no=10000, *args, **kwargs)
+            part=part, total_parts=total_parts,
+            begin=begin, end=end, total_size=total_size,
+            work_dir=work_dir,
+            sort_no=10000, *args, **kwargs)
