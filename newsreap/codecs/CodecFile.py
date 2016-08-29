@@ -73,14 +73,27 @@ COMPRESSION_LEVELS = (
     CompressionLevel.Minimum,
 )
 
-# TODO: Move PAR2 stuff into it's own CodecPar2 file that way it
-# can be optionally chained with other Codecs
 
-# TODO: Check that the work_dir is never that of the encoding path
-# (for obvious reasons)
+class ParityType(object):
+    """
+    Parity Type is used to identify the different types of parity file
+    generation you want to apply to the file(s) you have prepared.
+
+    Parity generation allows some to overcome the obsticles put forth by
+    usenet when content becomes damaged or unavailable.
+    """
+
+    # Don't use any form of parity
+    Disabled = '-'
+    # Create parity content based on the content posted
+    ByPercent = '%'
+    # specify the parity block configuration
+    BySize = 's'
+
 
 # Path to the par2 binary file
 PAR2_BINARY = '/usr/bin/par2'
+
 
 class CodecFile(object):
     """
@@ -89,7 +102,11 @@ class CodecFile(object):
     """
 
     def __init__(self, work_dir=None, password=None,
-                 level=CompressionLevel.Average, *args, **kwargs):
+                 level=CompressionLevel.Average,
+                 # Default parity configuration is to generate enough parity
+                 # content to cover up to 35% of the content to be posted
+                 parity=(ParityType.ByPercent, 35),
+                 *args, **kwargs):
         """
         The dir identfies the directory to store our sessions in
         until they can be properly handled.
@@ -132,6 +149,9 @@ class CodecFile(object):
         # Contains a list of paths to be archived
         self.archive = set()
 
+        # Parity Configuration
+        self.parity = parity
+
     def add(self, path):
         """
         Adds files, directories, NNTPContent() and NNTPArticle objects
@@ -143,7 +163,6 @@ class CodecFile(object):
         # and after so that we can properly return a True/False
         # value
         _bcnt = len(self.archive)
-
 
         if isinstance(path, basestring):
             # Support Directories and filenames
@@ -235,14 +254,36 @@ class CodecFile(object):
             "CodecFile() inheriting class is required to impliment decompress()"
         )
 
-    def generate_pars(self, path, *args, **kwargs):
+    def create_parity(self, content, *args, **kwargs):
         """
         Provide the path to where content can be found and PAR2 files will be
-        generated. A list of NNTPBinaryContent() objects will be returned plus
+        generated. A set of NNTPBinaryContent() objects will be returned plus
         one NNTPAsciiContent() containing the PAR2 meta file.
 
         """
-        # TODO
+        # Extract our data
+        p_type, p_val = self.parity
+
+        # Create our result set
+        results = sortedset(key=lambda x: x.key())
+
+        # TODO: Finish this class
+
+        results = self.get_paths(content)
+        if p_type is ParityType.Disabled:
+            # Nothing more to do
+            return results
+
+        if p_type is ParityType.ByPercent:
+            # TODO
+            pass
+
+        elif p_type is ParityType.BySize:
+            # TODO
+            pass
+
+        else:
+            return None
 
     def can_exe(self, fpath):
         """
@@ -303,6 +344,101 @@ class CodecFile(object):
             )
 
         return tmp_path, tmp_file
+
+    def get_paths(self, content):
+        """
+        When supplied content which can be a NNTPArticle(), NNTPContent()
+        a directory, and/or file. get_paths() returns all of the results
+        in a unique set().  get_paths() also supports iterating over
+        tuples, sets, sortedsets and lists to fetch this information.
+
+        If a directory is passed in that maps against individual content
+        within the directory; that content is removed from the list causing
+        the directory to trump content within.
+
+        This is a helper function that greatly makes the handling of multiple
+        content types easier to work with. Ideally each Codec that inherits
+        from this class should use this prior to the actual archiving to keep
+        command line arguments to a minimum and consistent with the rules
+        defined in this (where directories trump).
+
+        """
+
+        # Create a set to store our results in
+        results = set()
+
+        if isinstance(content, (set, tuple, list, sortedset)):
+            # Iterate over the entries passing them back into this function
+            # recursively
+            for v in content:
+                results |= self.get_paths(v)
+
+        elif isinstance(content, basestring):
+            content = abspath(expanduser(content))
+            if exists(content):
+                results.add(content)
+
+        elif isinstance(content, NNTPContent):
+            if content.filepath and exists(content.filepath):
+                results.add(content.filepath)
+
+        elif isinstance(content, NNTPArticle):
+            for c in content:
+                if c.filepath and exists(c.filepath):
+                    results.add(c.filepath)
+
+        if len(results) <= 1:
+            # Save ourselves some energy
+            return results
+
+        # Acquire a list of directories since these will trump any file
+        # entries found that reside in them.
+        _dirs = set([r for r in results if isdir(r)])
+
+        if _dirs:
+            # Adjust our results to eliminate any files that reside within
+            # directories that have been queued as well.
+            #
+            # Basically we want to look for files that reside in a directory
+            # we've already identified to include too and turf the files that
+            # reside within them.  Thus directories trump!
+            #
+            # Hence if we find:
+            #   - /path/to/data/dir/a/great/file
+            #   - /path/to/data/dir/a.wonderful.file
+            #   - /path/to/data/dir
+            #   - /path/to/another.file
+            #
+            # We would keep:
+            #   - /path/to/data/dir
+            #   - /path/to/another.file
+            #
+            # We would turf the remaining files because they can be
+            # found within the /path/to/data/dir
+            results = set([r for r in results if r not in _dirs and next(
+                (False for d in _dirs \
+                 if r.startswith(d, 0, len(d)) is True), True)])
+
+            if len(_dirs) > 1:
+                # Perform the same check with our directories (a directory
+                # can not include another directory higher up) The shortest
+                # directory trumps a larger one.
+                # hence if we find:
+                #   - /path/to/data/dir/
+                #   - /path/to/data
+                #
+                # We would drop the /path/to/data/dir/ since the /path/to/data
+                # already includes it
+                _dirs = set([_d for _d in _dirs if next(
+                    (True for d in _dirs if _d != d and \
+                     d.startswith(_d, 0, len(d)) is True), False)])
+
+            # Since we stripped out directories earlier for some pre-processing
+            # we need to add them back here
+            results |= _dirs
+
+        # Return our results
+        return results
 
     def watch_dir(self, path, prefix='', ignore=None, seconds=15):
         """Monitors a directory for files that have been added/changed
