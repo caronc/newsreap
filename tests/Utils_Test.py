@@ -28,6 +28,7 @@ from os.path import abspath
 from os.path import dirname
 from os.path import basename
 from os.path import isdir
+from os.path import isfile
 from os.path import join
 from os import chmod
 from os import getcwd
@@ -49,6 +50,7 @@ from newsreap.Utils import stat
 from newsreap.Utils import mkdir
 from newsreap.Utils import pushd
 from newsreap.Utils import find
+from newsreap.Utils import rm
 from newsreap.Utils import parse_list
 
 import logging
@@ -318,6 +320,7 @@ class Utils_Test(TestBase):
         except Exception:
             # We're back to where we were
             assert getcwd() == cur_dir
+
     def test_parse_list(self):
         """
         Test parse_list function
@@ -344,7 +347,7 @@ class Utils_Test(TestBase):
         # Now a list with extras we want to add as strings
         # empty entries are removed
         results = parse_list([
-            '.divx', '.iso', '.mkv', '.mov','', '  ',
+            '.divx', '.iso', '.mkv', '.mov', '', '  ',
             '.avi', '.mpeg', '.vob', '.xvid', '.mp4',
         ], '.mov,.wmv,.mp4,.mpg')
         assert results == [
@@ -354,7 +357,7 @@ class Utils_Test(TestBase):
 
         # Support Sets and Sorted Sets
         results = parse_list(
-            set(['.divx', '.iso', '.mkv', '.mov','', '  ', '.avi', '.mpeg',
+            set(['.divx', '.iso', '.mkv', '.mov', '', '  ', '.avi', '.mpeg',
                  '.vob', '.xvid', '.mp4']),
             '.mov,.wmv,.mp4,.mpg',
             sortedset(['.vob', '.xvid']),
@@ -378,7 +381,9 @@ class Utils_Test(TestBase):
 
         # Create 10 temporary files
         for idx in range(1, 11):
-            assert self.touch(join(work_dir, 'file%.3d-extra.mkv' % idx)) is True
+            assert self.touch(
+                join(work_dir, 'file%.3d-extra.mkv' % idx),
+            ) is True
 
         # Create some other random entries of close names (+4 files)
         assert self.touch(join(work_dir, 'File000.mkv')) is True
@@ -441,7 +446,9 @@ class Utils_Test(TestBase):
 
         # Create 10 temporary files
         for idx in range(1, 11):
-            assert self.touch(join(work_dir, 'file%.3d-extra.mkv' % idx)) is True
+            assert self.touch(
+                join(work_dir, 'file%.3d-extra.mkv' % idx),
+            ) is True
 
         # Create some other random entries of close names (+4 files)
         assert self.touch(join(work_dir, 'File000.mkv')) is True
@@ -503,7 +510,9 @@ class Utils_Test(TestBase):
 
         # Create 10 temporary files
         for idx in range(1, 11):
-            assert self.touch(join(work_dir, 'file%.3d-extra.mpeg' % idx)) is True
+            assert self.touch(
+                join(work_dir, 'file%.3d-extra.mpeg' % idx),
+            ) is True
 
         # Create some other random entries of close names (+4 files)
         assert self.touch(join(work_dir, 'File000.mpg')) is True
@@ -514,12 +523,20 @@ class Utils_Test(TestBase):
         # At this point we have our temporary directory filled with 24 files.
 
         # Case insensitive results
-        results = find(work_dir, regex_filter='.*\.mpe?g$', case_sensitive=False)
+        results = find(
+            work_dir,
+            regex_filter='.*\.mpe?g$',
+            case_sensitive=False,
+        )
         assert isinstance(results, dict)
         assert len(results) == 22
 
         # Case sensitive results won't pick up on unknown.MPEG
-        results = find(work_dir, regex_filter='.*\.mpe?g$', case_sensitive=True)
+        results = find(
+            work_dir,
+            regex_filter='.*\.mpe?g$',
+            case_sensitive=True,
+        )
         assert isinstance(results, dict)
         assert len(results) == 21
 
@@ -593,7 +610,9 @@ class Utils_Test(TestBase):
         assert self.touch(join(work_dir, 'depth01.jpeg')) is True
         for idx in range(2, 11):
             work_dir_depth = join(work_dir_depth, 'level%.2d' % idx)
-            assert self.touch(join(work_dir_depth, 'depth%.2d.jpeg' % idx)) is True
+            assert self.touch(
+                join(work_dir_depth, 'depth%.2d.jpeg' % idx),
+            ) is True
 
         # Just to give us a ballpark of the total files (and depth) we're
         # looking at here:
@@ -671,3 +690,136 @@ class Utils_Test(TestBase):
             max_depth=4,
             case_sensitive=True,
         ) is None
+
+        # Create some more depth levels to test that we scan all directories of
+        # all levels when requested.
+        #   /level02b/depth02b.jpeg
+        #   /level02b/level03b/depth03.jpeg
+        #   /level02b/level03b/level04b/depth04.jpeg
+        #   ...
+
+        # This runs in parallel with the directories already created above
+        work_dir_depth = work_dir
+        for idx in range(2, 11):
+            work_dir_depth = join(work_dir_depth, 'level%.2db' % idx)
+            assert self.touch(
+                join(work_dir_depth, 'depth%.2d.jpeg' % idx),
+            ) is True
+
+        # Just to give us a ballpark of the total files (and depth) we're
+        # looking at here:
+        results = find(
+            work_dir,
+            suffix_filter='.jpeg',
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        # Not 20 (because no extra file was created on depth level 1)
+        assert len(results) == 19
+
+        # Search only the second level
+        results = find(
+            work_dir,
+            suffix_filter='.jpeg',
+            min_depth=2,
+            max_depth=2,
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        # there should be 2 now
+        assert len(results) == 2
+
+        for k in results.keys():
+            # 2 directories now each with the same filename
+            assert 'depth02.jpeg' == basename(k)
+
+    def test_rm(self):
+        """
+        rm is just a simple wrapper for unlink and rmtree.
+        it returns True if it was successful and false if it failed.
+
+        it's equivalent to rm -rf <path>
+
+        """
+
+        work_dir = join(self.tmp_dir, 'Utils_Test.rm')
+        # The directory should not exist
+        assert isdir(work_dir) is False
+
+        # mkdir() should be successful
+        assert mkdir(work_dir) is True
+
+        # Remove the directory
+        assert rm(work_dir) is True
+
+        # The directory should not exist
+        assert isdir(work_dir) is False
+
+        # Temporary directory
+        tmp_dir = join(work_dir, 'testdir', 'test01')
+        tmp_file = join(tmp_dir, 'test.file.ogg')
+
+        # create a file in it
+        assert self.touch(tmp_file, perm=0000) is True
+
+        # The directory should exist
+        assert isdir(tmp_dir) is True
+        assert isfile(tmp_file) is True
+
+        # Remove the directory
+        assert rm(tmp_dir) is True
+
+        # The directory nor the file should no longer exist
+        assert isdir(tmp_dir) is False
+        assert isfile(tmp_file) is False
+
+        # Create the file again
+        assert self.touch(tmp_file, perm=0000) is True
+        assert isfile(tmp_file) is True
+        # Set the directory it resides in with bad permissions
+        chmod(tmp_dir, 0000)
+
+        # The directory should exist
+        assert isdir(tmp_dir) is True
+
+        # Remove the directory; just using rmtree() in this circumstance would
+        # cause an exception to be thrown, however rm() should handle this
+        # gracefully
+        assert rm(tmp_dir) is True
+
+        # The directory nor the file should no longer exist
+        assert isdir(tmp_dir) is False
+        assert isfile(tmp_file) is False
+
+        # Now just to repeat this step with a directory without permissions
+        # within a directory without permissions
+
+        tmp_dir_level2 = join(tmp_dir, 'level02')
+        tmp_file = join(tmp_dir_level2, 'test.file.ogg')
+        # create a file in it
+        assert self.touch(tmp_file, perm=0000) is True
+
+        # The directories and file should exist now
+        assert isdir(tmp_dir) is True
+        assert isdir(tmp_dir_level2) is True
+        assert isfile(tmp_file) is True
+
+        # Set the directory it resides in with bad permissions
+        chmod(tmp_dir_level2, 0000)
+        chmod(tmp_dir, 0000)
+
+        # Remove the directory; just using rmtree() in this circumstance would
+        # cause an exception to be thrown, however rm() should handle this
+        # gracefully
+        assert rm(tmp_dir) is True
+
+        # The directory nor the file should no longer exist
+        assert isdir(tmp_dir) is False
+        assert isdir(tmp_dir_level2) is False
+        assert isfile(tmp_file) is False
+
+        # Support just the removal of files too (not just directories)
+        assert self.touch(tmp_file, perm=0000) is True
+        assert isfile(tmp_file) is True
+        assert rm(tmp_file) is True
+        assert isfile(tmp_file) is False

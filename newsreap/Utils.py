@@ -21,6 +21,8 @@ from os import listdir
 from os import makedirs
 from os import access
 from os import chmod
+from os import lstat
+from os import error as _OSError
 
 from os.path import isdir
 from os.path import exists
@@ -38,7 +40,7 @@ from contextlib import contextmanager
 from os import getcwd
 from os import chdir
 from os import unlink
-from shutil import rmtree
+from os import rmdir
 
 from urlparse import urlparse
 from urlparse import parse_qsl
@@ -57,7 +59,8 @@ from stat import ST_ATIME
 from stat import ST_CTIME
 from stat import ST_MTIME
 from stat import ST_SIZE
-from stat import S_IWUSR
+from stat import S_IRWXU
+from stat import S_ISDIR
 
 from os import W_OK
 from os import stat as os_stat
@@ -151,6 +154,9 @@ PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py?$')
 VALID_URL_RE = re.compile(r'^[\s]*([^:\s]+):[/\\]*([^?]+)(\?(.+))?[\s]*$')
 VALID_HOST_RE = re.compile(r'^[\s]*([^:/\s]+)')
 VALID_QUERY_RE = re.compile(r'^(.*[/\\])([^/\\]*)$')
+
+# The maximum number of recursive calls that can be made to rm
+RM_RECURSION_LIMIT = 100
 
 
 def strsize_to_bytes(strsize):
@@ -376,56 +382,108 @@ def mkdir(name, perm=0775):
     return False
 
 
-def rm(path):
+def rm(path, *args, **kwargs):
     """
-    A wrapper to rmtree and unlink().  More importantly, Microsoft Windows
+    A  rmtree reimplimentation. More importantly, Microsoft Windows
     can't recursively delete a directory if it contains read-only files
-    within it.
+    with rmtree().  This rm() attempts to handle this. Symbolic links
+    are not supported
 
-    Source: http://stackoverflow.com/a/2656405
+    See http://stackoverflow.com/a/2656405 for a partial basis of
+    why this rewrite exists.  The on_error refernced in this function didn't
+    really satisfy my needs, so a rewrite of the rmtree() function was required.
 
     """
-    def __on_error(func, path, exc_info):
-        """
-        Error handler for ``shutil.rmtree``.
-
-        If the error is due to an access error (read only file)
-        it attempts to add write permission and then retries.
-
-        If the error is for another reason it re-raises the error.
-
-        Usage : ``shutil.rmtree(path, onerror=onerror)``
-        """
-        if not access(path, W_OK):
-            # Is the error an access error ?
-            chmod(path, S_IWUSR)
-            func(path)
-        else:
-            # Failed to remove
-            return False
-
     if not exists(path):
         # Nothing more to do
         return True
 
-    if isdir(path):
+    # We track our recursion level so we don't go in some unexitable loop
+    recursion_count = kwargs.get('__recursion_count', 0)
+    if recursion_count == 0:
+        # We're on our first iteration
+        logger.debug('Attempting to remove %s' % path)
+
+    elif recursion_count >= RM_RECURSION_LIMIT:
+        # Recursive Limit reached
+        return False
+
+    if not access(path, W_OK):
+        # Is the error an access error ?
+        chmod(path, S_IRWXU)
+
+    if islink(path):
+        # symlinks to directories are forbidden (taken from shutils.rmtree()
+        # see: https://bugs.python.org/issue1669
+
+        # We'll attempt to treat the link as a file and NOT a directory. If we
+        # fail then we're done
         try:
-            rmtree(path, onerror=__on_error)
-            logger.debug('Removed directory %s' % path)
+            unlink(path)
+            logger.debug('Removed link %s' % path)
+            return True
 
         except:
             logger.warning(
-                'Failed to remove directory %s' % path)
+                'Failed to remove link %s' % path)
             return False
+
+    if isdir(path):
+        names = []
+        try:
+            names = listdir(path)
+
+        except _OSError:
+            # Failed
+            return False
+
+        for name in names:
+            fullname = join(path, name)
+            try:
+                mode = lstat(fullname).st_mode
+
+            except _OSError:
+                mode = 0
+
+            if S_ISDIR(mode):
+                if not access(fullname, W_OK):
+                    # Make sure we can access 'this' path
+                    chmod(fullname, S_IRWXU)
+
+                try:
+                    # Attempt to remove directory
+                    rmdir(fullname)
+
+                except _OSError:
+                    # It's not empty, so recursively enter it
+                    if not rm(fullname, __recursion_level=recursion_count+1):
+                        return False
+            else:
+                # We're dealing with file/link
+                try:
+                    unlink(fullname)
+                    logger.debug('Removed file %s' % fullname)
+
+                except:
+                    logger.warning('Failed to remove file %s' % fullname)
+                    return False
+
+        try:
+            rmdir(path)
+            logger.debug('Removed file %s' % path)
+
+        except _OSError:
+            logger.warning('Failed to remove file %s' % path)
+            return False
+
     else:
-        # We're dealing with file
+        # We're dealing with file/link
         try:
             unlink(path)
             logger.debug('Removed file %s' % path)
 
         except:
-            logger.warning(
-                'Failed to remove file %s' % path)
+            logger.warning('Failed to remove file %s' % path)
             return False
 
     return True
