@@ -16,28 +16,34 @@
 
 import re
 import errno
+from blist import sortedset
 from os import listdir
 from os import makedirs
+from os import access
+from os import chmod
+
 from os.path import isdir
+from os.path import exists
 from os.path import join
 from os.path import islink
 from os.path import isfile
 from os.path import dirname
 from os.path import abspath
 from os.path import basename
-from os.path import normpath
 from os.path import splitext
+from os.path import expanduser
 
 # for pushd() popd() context
 from contextlib import contextmanager
 from os import getcwd
 from os import chdir
+from os import unlink
+from shutil import rmtree
 
 from urlparse import urlparse
 from urlparse import parse_qsl
 from urllib import quote
 from urllib import unquote
-from os.path import expanduser
 
 from random import choice
 from string import ascii_uppercase
@@ -51,7 +57,9 @@ from stat import ST_ATIME
 from stat import ST_CTIME
 from stat import ST_MTIME
 from stat import ST_SIZE
+from stat import S_IWUSR
 
+from os import W_OK
 from os import stat as os_stat
 
 # MIME Libraries
@@ -224,6 +232,7 @@ def strsize_to_bytes(strsize):
     # Unsupported Type
     return None
 
+
 def bytes_to_strsize(byteval):
     """
     This function returns the string size equivalent (as a string) that best
@@ -366,6 +375,60 @@ def mkdir(name, perm=0775):
     # ... fall through...
     return False
 
+
+def rm(path):
+    """
+    A wrapper to rmtree and unlink().  More importantly, Microsoft Windows
+    can't recursively delete a directory if it contains read-only files
+    within it.
+
+    Source: http://stackoverflow.com/a/2656405
+
+    """
+    def __on_error(func, path, exc_info):
+        """
+        Error handler for ``shutil.rmtree``.
+
+        If the error is due to an access error (read only file)
+        it attempts to add write permission and then retries.
+
+        If the error is for another reason it re-raises the error.
+
+        Usage : ``shutil.rmtree(path, onerror=onerror)``
+        """
+        if not access(path, W_OK):
+            # Is the error an access error ?
+            chmod(path, S_IWUSR)
+            func(path)
+        else:
+            # Failed to remove
+            return False
+
+    if not exists(path):
+        # Nothing more to do
+        return True
+
+    if isdir(path):
+        try:
+            rmtree(path, onerror=__on_error)
+            logger.debug('Removed directory %s' % path)
+
+        except:
+            logger.warning(
+                'Failed to remove directory %s' % path)
+            return False
+    else:
+        # We're dealing with file
+        try:
+            unlink(path)
+            logger.debug('Removed file %s' % path)
+
+        except:
+            logger.warning(
+                'Failed to remove file %s' % path)
+            return False
+
+    return True
 
 def scan_pylib(paths, ignore_re=DEFAULT_PYLIB_IGNORE_LIST):
     """
@@ -631,7 +694,7 @@ def parse_url(url, default_schema='http'):
     return result
 
 
-def parse_list(self, *args):
+def parse_list(*args):
     """
     Take a string list and break it into a delimited
     list of arguments. This funciton also supports
@@ -657,13 +720,13 @@ def parse_list(self, *args):
         if isinstance(arg, basestring):
             result += re.split(STRING_DELIMITERS, arg)
 
-        elif isinstance(arg, (list, tuple)):
+        elif isinstance(arg, (list, tuple, set, sortedset)):
             for _arg in arg:
                 if isinstance(arg, basestring):
                     result += re.split(STRING_DELIMITERS, arg)
 
                 # A list inside a list? - use recursion
-                elif isinstance(_arg, (list, tuple)):
+                elif isinstance(_arg, (list, tuple, set, sortedset)):
                     result += parse_list(_arg)
 
                 else:
@@ -710,15 +773,25 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
              }
           }
 
+          the function returns None if something bad happens
+
     """
 
     # Internal Tracking of Directory Depth
     current_depth = kwargs.get('__current_depth', 1)
+    if current_depth == 1:
+        # General Error Checking for first iteration through
+        if min_depth and max_depth and min_depth > max_depth:
+            return None
+
+        # Translate to full absolute path
+        search_dir = abspath(expanduser(search_dir))
+
     root_dir = kwargs.get('__root_dir', search_dir)
 
     # Build file list
     files = {}
-    if isinstance(search_dir, (list, tuple)):
+    if isinstance(search_dir, (sortedset, set, list, tuple)):
         for _dir in search_dir:
             # use recursion to build a master (unique) list
             files = dict(files.items() + find(
@@ -771,9 +844,10 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
         _filters = []
         for f in regex_filter:
             if not isinstance(f, re._pattern_type):
-                flags = re.MULTILINE
+                flags = 0x0
                 if not case_sensitive:
-                    flags |= re.IGNORECASE
+                    flags = re.IGNORECASE
+
                 try:
                     _filters.append(re.compile(f, flags=flags))
 
@@ -781,7 +855,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                     logger.error(
                         'Invalid regular expression: "%s"' % f,
                     )
-                    return {}
+                    return None
             else:
                 # precompiled already
                 _filters.append(f)
@@ -796,12 +870,8 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
             len(prefix_filter) + len(suffix_filter) + len(regex_filter),
         ))
 
-    if not dirname(search_dir):
-        search_dir = join(root_dir, search_dir)
-
     if isfile(search_dir):
         fname = basename(search_dir)
-        dname = abspath(dirname(search_dir))
         filtered = False
         if regex_filter:
             filtered = True
@@ -815,6 +885,8 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
             filtered = True
             for prefix in prefix_filter:
                 if case_sensitive:
+                    # We use slicing and not startswith() because slicing is
+                    # faster
                     if fname[0:len(prefix)] == prefix:
                         logger.debug('Allowed %s (prefix)' % fname)
                         filtered = False
@@ -830,6 +902,8 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
             filtered = True
             for suffix in suffix_filter:
                 if case_sensitive:
+                    # We use slicing and not endswith() because slicing is
+                    # faster
                     if fname[-len(suffix):] == suffix:
                         # Allowed
                         filtered = False
@@ -844,9 +918,6 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
         if filtered:
             # File does not meet implied filters
             return {}
-
-        # Update our search_dir
-        search_dir = join(dname, fname)
 
         # If we reach here, we can prepare a file using the data
         # we fetch
@@ -865,10 +936,6 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
     elif not isdir(search_dir):
         return {}
 
-    # For depth matching
-    search_dir = normpath(search_dir)
-    current_depth += 1
-
     # Get Directory entries
     dirents = [d for d in listdir(search_dir) \
               if d not in ('..', '.')]
@@ -878,11 +945,8 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
         fullpath = join(search_dir, dirent)
 
         if isdir(fullpath):
-            # Min and Max depth handling
-            if max_depth and max_depth < current_depth:
-                continue
-
-            if min_depth and min_depth > current_depth:
+            # Max Depth Handling
+            if max_depth and max_depth <= current_depth:
                 continue
 
             if not followlinks and islink(fullpath):
@@ -902,16 +966,19 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 max_depth=max_depth,
                 case_sensitive=case_sensitive,
                 # Internal Current Directory Depth tracking
-                __current_depth=current_depth,
+                __current_depth=current_depth+1,
                 __root_dir=root_dir,
             ).items())
             continue
 
         elif not isfile(fullpath):
             # Unknown Type
+            logger.debug('Skipping %s (unknown)' % dirent)
             continue
 
-        filtered = False
+        # Min depth handling
+        if min_depth and min_depth > current_depth:
+            continue
 
         # Apply filters to match filed
         if regex_filter:
@@ -926,25 +993,43 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 # Denied
                 continue
 
-        if not filtered and prefix_filter:
+        if prefix_filter:
             filtered = True
             for prefix in prefix_filter:
-                if dirent[0:len(prefix)] == prefix:
-                    logger.debug('Allowed %s (prefix)' % dirent)
-                    filtered = False
-                    break
+                if case_sensitive:
+                    # We use slicing and not startswith() because slicing is
+                    # faster
+                    if dirent[0:len(prefix)] == prefix:
+                        logger.debug('Allowed %s (prefix)' % dirent)
+                        filtered = False
+                        break
+                else:
+                    # Not Case Sensitive
+                    if dirent[0:len(prefix)].lower() == prefix.lower():
+                        logger.debug('Allowed %s (prefix)' % dirent)
+                        filtered = False
+                        break
 
             if filtered:
                 # Denied
                 continue
 
-        if not filtered and suffix_filter:
+        if suffix_filter:
             filtered = True
             for suffix in suffix_filter:
-                if dirent[-len(suffix):] == suffix:
-                    logger.debug('Allowed %s (suffix)' % dirent)
-                    filtered = False
-                    break
+                if case_sensitive:
+                    # We use slicing and not endswith() because slicing is
+                    # faster
+                    if dirent[-len(suffix):] == suffix:
+                        logger.debug('Allowed %s (suffix)' % dirent)
+                        filtered = False
+                        break
+                else:
+                    # Not Case Sensitive
+                    if dirent[-len(suffix):].lower() == suffix.lower():
+                        logger.debug('Allowed %s (suffix)' % dirent)
+                        filtered = False
+                        break
 
             if filtered:
                 # Denied
@@ -962,6 +1047,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
 
     # Return all files
     return files
+
 
 @contextmanager
 def pushd(newdir, create_if_missing=False, perm=0775):
@@ -992,6 +1078,7 @@ def pushd(newdir, create_if_missing=False, perm=0775):
     finally:
         # Fall back to previous directory popd()
         chdir(prevdir)
+
 
 def random_str(count=16, seed=ascii_uppercase + digits + ascii_lowercase):
     """

@@ -23,8 +23,10 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
+from blist import sortedset
 from os.path import abspath
 from os.path import dirname
+from os.path import basename
 from os.path import isdir
 from os.path import join
 from os import chmod
@@ -46,6 +48,12 @@ from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import stat
 from newsreap.Utils import mkdir
 from newsreap.Utils import pushd
+from newsreap.Utils import find
+from newsreap.Utils import parse_list
+
+import logging
+from newsreap.Logging import NEWSREAP_ENGINE
+logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.DEBUG)
 
 
 class Utils_Test(TestBase):
@@ -283,8 +291,8 @@ class Utils_Test(TestBase):
 
         try:
             with pushd(work_dir):
-                # We should throw an exeption here and never make it to the assert
-                # call below
+                # We should throw an exeption here and never make it to the
+                # assert call below; but just incase ...
                 assert False
 
         except OSError, e:
@@ -310,3 +318,356 @@ class Utils_Test(TestBase):
         except Exception:
             # We're back to where we were
             assert getcwd() == cur_dir
+    def test_parse_list(self):
+        """
+        Test parse_list function
+        """
+        # A simple single array entry (As str)
+        results = parse_list('.mkv,.avi,.divx,.xvid,' + \
+                '.mov,.wmv,.mp4,.mpg,.mpeg,.vob,.iso')
+
+        assert results == [
+            '.divx', '.iso', '.mkv', '.mov', '.mpg',
+            '.avi', '.mpeg', '.vob', '.xvid', '.wmv', '.mp4',
+        ]
+
+        # Now 2 lists with lots of duplicates and other delimiters
+        results = parse_list('.mkv,.avi,.divx,.xvid,' + \
+                '.mov,.wmv,.mp4,.mpg .mpeg,.vob,,; ;',
+                '.mkv,.avi,.divx,.xvid,' + \
+                '.mov        .wmv,.mp4;.mpg,.mpeg,.vob,.iso')
+        assert results == [
+            '.divx', '.iso', '.mkv', '.mov', '.mpg',
+            '.avi', '.mpeg', '.vob', '.xvid', '.wmv', '.mp4',
+        ]
+
+        # Now a list with extras we want to add as strings
+        # empty entries are removed
+        results = parse_list([
+            '.divx', '.iso', '.mkv', '.mov','', '  ',
+            '.avi', '.mpeg', '.vob', '.xvid', '.mp4',
+        ], '.mov,.wmv,.mp4,.mpg')
+        assert results == [
+            '.divx', '.wmv', '.iso', '.mkv', '.mov',
+            '.mpg', '.avi', '.vob', '.xvid', '.mpeg', '.mp4',
+        ]
+
+        # Support Sets and Sorted Sets
+        results = parse_list(
+            set(['.divx', '.iso', '.mkv', '.mov','', '  ', '.avi', '.mpeg',
+                 '.vob', '.xvid', '.mp4']),
+            '.mov,.wmv,.mp4,.mpg',
+            sortedset(['.vob', '.xvid']),
+        )
+        assert results == [
+            '.divx', '.wmv', '.iso', '.mkv', '.mov',
+            '.mpg', '.avi', '.vob', '.xvid', '.mpeg', '.mp4',
+        ]
+
+    def test_find_prefix(self):
+        """
+        Test the prefix part of the find function
+        """
+
+        # Temporary directory to work with
+        work_dir = join(self.tmp_dir, 'Utils_Test.find', 'prefix')
+
+        # Create 10 temporary files
+        for idx in range(1, 11):
+            assert self.touch(join(work_dir, 'file%.3d.mkv' % idx)) is True
+
+        # Create 10 temporary files
+        for idx in range(1, 11):
+            assert self.touch(join(work_dir, 'file%.3d-extra.mkv' % idx)) is True
+
+        # Create some other random entries of close names (+4 files)
+        assert self.touch(join(work_dir, 'File000.mkv')) is True
+        assert self.touch(join(work_dir, 'File000-EXTRA.nfo')) is True
+        assert self.touch(join(work_dir, 'unknown.avi')) is True
+        assert self.touch(join(work_dir, 'README')) is True
+
+        # At this point we have our temporary directory filled with 24 files.
+
+        # Case insensitive results
+        results = find(work_dir, prefix_filter='file', case_sensitive=False)
+        assert isinstance(results, dict)
+        assert len(results) == 22
+
+        # Case sensitive results won't pick up on File000.mkv and
+        # File000-EXTRA.nfo
+        results = find(work_dir, prefix_filter='file', case_sensitive=True)
+        assert isinstance(results, dict)
+        assert len(results) == 20
+
+        # We can also pass in a tuple of prefixes which will cause us to hit
+        # more matches
+        results = find(
+            work_dir,
+            prefix_filter=('file', 'File'),
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 22
+
+        # support list of prefixes
+        results = find(
+            work_dir,
+            prefix_filter=['file', 'File', 'unknown'],
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 23
+
+        # support set of prefixes
+        results = find(
+            work_dir,
+            prefix_filter=set(['file', 'File', 'unknown', 'README']),
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 24
+
+    def test_find_suffix(self):
+        """
+        Test the suffix part of the find function
+        """
+
+        # Temporary directory to work with
+        work_dir = join(self.tmp_dir, 'Utils_Test.find', 'suffix')
+
+        # Create 10 temporary files
+        for idx in range(1, 11):
+            assert self.touch(join(work_dir, 'file%.3d.mkv' % idx)) is True
+
+        # Create 10 temporary files
+        for idx in range(1, 11):
+            assert self.touch(join(work_dir, 'file%.3d-extra.mkv' % idx)) is True
+
+        # Create some other random entries of close names (+4 files)
+        assert self.touch(join(work_dir, 'File000.mkv')) is True
+        assert self.touch(join(work_dir, 'File000-EXTRA.nfo')) is True
+        assert self.touch(join(work_dir, 'unknown.MKV')) is True
+        assert self.touch(join(work_dir, 'README')) is True
+
+        # At this point we have our temporary directory filled with 24 files.
+
+        # Case insensitive results
+        results = find(work_dir, suffix_filter='mkv', case_sensitive=False)
+        assert isinstance(results, dict)
+        assert len(results) == 22
+
+        # Case sensitive results won't pick up on unknown.MKV
+        results = find(work_dir, suffix_filter='mkv', case_sensitive=True)
+        assert isinstance(results, dict)
+        assert len(results) == 21
+
+        # We can also pass in a tuple of suffixes which will cause us to hit
+        # more matches
+        results = find(
+            work_dir,
+            suffix_filter=('MKV', 'ME'),
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 2
+
+        # support list of suffixes
+        results = find(
+            work_dir,
+            suffix_filter=['nfo', 'mkv', 'README'],
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 23
+
+        # support set of suffixes
+        results = find(
+            work_dir,
+            suffix_filter=['nfo', 'mkv', 'MKV', 'README'],
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 24
+
+    def test_find_regex(self):
+        """
+        Test the regex part of the find function
+        """
+
+        # Temporary directory to work with
+        work_dir = join(self.tmp_dir, 'Utils_Test.find', 'regex')
+
+        # Create 10 temporary files
+        for idx in range(1, 11):
+            assert self.touch(join(work_dir, 'file%.3d.mpg' % idx)) is True
+
+        # Create 10 temporary files
+        for idx in range(1, 11):
+            assert self.touch(join(work_dir, 'file%.3d-extra.mpeg' % idx)) is True
+
+        # Create some other random entries of close names (+4 files)
+        assert self.touch(join(work_dir, 'File000.mpg')) is True
+        assert self.touch(join(work_dir, 'File000-EXTRA.nfo')) is True
+        assert self.touch(join(work_dir, 'unknown.MPEG')) is True
+        assert self.touch(join(work_dir, 'README.txt')) is True
+
+        # At this point we have our temporary directory filled with 24 files.
+
+        # Case insensitive results
+        results = find(work_dir, regex_filter='.*\.mpe?g$', case_sensitive=False)
+        assert isinstance(results, dict)
+        assert len(results) == 22
+
+        # Case sensitive results won't pick up on unknown.MPEG
+        results = find(work_dir, regex_filter='.*\.mpe?g$', case_sensitive=True)
+        assert isinstance(results, dict)
+        assert len(results) == 21
+
+        # You can also just compile the regular expression yourself and pass
+        # that in if you'd rather
+        _regex = re.compile('.*\.TXT', re.I)
+        results = find(work_dir, regex_filter=_regex)
+        assert isinstance(results, dict)
+        # Case insensitive re.I was passed in, so we will match on README.txt
+        assert len(results) == 1
+
+        # Invalid regular expressions will always yield a None return value
+        # and not a dictionary.
+        assert find(work_dir, regex_filter='((((()') is None
+
+        # You can chain multiple regular expressions together using
+        # sets, lists and tuples; here is a list example
+        results = find(
+            work_dir,
+            regex_filter=[
+                '.*\.mpe?g$',
+                '.*\.txt$',
+            ],
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 22
+
+        # tuple example
+        results = find(
+            work_dir,
+            regex_filter=(
+                '.*\.mpe?g$',
+                '.*\.txt$',
+                '^unknown.*',
+            ),
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 23
+
+        # Finally, here is a set() example
+        results = find(
+            work_dir,
+            regex_filter=(
+                '.*\.mpe?g$',
+                '.*\.nfo$',
+                '.*\.txt$',
+                '^unknown.*',
+            ),
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 24
+
+    def test_find_depth(self):
+        """
+        Test the regex part of the find function
+        """
+
+        # Temporary directory to work with
+        work_dir = join(self.tmp_dir, 'Utils_Test.find', 'depth')
+
+        # Create some depth to test within:
+        #   /depth01.jpeg
+        #   /level02/depth02.jpeg
+        #   /level02/level03/depth03.jpeg
+        #   /level02/level03/level04/depth04.jpeg
+        #   ...
+        work_dir_depth = work_dir
+        assert self.touch(join(work_dir, 'depth01.jpeg')) is True
+        for idx in range(2, 11):
+            work_dir_depth = join(work_dir_depth, 'level%.2d' % idx)
+            assert self.touch(join(work_dir_depth, 'depth%.2d.jpeg' % idx)) is True
+
+        # Just to give us a ballpark of the total files (and depth) we're
+        # looking at here:
+        results = find(
+            work_dir,
+            suffix_filter='.jpeg',
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 10
+
+        # Search only the first level
+        results = find(
+            work_dir,
+            suffix_filter='.jpeg',
+            max_depth=1,
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 1
+        assert 'depth01.jpeg' == basename(results.keys()[0])
+
+        # Search from the fifth level on
+        results = find(
+            work_dir,
+            suffix_filter='.jpeg',
+            min_depth=5,
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        # Why 6? Because we're starting at (and including) the 5th level
+        # level 5  = +1
+        # level 6  = +1 (2)
+        # level 7  = +1 (3)
+        # level 8  = +1 (4)
+        # level 9  = +1 (5)
+        # level 10 = +1 (6)
+        assert len(results) == 6
+        # Double check that our files are infact in relation to the depth
+        # we expect them to be at:
+        for idx in range(5, 11):
+            assert 'depth%.2d.jpeg' % idx \
+                    in [basename(x) for x in results.keys()]
+
+        # Search only the second level
+        results = find(
+            work_dir,
+            suffix_filter='.jpeg',
+            min_depth=2,
+            max_depth=2,
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 1
+        assert 'depth02.jpeg' == basename(results.keys()[0])
+
+        # Search the 3rd and 4th levels only
+        results = find(
+            work_dir,
+            suffix_filter='.jpeg',
+            min_depth=3,
+            max_depth=4,
+            case_sensitive=True,
+        )
+        assert isinstance(results, dict)
+        assert len(results) == 2
+        assert 'depth03.jpeg' in [basename(x) for x in results.keys()]
+        assert 'depth04.jpeg' in [basename(x) for x in results.keys()]
+
+        # if min_depth > max_depth you'll get a None type
+        assert find(
+            work_dir,
+            suffix_filter='.jpeg',
+            min_depth=5,
+            max_depth=4,
+            case_sensitive=True,
+        ) is None
