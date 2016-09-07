@@ -26,7 +26,6 @@ from os import SEEK_SET
 from StringIO import StringIO
 
 from gevent import Greenlet
-from gevent import sleep
 from gevent.event import Event
 
 from datetime import datetime
@@ -39,6 +38,7 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 
 # Regular Expression for the extraction of data
 NEW_LINE_RE = re.compile(r'\r*\n')
+
 
 class ReturnCode():
     """
@@ -153,7 +153,7 @@ class SubProcess(Greenlet):
         max_wait_time = self._execution_begin + \
                         timedelta(seconds=self._timeout)
 
-        while p1.poll() == None and not self._abort.is_set():
+        while p1.poll() is None and not self._abort.is_set():
             # Head of Poll Loop
 
             if self._timeout and \
@@ -184,8 +184,8 @@ class SubProcess(Greenlet):
             # CPU Throttle
             self._abort.wait(self._throttle)
 
-        if p1.poll() == None or self._abort.is_set():
-            ## Safety
+        if p1.poll() is None or self._abort.is_set():
+            # Safety
             try:
                 kill(self._pid, signal.SIGKILL)
             except:
