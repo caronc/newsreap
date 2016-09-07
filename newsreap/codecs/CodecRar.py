@@ -19,7 +19,6 @@ import re
 from blist import sortedset
 from os.path import basename
 from os.path import splitext
-from shutil import rmtree
 
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.codecs.CodecFile import CodecFile
@@ -27,8 +26,8 @@ from newsreap.codecs.CodecFile import CompressionLevel
 from newsreap.SubProcess import SubProcess
 from newsreap.Utils import random_str
 from newsreap.Utils import strsize_to_bytes
-
-from gevent import sleep
+from newsreap.Utils import pushd
+from newsreap.Utils import rm
 
 # Logging
 import logging
@@ -52,6 +51,7 @@ RAR_PART_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 class CodecRar(CodecFile):
     """
     CodecRar is a wrapper to the systems rar binary since there is no
@@ -65,6 +65,18 @@ class CodecRar(CodecFile):
                  # Recovery Record Percentage (default at 5%)
                  recovery_record='5p',
                  volume_size=False,
+                 # Even if the RAR is damaged, keep going if you can; Set this
+                 # to True if you actually want this to happen. Broken files
+                 # are written to as much as they can and extraction continues
+                 # as long as it can.
+                 keep_broken=False,
+                 # Don't overwrite existing files if one of the same name is
+                 # found in the archive. Set this to True if you want to
+                 # overwrite matched content.
+                 overwrite=False,
+                 # Update the dates associated with the files extracted to be
+                 # current.
+                 freshen=False,
                  *args, **kwargs):
         """
         Initialize the Codec
@@ -95,7 +107,11 @@ class CodecRar(CodecFile):
         if self.volume_size is True:
             self.volume_size = DEFAULT_SPLIT_SIZE
 
-    def encode(self, name=None, content=None, *args, **kwargs):
+        self.keep_broken = keep_broken
+        self.overwrite = overwrite
+        self.freshen = freshen
+
+    def encode(self, content=None, name=None, *args, **kwargs):
         """
         Takes a specified path (and or file) and compresses it. If this
         function is successful, it returns a set of NNTPBinaryContent()
@@ -115,7 +131,12 @@ class CodecRar(CodecFile):
         if not self.can_exe(self._rar):
             return None
 
-        tmp_path, tmp_file = self.mkstemp(path=random_str(), suffix='.rar')
+        if not name:
+            name = self.name
+            if not name:
+                name = random_str()
+
+        tmp_path, tmp_file = self.mkstemp(content=name, suffix='.rar')
 
         # Initialize our command
         execute = [
@@ -156,6 +177,9 @@ class CodecRar(CodecFile):
         if self.recovery_record is not None:
             execute.append('-rr%s' % self.recovery_record)
 
+        # Stop Switch Parsing
+        execute.append('--')
+
         # Specify the Destination Path
         execute.append(tmp_file)
 
@@ -171,8 +195,7 @@ class CodecRar(CodecFile):
 
         found_set = set()
 
-        while not sp.is_complete():
-            sleep(0.8)
+        while not sp.is_complete(timeout=1.5):
 
             found_set = self.watch_dir(
                 tmp_path,
@@ -191,7 +214,7 @@ class CodecRar(CodecFile):
         # Let the caller know our status
         if not sp.successful():
             # Cleanup Temporary Path
-            rmtree(tmp_path)
+            rm(tmp_path)
             return None
 
         if not len(found_set):
@@ -202,7 +225,6 @@ class CodecRar(CodecFile):
 
         # iterate through our found_set and create NNTPBinaryContent()
         # objects from them.
-        part = 0
         for path in found_set:
             # Iterate over our found files and determine their part
             # information
@@ -211,7 +233,7 @@ class CodecRar(CodecFile):
                 part = int(_re_results.group('part'))
 
             else:
-                part += 1
+                part = 0
 
             content = NNTPBinaryContent(
                 path,
@@ -225,21 +247,190 @@ class CodecRar(CodecFile):
             # Add our attached content to our results
             results.add(content)
 
-
         # Clean our are list of objects to archive
         self.clear()
 
         # Return our
         return results
 
-    def decode(self, path, password=None, *args, **kwargs):
+    def decode(self, content=None, name=None, password=None, *args, **kwargs):
         """
-        path must be pointing to a directory containing rar files that can be
-        easily sorted on. Alternatively, path can be of type NNTPContent() or
-        a set/list of.
+        content must be pointing to a directory containing rar files that can
+        be easily sorted on. Alternatively, path can be of type NNTPContent()
+        or a set/list of.
 
         If no password is specified, then the password configuration loaded
         into the class is used instead.
 
+        An NNTPBinaryContent() object containing the contents of the package
+
         """
-        # TODO
+        if content is not None:
+            self.add(content)
+
+        # Some simple error checking to save from doing to much here
+        if len(self) == 0:
+            return None
+
+        if not self.can_exe(self._unrar):
+            return None
+
+        if not password:
+            password = self.password
+
+        # Initialize our command
+        execute = [
+            # Our Executable RAR Application
+            self._unrar,
+            # Use Add Flag
+            'x',
+            # Assume Yes
+            '-y',
+        ]
+
+        # Password Protection
+        if password is not None:
+            execute.append('-p%s' % password)
+        else:
+            # Do not prompt for password
+            execute.append('-p-')
+
+        if self.keep_broken:
+            # Keep Broken Flag
+            execute.append('-kb')
+
+        if self.overwrite:
+            # Overwrite files
+            execute.append('-o+')
+
+        else:
+            # Don't overwrite files
+            execute.append('-o-')
+
+        if self.freshen:
+            # Keep Broken Flag
+            execute.append('-f')
+
+        # Stop Switch Parsing
+        execute.append('--')
+
+        if not name:
+            name = self.name
+            if not name:
+                name = random_str()
+
+        for _path in self:
+            # Temporary Path
+            tmp_path, _ = self.mkstemp(content=name)
+
+            with pushd(tmp_path):
+                # Create our SubProcess Instance
+                sp = SubProcess(list(execute) + [_path])
+
+                # Start our execution now
+                sp.start()
+
+                found_set = set()
+
+                while not sp.is_complete(timeout=1.5):
+
+                    found_set = self.watch_dir(
+                        tmp_path,
+                        ignore=found_set,
+                    )
+
+                # Handle remaining content
+                found_set = self.watch_dir(
+                    tmp_path,
+                    ignore=found_set,
+                    seconds=-1,
+                )
+
+                # Let the caller know our status
+                if not sp.successful():
+                    # Cleanup Temporary Path
+                    rm(tmp_path)
+                    return None
+
+                if not len(found_set):
+                    logger.warning(
+                        'RAR archive (%s) contained no content.' % \
+                        basename(_path),
+                    )
+
+        # Clean our are list of objects to archive
+        self.clear()
+
+        # Return path containing unrar'ed content
+        results = NNTPBinaryContent(tmp_path)
+
+        # We intentionally attach it's content
+        results.attach()
+
+        return results
+
+    def test(self, content=None, password=None):
+        """
+        content must be pointing to a directory containing rar files that can
+        be easily sorted on. Alternatively, path can be of type NNTPContent()
+        or a set/list of.
+
+        If no password is specified, then the password configuration loaded
+        into the class is used instead.
+
+        This function just tests an archive to see if it can be properly
+        extracted using the known password.
+        """
+        if content is not None:
+            paths = self.get_paths(content)
+
+        elif len(self.archive):
+            # Get first item in archive
+            paths = iter(self.archive)
+
+        else:
+            raise AttributeError("CodecRar: No rar file detected.")
+
+        if not self.can_exe(self._unrar):
+            return None
+
+        if not password:
+            password = self.password
+
+        # Initialize our command
+        execute = [
+            # Our Executable RAR Application
+            self._unrar,
+            # Use Test Flag
+            't',
+            # Assume Yes
+            '-y',
+        ]
+
+        # Password Protection
+        if password is not None:
+            execute.append('-p%s' % password)
+        else:
+            # Do not prompt for password
+            execute.append('-p-')
+
+        if self.keep_broken:
+            # Keep Broken Flag
+            execute.append('-kb')
+
+        # Stop Switch Parsing
+        execute.append('--')
+
+        for _path in paths:
+            # Create our SubProcess Instance
+            sp = SubProcess(list(execute) + [_path])
+
+            # Start our execution now
+            sp.start()
+            sp.join()
+
+            # Let the caller know our status
+            if not sp.successful():
+                return False
+
+        return True

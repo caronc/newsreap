@@ -64,6 +64,9 @@ class SubProcess(Greenlet):
         # we abort if this is set
         self._abort = Event()
 
+        # this is set when an command has completed execution
+        self._done = Event()
+
         # Tracks the PID file of item being executed
         self._pid = None
 
@@ -129,6 +132,10 @@ class SubProcess(Greenlet):
         Read from the work_queue, process it using an NNTPRequest object.
 
         """
+
+        # Make sure our done flag is not set
+        self._done.clear()
+
         # Execute our Process
         p1 = subprocess.Popen(
             self._cmd,
@@ -169,6 +176,9 @@ class SubProcess(Greenlet):
 
                 # Make sure no one uses the PID anymore
                 self._pid = None
+
+                # Set our done flag
+                self._done.set()
                 return
 
             # CPU Throttle
@@ -198,14 +208,24 @@ class SubProcess(Greenlet):
         # Make sure no one uses the PID anymore
         self._pid = None
 
+        # Set our done flag
+        self._done.set()
+
         # We're done!
         return
 
-    def is_complete(self):
+    def is_complete(self, timeout=None):
         """
         Returns True if the process has completed its execution
+        if timeout is set to a time, then the function blocks up until that
+        period of time elapses or the call completes.
+
+        Times should be specified as float values (in seconds).
 
         """
+        if timeout is not None:
+            self._done.wait(timeout)
+
         return self._execution_finish is not None
 
     def response_code(self):

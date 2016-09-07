@@ -101,7 +101,7 @@ class CodecFile(object):
     be accessed through an outside binary file located on the system.
     """
 
-    def __init__(self, work_dir=None, password=None,
+    def __init__(self, work_dir=None, name=None, password=None,
                  level=CompressionLevel.Average,
                  # Default parity configuration is to generate enough parity
                  # content to cover up to 35% of the content to be posted
@@ -117,6 +117,10 @@ class CodecFile(object):
         # to an empty string presumes that you want to set a blank
         # password (but a password none the less)
         self.password = password
+
+        # Stores the name to associate with the archive being encoded or
+        # decoded.
+        self.name = name
 
         # Compression Level
         self.level = level
@@ -157,65 +161,9 @@ class CodecFile(object):
         Adds files, directories, NNTPContent() and NNTPArticle objects
         to archive.
         """
-
-        # duplicates are ignored in a blist and therefore
-        # we just capture the length of our list before
-        # and after so that we can properly return a True/False
-        # value
         _bcnt = len(self.archive)
 
-        if isinstance(path, basestring):
-            # Support Directories and filenames
-
-            # Tidy our path
-            path = abspath(expanduser(path))
-
-            if exists(path):
-                if isdir(path):
-                    #  We can't have the work_dir be inside of the path
-                    if self.work_dir.startswith(path, 0, len(self.work_dir)):
-                        # path does not exist
-                        logger.warning(
-                            "Codec path includes work_dir (skipping): '%s'" % path)
-                        return False
-
-                # We're good if we get here
-                self.archive.add(path)
-
-            else:
-                # path does not exist
-                logger.warning(
-                    "Codec path does not exist (skipping): '%s'" % path)
-                return False
-
-        elif isinstance(path, NNTPContent):
-            if not path.filepath:
-                logger.warning(
-                    "Codec content does map to any data (skipping)")
-                return False
-
-            # Support NNTPContent() objects
-            self.add(path.filepath)
-
-        elif isinstance(path, NNTPArticle):
-            # Support NNTPArticle() objects
-            if not len(path):
-                logger.warning(
-                    "Codec article does not contain any content (skipping)")
-                return False
-
-            for content in path:
-                self.add(content)
-
-        elif isinstance(path, (sortedset, set, tuple, list)):
-            # Support lists by recursively calling ourselves
-            if not len(path):
-                logger.warning(
-                    "Codec entries do not contain any content (skipping)")
-                return False
-
-            for c in path:
-                self.add(c)
+        self.archive |= self.get_paths(path)
 
         return len(self.archive) > _bcnt
 
@@ -291,13 +239,13 @@ class CodecFile(object):
         """
         return isfile(fpath) and access(fpath, X_OK)
 
-    def mkstemp(self, path=None,  suffix='.tmp', prefix='_tmp_'):
+    def mkstemp(self, content=None,  suffix='.tmp', prefix='_tmp_'):
         """
         A wrapper to mkstemp that only handles reference to the filepath/name
         itself. It creates a unique subdirectory that it generates the new
         temporary file within that can be referenced.
 
-        If a path is specified, then the function parses out the directory
+        If a content is specified, then the function parses out the directory
         infront of it and possibly a prefix at the end and swaps it with the
         prefix specified.  This is just an easier way of manipulating a
         filename or directory name that was recently pulled from an
@@ -312,27 +260,27 @@ class CodecFile(object):
         tmp_path = mkdtemp(prefix='_nr.codec-', dir=self.work_dir)
         tmp_file = None
 
-        if isinstance(path, basestring):
+        if isinstance(content, basestring):
             tmp_file = join(
                 tmp_path,
-                '%s%s' % (splitext(basename(path))[0], suffix,
+                '%s%s' % (splitext(basename(content))[0], suffix,
             ))
 
-        elif isinstance(path, NNTPContent):
+        elif isinstance(content, NNTPContent):
             # use the filename based on the path
-            if path.filename:
+            if content.filename:
                 tmp_file = join(
                     tmp_path,
-                    '%s%s' % (splitext(basename(path.filename))[0], suffix,
+                    '%s%s' % (splitext(basename(content.filename))[0], suffix,
                 ))
 
-        elif isinstance(path, NNTPArticle):
-            if len(path) > 0:
-                if path[0].filename:
+        elif isinstance(content, NNTPArticle):
+            if len(content) > 0:
+                if content[0].filename:
                     tmp_file = join(
                         tmp_path,
                         '%s%s' % (
-                            splitext(basename(path[0].filename))[0],
+                            splitext(basename(content[0].filename))[0],
                             suffix,
                     ))
 
@@ -440,7 +388,7 @@ class CodecFile(object):
         # Return our results
         return results
 
-    def watch_dir(self, path, prefix='', ignore=None, seconds=15):
+    def watch_dir(self, path, prefix=None, ignore=None, seconds=15):
         """Monitors a directory for files that have been added/changed
 
             path: is the path to monitor
@@ -455,7 +403,6 @@ class CodecFile(object):
         findings = find(
             path, fsinfo=True,
             prefix_filter=prefix,
-            min_depth=1, max_depth=1,
             case_sensitive=True,
         )
 

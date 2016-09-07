@@ -41,6 +41,7 @@ from newsreap.codecs.CodecRar import CodecRar
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPArticle import NNTPArticle
+from newsreap.Utils import find
 
 
 class CodecRar_Test(TestBase):
@@ -233,3 +234,115 @@ class CodecRar_Test(TestBase):
         assert len(content) == 11
         for c in content:
             assert isinstance(c, NNTPBinaryContent)
+
+    def test_unrar(self):
+        """
+        Tests the un-raring of content
+        """
+        # Generate temporary folder to work with
+        work_dir = join(self.tmp_dir, 'CodecRar_Test.rar.single', 'work')
+
+        # Initialize Codec
+        cr = CodecRar(work_dir=work_dir)
+
+        # Now we want to prepare a work folder
+        source_dir = join(
+            self.tmp_dir, 'CodecRar_Test.rar.single', 'source'
+        )
+
+        # create some dummy file entries
+        for i in range(0, 10):
+            # Create some temporary files to work with in our source
+            # directory
+            tmp_file = join(source_dir, 'DSC_IMG%.3d.jpeg' % i)
+            self.touch(tmp_file, size='100K', random=True)
+            # Add our file to the encoding process
+            cr.add(tmp_file)
+
+        # Now we want to compress this content
+        content = cr.encode()
+
+        # We should have successfully encoded our content into
+        # one single .rar file
+        assert isinstance(content, sortedset)
+        assert len(content) == 1
+
+        # Now we want to extract the content
+        decoded = cr.decode(content)
+        assert isinstance(decoded, NNTPBinaryContent)
+        decoded_path = decoded.path()
+        # It's actually the directory containing the contents of all
+        # the rar's provided in the same hiarchy they were provided in
+        # since we only provided one rar file, we only opened it
+        assert isdir(decoded_path)
+
+        # Extracted content always occurs in a different directory
+        assert decoded_path != source_dir
+
+        # In fact it should be the same 10 fake images we created
+        # create some dummy file entries
+        results = find(search_dir=decoded_path)
+        assert len(results) == 10
+        # Just grab the first item from the list so we can get the
+        # temporary path
+        tmp_path = dirname(next(iter(results)))
+
+        for i in range(0, len(results)):
+            tmp_name = 'DSC_IMG%.3d.jpeg' % i
+            assert join(tmp_path, tmp_name) in results
+
+        # Now if we destroy our decoded object, we should also lose
+        # it's content
+        del decoded
+        assert isdir(decoded_path) is False
+
+    def test_password_protection(self):
+        """
+        Tests the un-raring of content
+        """
+        # Generate temporary folder to work with
+        work_dir = join(self.tmp_dir, 'CodecRar_Test.rar.pwd', 'tmp')
+
+        # Now we want to prepare a work folder
+        source_dir = join(
+            self.tmp_dir, 'CodecRar_Test.rar.pwd', 'source'
+        )
+
+        # Initialize Codec
+        cr = CodecRar(work_dir=work_dir, password='l2g')
+
+        # create some dummy file entries
+        file_list = []
+        for i in range(0, 10):
+            # Create some temporary files to work with in our source
+            # directory
+            tmp_file = join(source_dir, 'DSC_IMG%.3d.jpeg' % i)
+            self.touch(tmp_file, size='100K', random=True)
+            # Add our file to the encoding process
+            file_list.append(NNTPContent(tmp_file))
+
+        # Now we want to compress this content
+        content = cr.encode(name="mystuff", content=file_list)
+        assert isinstance(content, sortedset)
+        assert len(content) == 1
+
+        # Our content should be password protected at this point; so if i
+        # create another CodecRar item (without a password), i should fail to
+        # extract the content.
+        tmp_cr = CodecRar(work_dir=work_dir)
+
+        decoded = tmp_cr.decode(content)
+        # Bad Password means no results
+        assert decoded is None
+
+        # We could have saved ourselves time in determining this because
+        # testing doesn't have as much overhead and allows us to check for any
+        # passwords associated with the data
+        assert tmp_cr.test(content) is False
+
+        # But simply applying a password would have done wonders
+        assert tmp_cr.test(content, password='l2g') is True
+
+        # We can extract the contents by passing in the password
+        content = tmp_cr.decode(content, password='l2g')
+        assert isinstance(content, NNTPBinaryContent) is True
