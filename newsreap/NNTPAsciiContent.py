@@ -14,7 +14,9 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from os.path import exists
 from newsreap.NNTPContent import NNTPContent
+
 
 class NNTPAsciiContent(NNTPContent):
     """
@@ -26,7 +28,6 @@ class NNTPAsciiContent(NNTPContent):
             filepath=filepath,
             part=part, total_parts=total_parts, work_dir=work_dir,
             sort_no=20000, *args, **kwargs)
-
 
     def __next__(self):
         """
@@ -40,6 +41,11 @@ class NNTPAsciiContent(NNTPContent):
 
         return data
 
+    def can_post(self):
+        """
+        AsciiContent is postable as long as it exists
+        """
+        return (self._isdir is False) and exists(self.filepath)
 
     def next(self):
         """

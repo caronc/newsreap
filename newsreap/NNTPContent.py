@@ -38,6 +38,7 @@ from types import MethodType
 
 from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
 from newsreap.Utils import mkdir
+from newsreap.Utils import rm
 from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import strsize_to_bytes
 
@@ -189,6 +190,8 @@ class NNTPContent(object):
                     "Invalid parts/total_parts specified (%s/%s)." % (
                     str(part), str(total_parts),
                 ))
+        else:
+            self.total_parts = self.part
 
         # Used for tracking the indexes (head/tail) that make
         # up the block of data this NNTPContent object represents.
@@ -259,6 +262,10 @@ class NNTPContent(object):
         # demand.
         self._lazy_cache = {}
 
+        # NNTPContent supports directory storing too. This is toggle in the
+        # event we're dealing with a directory
+        self._isdir = False
+
         if not filepath:
             # Will use load() or open() which causes temp file
             # to be created
@@ -273,17 +280,30 @@ class NNTPContent(object):
             self._detached = True
 
             if hasattr('name', self.stream):
-                self.filepath = abspath(expanduser(self.stream.name))
+                self.filepath = abspath(self.stream.name)
                 self.filename = basename(filepath)
 
             if hasattr('mode', self.stream):
                 # Store our mode
                 self.filemode = self.stream.mode
         else:
-            self.filename = basename(filepath)
-
             if self._unique is False and isfile(filepath):
                 self.load(filepath, sort_no=sort_no)
+
+            elif isdir(filepath):
+                # Toggle Flag
+                self._isdir = True
+                # Directories are always detached
+                self._detached = True
+                # Store our dirname
+                self.filename = basename(filepath)
+                # Store our path
+                self.filepath = abspath(expanduser(filepath))
+
+            else:
+                # Store our filename
+                self.filename = basename(filepath)
+
 
     def getvalue(self):
         """
@@ -304,6 +324,18 @@ class NNTPContent(object):
 
         return self.read()
 
+    def can_post(self):
+        """
+        Similar to is_valid() except only returns true if the item is
+        postable. The big difference is is_valid() is toggle after something
+        has been downloaded, where as can_post() is a field checked prior
+        to posting to an NNTP Server.
+
+        Content is only postable in ascii form, so binaries and directories
+        will always return a False here.
+        """
+        return False
+
     def is_valid(self):
         """
         A simple function that returns whether the article is valid or not
@@ -313,8 +345,11 @@ class NNTPContent(object):
 
         The basic version (no overloading) just returns what the flag
         was set to.
+
+        A directory can never be valid because it isn't content per say
+        but a container to content.
         """
-        return self._is_valid
+        return self._is_valid and not self._isdir
 
     def open(self, filepath=None, mode=None, eof=False):
         """
@@ -517,14 +552,13 @@ class NNTPContent(object):
             # Close any existing open file
             self.close()
 
-        if not self._detached and self.filepath:
-            # We're changing so it's better we unlink this (but only
-            # if we're attached to it)
-            try:
-                unlink(self.filepath)
-                logger.debug('Removed file %s' % self.filepath)
-            except:
-                pass
+        if self._detached is False and self.filepath:
+            # We're changing so it's better we unlink this (but only if we're
+            # attached to it)
+            rm(self.filepath)
+
+        # Support directories but initialize field to false
+        self._isdir = False
 
         # Set Detached since we don't want to obstruct our newly loaded
         # file in any way
@@ -561,6 +595,10 @@ class NNTPContent(object):
 
             # Our file is not detached in this state
             self._detached = False
+
+        elif isdir(filepath):
+            # Toggle our flag and fall through as we support directories
+            self._isdir = True
 
         elif not isfile(filepath):
             # we can't load the file so reset some common variables
@@ -981,12 +1019,10 @@ class NNTPContent(object):
         if self.stream is not None:
             self.close()
 
-        if not self._detached and self.filepath:
-            try:
-                unlink(self.filepath)
-                logger.debug('Removed file %s' % self.filepath)
-            except:
-                pass
+        if self.filepath:
+            return rm(self.filepath)
+
+        return False
 
     def key(self):
         """
@@ -1154,11 +1190,8 @@ class NNTPContent(object):
             self.close()
 
         if not self._detached and self.filepath:
-            try:
-                unlink(self.filepath)
-                logger.debug('Removed file %s' % self.filepath)
-            except:
-                pass
+            # We need to do some cleanup
+            rm(self.filepath)
 
     def __lt__(self, other):
         """

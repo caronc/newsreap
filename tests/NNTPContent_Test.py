@@ -25,6 +25,8 @@ gevent.monkey.patch_all()
 
 from blist import sortedset
 from os.path import join
+from os.path import isdir
+from os.path import exists
 from os.path import dirname
 from os.path import isfile
 from os.path import abspath
@@ -44,6 +46,7 @@ from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPSettings import DEFAULT_BLOCK_SIZE as BLOCK_SIZE
 from newsreap.Utils import strsize_to_bytes
+from newsreap.Utils import mkdir
 
 
 class NNTPContent_Test(TestBase):
@@ -114,6 +117,7 @@ class NNTPContent_Test(TestBase):
         assert isfile(join(self.tmp_dir, "binary.file")) is False
         assert isfile(join(self.tmp_dir, "ascii.file")) is False
 
+        # Grab a copy of these file paths so we can check them later
         aa_filepath = aa.filepath
         ba_filepath = ba.filepath
 
@@ -522,3 +526,42 @@ class NNTPContent_Test(TestBase):
         with open(tmp_file) as f:
             data_read = f.read()
         assert data == data_read
+
+
+    def test_directory_support(self):
+        """
+        NNTPContent objects can wrap directories too
+
+        """
+        my_dir = join(self.tmp_dir, 'NNTPContent', 'my_dir')
+        assert isdir(my_dir) is False
+        assert mkdir(my_dir) is True
+        assert isdir(my_dir) is True
+
+        #  Now create our NNTPContent Object against our directory
+        obj = NNTPContent(
+            filepath=my_dir,
+            work_dir=self.tmp_dir,
+        )
+
+        # Directories are never attached by default
+        assert obj.is_attached() is False
+
+        # Deleting the object means the directory remains behind
+        del obj
+        assert isdir(my_dir) is True
+
+        # However
+        obj = NNTPContent(
+            filepath=my_dir,
+            work_dir=self.tmp_dir,
+        )
+        assert obj.is_attached() is False
+        obj.attach()
+        assert obj.is_attached() is True
+
+        # Now we've attached the NNTPContent to the object so deleting the
+        # object destroys the directory
+        del obj
+        assert exists(my_dir) is False
+        assert isdir(my_dir) is False
