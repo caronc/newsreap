@@ -26,6 +26,7 @@ gevent.monkey.patch_all()
 import unittest
 import yaml
 
+from os import chmod
 from os import kill
 from os import urandom
 from os.path import join
@@ -133,7 +134,7 @@ class TestBase(unittest.TestCase):
 
         return True
 
-    def touch(self, path, size=None, random=False, time=None):
+    def touch(self, path, size=None, random=False, perm=None, time=None):
         """Simplify the dynamic creation of files or the updating of their
         modified time.  If a size is specified, then a file of that size
         will be created on the disk. If the file already exists, then the
@@ -166,6 +167,10 @@ class TestBase(unittest.TestCase):
 
         # Update our path
         utime(path, time)
+
+        if perm is not None:
+            # Adjust permissions
+            chmod(path, 0000)
 
         # Return True
         return True
