@@ -226,7 +226,7 @@ class SubProcess(Greenlet):
         if timeout is not None:
             self._done.wait(timeout)
 
-        return self._execution_finish is not None
+        return self._done.is_set()
 
     def response_code(self):
         """

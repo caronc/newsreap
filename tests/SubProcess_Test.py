@@ -161,11 +161,8 @@ class SubProcess_Test(TestBase):
         # Now run our process
         sp.start()
 
-        # Wait 2 seconds (we'll die before then though
-        sp.join(timeout=2.0)
-
-        # The process is still running
-        assert sp.is_complete() is True
+        # Wait until it expires
+        assert sp.is_complete(timeout=5.0) is True
 
         # PID is always None unless the process is still running
         assert sp.pid() is None
