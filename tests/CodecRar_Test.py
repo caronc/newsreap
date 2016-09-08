@@ -49,6 +49,33 @@ class CodecRar_Test(TestBase):
     A Unit Testing Class for testing/wrapping the external
     Rar/Unrar tools
     """
+    def test_rar_detection(self):
+        """
+        Tests the rar file detection process
+        """
+        from newsreap.codecs.CodecRar import RAR_PART_RE
+
+        result = RAR_PART_RE.match('/path/to/test.rar')
+        assert result is not None
+        assert result.group('part') is None
+
+        result = RAR_PART_RE.match('/path/to/test.RaR')
+        assert result is not None
+        assert result.group('part') is None
+
+        result = RAR_PART_RE.match('/path/to/test.r01')
+        assert result is not None
+        assert result.group('part') == '01'
+
+        result = RAR_PART_RE.match('/path/to/test.R200')
+        assert result is not None
+        assert result.group('part') == '200'
+
+        result = RAR_PART_RE.match('/path/to/test.part65.rar')
+        assert result is not None
+        assert result.group('part') == '65'
+
+
     def test_rar_errors(self):
         """
         Test that we fail under certain conditions
@@ -202,6 +229,9 @@ class CodecRar_Test(TestBase):
         assert len(content) == 1
         assert isinstance(content[0], NNTPBinaryContent)
 
+        # Encoded content is attached by default
+        assert content[0].is_attached() is True
+
     def test_rar_multi_files(self):
         """
         Test that we can rar content into multiple files
@@ -234,6 +264,8 @@ class CodecRar_Test(TestBase):
         assert len(content) == 11
         for c in content:
             assert isinstance(c, NNTPBinaryContent)
+            # Encoded content is attached by default
+            assert c.is_attached() is True
 
     def test_unrar(self):
         """
@@ -269,8 +301,12 @@ class CodecRar_Test(TestBase):
 
         # Now we want to extract the content
         decoded = cr.decode(content)
-        assert isinstance(decoded, NNTPBinaryContent)
-        decoded_path = decoded.path()
+        assert isinstance(decoded, sortedset)
+        assert len(decoded) == 1
+        assert isinstance(decoded[0], NNTPBinaryContent)
+        # Decoded content is always attached!
+        assert decoded[0].is_attached() is True
+        decoded_path = decoded[0].path()
         # It's actually the directory containing the contents of all
         # the rar's provided in the same hiarchy they were provided in
         # since we only provided one rar file, we only opened it
@@ -345,4 +381,8 @@ class CodecRar_Test(TestBase):
 
         # We can extract the contents by passing in the password
         content = tmp_cr.decode(content, password='l2g')
-        assert isinstance(content, NNTPBinaryContent) is True
+        assert isinstance(content, sortedset) is True
+        assert len(content) == 1
+        assert isinstance(content[0], NNTPBinaryContent) is True
+        # Content is always attached
+        assert content[0].is_attached() is True

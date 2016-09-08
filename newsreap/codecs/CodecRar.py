@@ -44,13 +44,13 @@ DEFAULT_UNRAR_PATH = '/usr/bin/unrar'
 DEFAULT_SPLIT_SIZE = strsize_to_bytes('25M')
 
 # Used to detect the rar part #
+#  - supports .rar
 #  - supports .r00, .r01, .r02, etc
 #  - supports .part00.rar, .part01.rar, etc
 RAR_PART_RE = re.compile(
-    '^.+\.(part|r)(?P<part>[0-9]+)(\.rar)?$',
+    '^.*?\.((part|r)(?P<part>[0-9]+)(\.rar)?|rar)$',
     re.IGNORECASE,
 )
-
 
 class CodecRar(CodecFile):
     """
@@ -64,6 +64,9 @@ class CodecRar(CodecFile):
                  unrar_path=DEFAULT_UNRAR_PATH,
                  # Recovery Record Percentage (default at 5%)
                  recovery_record='5p',
+                 # The volume size identifies how to split up the RAR file
+                 # (into multi-parts).  If set to False then no splitting is
+                 # done.  If it's set to True, then the Default is used.
                  volume_size=False,
                  # Even if the RAR is damaged, keep going if you can; Set this
                  # to True if you actually want this to happen. Broken files
@@ -225,15 +228,20 @@ class CodecRar(CodecFile):
 
         # iterate through our found_set and create NNTPBinaryContent()
         # objects from them.
+        part = 0
         for path in found_set:
             # Iterate over our found files and determine their part
             # information
             _re_results = RAR_PART_RE.match(path)
             if _re_results:
-                part = int(_re_results.group('part'))
+                if _re_results.group('part') is not None:
+                    part = int(_re_results.group('part'))
+
+                else:
+                    part += 1
 
             else:
-                part = 0
+                part += 1
 
             content = NNTPBinaryContent(
                 path,
@@ -263,6 +271,8 @@ class CodecRar(CodecFile):
         into the class is used instead.
 
         An NNTPBinaryContent() object containing the contents of the package
+        within a sortedset() object.  All decoded() functions have to return
+        a resultset() to be consistent with one another.
 
         """
         if content is not None:
@@ -308,7 +318,7 @@ class CodecRar(CodecFile):
             execute.append('-o-')
 
         if self.freshen:
-            # Keep Broken Flag
+            # Freshen files
             execute.append('-f')
 
         # Stop Switch Parsing
@@ -367,7 +377,12 @@ class CodecRar(CodecFile):
         # We intentionally attach it's content
         results.attach()
 
-        return results
+        # Create a sortedset to return
+        _resultset = sortedset(key=lambda x: x.key())
+        _resultset.add(results)
+
+        # Return our content
+        return _resultset
 
     def test(self, content=None, password=None):
         """
