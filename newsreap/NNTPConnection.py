@@ -1127,7 +1127,6 @@ class NNTPConnection(SocketBase):
             if not id.is_valid():
                 return None
 
-
             for seg in id:
                 # A sorted set of segments
                 articles = sortedset(key=lambda x: x.key())
