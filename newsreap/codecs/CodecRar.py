@@ -180,6 +180,10 @@ class CodecRar(CodecFile):
         if self.recovery_record is not None:
             execute.append('-rr%s' % self.recovery_record)
 
+        if self.cpu_cores is not None and self.cpu_cores > 1:
+            # create archive using multiple threads
+            execute.append('-mt%d' % self.cpu_cores)
+
         # Stop Switch Parsing
         execute.append('--')
 
@@ -196,8 +200,7 @@ class CodecRar(CodecFile):
         # Start our execution now
         sp.start()
 
-        found_set = set()
-
+        found_set = None
         while not sp.is_complete(timeout=1.5):
 
             found_set = self.watch_dir(
@@ -340,8 +343,7 @@ class CodecRar(CodecFile):
                 # Start our execution now
                 sp.start()
 
-                found_set = set()
-
+                found_set = None
                 while not sp.is_complete(timeout=1.5):
 
                     found_set = self.watch_dir(

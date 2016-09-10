@@ -74,27 +74,6 @@ COMPRESSION_LEVELS = (
 )
 
 
-class ParityType(object):
-    """
-    Parity Type is used to identify the different types of parity file
-    generation you want to apply to the file(s) you have prepared.
-
-    Parity generation allows some to overcome the obsticles put forth by
-    usenet when content becomes damaged or unavailable.
-    """
-
-    # Don't use any form of parity
-    Disabled = '-'
-    # Create parity content based on the content posted
-    ByPercent = '%'
-    # specify the parity block configuration
-    BySize = 's'
-
-
-# Path to the par2 binary file
-PAR2_BINARY = '/usr/bin/par2'
-
-
 class CodecFile(object):
     """
     CodecFile compliments CodecBase by wrapping the codecs that can only
@@ -102,10 +81,7 @@ class CodecFile(object):
     """
 
     def __init__(self, work_dir=None, name=None, password=None,
-                 level=CompressionLevel.Average,
-                 # Default parity configuration is to generate enough parity
-                 # content to cover up to 35% of the content to be posted
-                 parity=(ParityType.ByPercent, 35),
+                 level=CompressionLevel.Average, cpu_cores=None,
                  *args, **kwargs):
         """
         The dir identfies the directory to store our sessions in
@@ -121,6 +97,18 @@ class CodecFile(object):
         # Stores the name to associate with the archive being encoded or
         # decoded.
         self.name = name
+
+        # The number of CPU cores should be set to whatever it is your
+        # workstation can handle.  The more, the faster the processing will
+        # be.
+
+        # Linux users can do this:
+        #  $> egrep '^processor' /proc/cpuinfo -c
+
+        # If you set this to None, then the default options are used; thus cpu
+        # core specifications (threading) are just simply not applied to the
+        # command
+        self.cpu_cores = cpu_cores
 
         # Compression Level
         self.level = level
@@ -152,9 +140,6 @@ class CodecFile(object):
 
         # Contains a list of paths to be archived
         self.archive = set()
-
-        # Parity Configuration
-        self.parity = parity
 
     def add(self, path):
         """
@@ -201,37 +186,6 @@ class CodecFile(object):
         raise NotImplementedError(
             "CodecFile() inheriting class is required to impliment decompress()"
         )
-
-    def create_parity(self, content, *args, **kwargs):
-        """
-        Provide the path to where content can be found and PAR2 files will be
-        generated. A set of NNTPBinaryContent() objects will be returned plus
-        one NNTPAsciiContent() containing the PAR2 meta file.
-
-        """
-        # Extract our data
-        p_type, p_val = self.parity
-
-        # Create our result set
-        results = sortedset(key=lambda x: x.key())
-
-        # TODO: Finish this class
-
-        results = self.get_paths(content)
-        if p_type is ParityType.Disabled:
-            # Nothing more to do
-            return results
-
-        if p_type is ParityType.ByPercent:
-            # TODO
-            pass
-
-        elif p_type is ParityType.BySize:
-            # TODO
-            pass
-
-        else:
-            return None
 
     def can_exe(self, fpath):
         """
@@ -297,7 +251,7 @@ class CodecFile(object):
         """
         When supplied content which can be a NNTPArticle(), NNTPContent()
         a directory, and/or file. get_paths() returns all of the results
-        in a unique set().  get_paths() also supports iterating over
+        in a unique sortedset().  get_paths() also supports iterating over
         tuples, sets, sortedsets and lists to fetch this information.
 
         If a directory is passed in that maps against individual content
@@ -313,7 +267,7 @@ class CodecFile(object):
         """
 
         # Create a set to store our results in
-        results = set()
+        results = sortedset()
 
         if isinstance(content, (set, tuple, list, sortedset)):
             # Iterate over the entries passing them back into this function
@@ -363,7 +317,7 @@ class CodecFile(object):
             #
             # We would turf the remaining files because they can be
             # found within the /path/to/data/dir
-            results = set([r for r in results if r not in _dirs and next(
+            results = sortedset([r for r in results if r not in _dirs and next(
                 (False for d in _dirs \
                  if r.startswith(d, 0, len(d)) is True), True)])
 
@@ -392,13 +346,13 @@ class CodecFile(object):
         """Monitors a directory for files that have been added/changed
 
             path: is the path to monitor
-            ignore: is a set of files already parsed
+            ignore: is a sortedset of files already parsed
             seconds: is how long it takes a file to go untouched for before
               we presume it has been completely written to disk.
         """
 
         if ignore is None:
-            ignore = set()
+            ignore = sortedset()
 
         findings = find(
             path, fsinfo=True,
