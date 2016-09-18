@@ -32,7 +32,7 @@ from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPResponse import NNTPResponse
 from newsreap.NNTPResponse import NNTPResponseCode
 from newsreap.NNTPContent import NNTPContent
-from newsreap.NNTPBinaryContent import NNTPBinaryContent
+from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 from newsreap.NNTPMetaContent import NNTPMetaContent
 from newsreap.NNTPFilterBase import NNTPFilterBase
 from newsreap.NNTPIOStream import NNTPIOStream
@@ -1148,13 +1148,90 @@ class NNTPConnection(SocketBase):
         # A sorted list of all articles pulled down
         results = sortedset(key=lambda x: x.key())
 
-        if isinstance(id, NNTPnzb):
+        if isinstance(id, NNTPArticle):
+            # Support NNTPArticle Objects if they have an id defined
+            if id.id:
+                return self._get(id=id.id, work_dir=work_dir, group=group)
+
+        elif isinstance(id, NNTPSegmentedPost):
+            # Support NNTPSegmentedPost() Objects
+            # Anything defined in an NNTPSegmentPost object will always
+            # over-ride any content retrieved (filenames, etc)
+
+            # Get segment count
+            total_parts = len(id)
+
+            for part_no, _article in enumerate(id):
+                # We need to download each article define
+                if self.join_group:
+                    for group in id.groups:
+                        # Try each group
+                        article = self._get(
+                            id=_article,
+                            work_dir=work_dir,
+                            group=group,
+                        )
+
+                        if article:
+                            # Found
+                            break
+
+                    # If we reach here, we failed to fetch the item, so
+                    # we'll try the next group
+                    logger.warning(
+                        'Failed to fetch segment #%.2d (%s)' % \
+                        (_article.no, _article.filename),
+                    )
+
+                    # mark our article invalid as part of it's response
+                    article._is_valid = False
+
+                else:
+                    # Fetch our content
+                    article = self._get(
+                        id=_article,
+                        work_dir=work_dir,
+                    )
+
+                if article:
+                    # Store information from our nzb_article over top of
+                    # the contents in the new article we retrieved
+                    if len(article) == 0:
+                        logger.warning(
+                            'No content found in segment #%.2d (%s)' % \
+                            (_article.no, _article.filename),
+                        )
+
+                    else:
+                        # over-ride content based on data provided by
+                        # NNTPSegmentedFile object
+                        article.decoded[0].filename = id.filename
+                        article.decoded[0].part = part_no + 1
+                        article.decoded[0].total_parts = total_parts
+
+                else:
+                    # Uh oh, we failed to get anything; so just add
+                    # our current article generated from the nzb file.
+                    # Mark the object invalid and re-add it
+                    logger.warning(
+                        'Failed to retrieve segment (%s)' % \
+                        id.filename,
+                    )
+
+                    # mark our article invalid as part of it's response
+                    article._is_valid = False
+
+                # Store our article
+                results.add(article)
+
+            if len(results):
+                # At this point we have a segment ready for post-processing
+                return results
+
+        elif isinstance(id, NNTPnzb):
             # We're dealing with an NZB File
             if not id.is_valid():
                 return None
-
-            # Get total part count
-            total_articles = len(id)
 
             # We iterate over each segment defined int our NZBFile and merge
             # them into 1 file. We do this until we've processed all the
@@ -1165,73 +1242,19 @@ class NNTPConnection(SocketBase):
 
                 # Get segment count
                 total_parts = len(seg)
+                # Recursively call ourselves to proccess NNTPSegmentedPost()
+                # objects
+                _results = self.get(seg)
 
-                for part_no, nzb_article in enumerate(seg):
-                    # We need to download each article define
-                    if self.join_group:
-                        for group in seg.groups:
-                            # Try each group
-                            article = self._get(
-                                id=nzb_article,
-                                work_dir=work_dir,
-                                group=group,
-                            )
-
-                            if article:
-                                # Found
-                                break
-
-                        # If we reach here, we failed to fetch the item, so
-                        # we'll try the next group
-                        logger.warning(
-                            'Failed to fetch segment #%.2d (%s)' % \
-                            (nzb_article.no, nzb_article.filename),
-                        )
-
-                        # mark our article invalid as part of it's response
-                        article._is_valid = False
-
-                    else:
-                        # Fetch our content
-                        article = self._get(
-                            id=nzb_article,
-                            work_dir=work_dir,
-                        )
-
-                    if article:
-                        # Store information from our nzb_article over top of
-                        # the contents in the new article we retrieved
-                        if len(article) == 0:
-                            logger.warning(
-                                'No content found in segment #%.2d (%s)' % \
-                                (nzb_article.no, nzb_article.filename),
-                            )
-
-                        else:
-                            # over-ride content based on data provided by
-                            # NZBFile
-                            article.decoded[0].filename = seg.filename
-                            article.decoded[0].part = part_no + 1
-                            article.decoded[0].total_parts = total_parts
-
-                    else:
-                        # Uh oh, we failed to get anything; so just add
-                        # our current article generated from the nzb file.
-                        # Mark the object invalid and re-add it
-                        logger.warning(
-                            'Failed to retrieve segment (%s)' % \
-                            seg.filename,
-                        )
-
-                        # mark our article invalid as part of it's response
-                        article._is_valid = False
-
+                if _results:
                     # for article organization, we want to ensure our content
-                    # is ordered sequentially a it's defined in the NZBFile
-                    article.no += no
+                    # is ordered sequentially as it's defined in the NZBFile
+                    for article in _results:
+                        # Bump article no count to allow ordering
+                        article.no += no
 
-                    # Store our article
-                    results.add(article)
+                    # Store our results
+                    results |= _results
 
             if len(results):
                 # At this point we have a segment ready for post-processing
