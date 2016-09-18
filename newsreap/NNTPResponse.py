@@ -154,7 +154,7 @@ class NNTPResponse(object):
     """
 
 
-    def __init__(self, code=None, code_str=None, *args, **kwargs):
+    def __init__(self, code=None, code_str=None, work_dir=None, *args, **kwargs):
         """
         Initializes a request object and the 'action' must be a function
         name that exists in the NNTPConnection(), you can optionally specify
@@ -171,7 +171,7 @@ class NNTPResponse(object):
             self.code_str = ''
 
         # Our body contains non-decoded content
-        self.body = NNTPAsciiContent()
+        self.body = NNTPAsciiContent(work_dir=work_dir)
 
         # Contains a list of decoded content
         self.decoded = sortedset(key=lambda x: x.key())

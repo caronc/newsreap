@@ -16,11 +16,8 @@
 
 from blist import sortedset
 from datetime import datetime
-from os.path import basename
 
 from newsreap.NNTPArticle import NNTPArticle
-from newsreap.NNTPContent import NNTPContent
-from newsreap.NNTPContent import NNTPFileMode
 from newsreap.NNTPArticle import DEFAULT_NNTP_SUBJECT
 from newsreap.NNTPArticle import DEFAULT_NNTP_POSTER
 

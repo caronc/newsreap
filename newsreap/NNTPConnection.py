@@ -21,6 +21,8 @@ import re
 from zlib import decompressobj
 from zlib import error as ZlibException
 from os.path import isdir
+from os.path import abspath
+from os.path import expanduser
 from io import BytesIO
 from datetime import datetime
 from blist import sortedset
@@ -30,6 +32,7 @@ from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPResponse import NNTPResponse
 from newsreap.NNTPResponse import NNTPResponseCode
 from newsreap.NNTPContent import NNTPContent
+from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPMetaContent import NNTPMetaContent
 from newsreap.NNTPFilterBase import NNTPFilterBase
 from newsreap.NNTPIOStream import NNTPIOStream
@@ -42,8 +45,8 @@ from newsreap.SocketBase import SignalCaughtException
 from newsreap.Utils import mkdir
 from newsreap.Utils import SEEK_SET
 from newsreap.Utils import SEEK_END
-
 from newsreap.NNTPnzb import NNTPnzb
+from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 
 # Codecs
 # These define the messages themselves.
@@ -180,8 +183,8 @@ class NNTPConnection(SocketBase):
 
     def __init__(self, username=None, password=None, secure=False,
                  iostream=NNTPIOStream.RFC3977_GZIP,
-                 join_group=True, use_body=False, use_head=True,
-                 encoding=None,
+                 join_group=False, use_body=False, use_head=True,
+                 encoding=None, work_dir=None,
                  filters=None, *args, **kwargs):
         """
         Initialize NNTP Connection
@@ -208,7 +211,8 @@ class NNTPConnection(SocketBase):
         the need to have to select the group prior to retrieving the article.
 
         It's obviously slower to do this; so if you're Usenet provider
-        doesn't need this option; then don't specify it.
+        doesn't need this option; then don't specify it. It 'will' slow down
+        processing if you set this!
 
         use_body
         --------
@@ -368,6 +372,14 @@ class NNTPConnection(SocketBase):
 
         # Used to cache group list responses
         self._grouplist = None
+
+        # Default Working Directory
+        # All temporary content is downloaded to this location.  If set to
+        # None then the defaults are used instead.
+        if work_dir is None:
+            self.work_dir = DEFAULT_TMP_DIR
+        else:
+            self.work_dir = abspath(expanduser(work_dir))
 
     def append(self, connection, *args, **kwargs):
         """
@@ -619,7 +631,9 @@ class NNTPConnection(SocketBase):
 
         if self._grouplist is None or not lazy:
             # Send LIST ACTIVE command
-            response = self.send('LIST ACTIVE', decoders=[CodecGroups(), ])
+            response = self.send('LIST ACTIVE', decoders=[
+                CodecGroups(work_dir=self.work_dir),
+            ])
             if not response.is_success(multiline=True):
                 logger.error('Failed to interpret NNTP LIST ACTIVE response.')
                 # could not retrieve list
@@ -1023,6 +1037,7 @@ class NNTPConnection(SocketBase):
                     filters=self.filters,
                     sort=sort,
                     encoding=self.encoding,
+                    work_dir=self.work_dir,
                 ),
             ],
             retries=NNTP_XOVER_RETRIES,
@@ -1077,7 +1092,9 @@ class NNTPConnection(SocketBase):
             # Force decoders to just be the header
             response = self.send(
                 'HEAD <%s>' % id,
-                decoders=[CodecHeader(encoding=self.encoding), ],
+                decoders=[
+                    CodecHeader(encoding=self.encoding, work_dir=self.work_dir),
+                ],
             )
 
             if response.is_success(multiline=True):
@@ -1111,52 +1128,117 @@ class NNTPConnection(SocketBase):
         # Return
         return True
 
-    def get(self, id, work_dir, group=None):
+    def get(self, id, work_dir=None, group=None):
         """
         A wrapper to the _get call allowing support for more then one type
         of object (oppose to just _get() which only accepts the message id
 
+        This function returns the articles as a sortedset() containing the
+        downloaded content based on what was passed in.
+
         """
+        if work_dir is None:
+            # Default
+            work_dir = self.work_dir
 
         if isinstance(id, basestring):
             # We're dealing a Message-ID (Article-ID)
             return self._get(id=id, work_dir=work_dir, group=group)
 
-        elif isinstance(id, NNTPnzb):
+        # A sorted list of all articles pulled down
+        results = sortedset(key=lambda x: x.key())
+
+        if isinstance(id, NNTPnzb):
             # We're dealing with an NZB File
             if not id.is_valid():
                 return None
 
-            for seg in id:
-                # A sorted set of segments
-                articles = sortedset(key=lambda x: x.key())
-                while len(seg):
-                    # Basically we will pop each article our of our
-                    # NNTPSegmentedPost() object and replace its decoded
-                    # content with our retrieved results
-                    nzb_article = seg.pop()
+            # Get total part count
+            total_articles = len(id)
 
-                    # retrieve it's content if we can
-                    fetched_article = self._get(
-                        id=nzb_article,
-                        work_dir=work_dir,
-                        group=group,
-                    )
+            # We iterate over each segment defined int our NZBFile and merge
+            # them into 1 file. We do this until we've processed all the
+            # segments and we return a list of articles
+            for no, seg in enumerate(id):
+                # A sorted set of segments (all segments making up multiple
+                # NNTPContent() objects
 
-                    if fetched_article:
+                # Get segment count
+                total_parts = len(seg)
+
+                for part_no, nzb_article in enumerate(seg):
+                    # We need to download each article define
+                    if self.join_group:
+                        for group in seg.groups:
+                            # Try each group
+                            article = self._get(
+                                id=nzb_article,
+                                work_dir=work_dir,
+                                group=group,
+                            )
+
+                            if article:
+                                # Found
+                                break
+
+                        # If we reach here, we failed to fetch the item, so
+                        # we'll try the next group
+                        logger.warning(
+                            'Failed to fetch segment #%.2d (%s)' % \
+                            (nzb_article.no, nzb_article.filename),
+                        )
+
+                        # mark our article invalid as part of it's response
+                        article._is_valid = False
+
+                    else:
+                        # Fetch our content
+                        article = self._get(
+                            id=nzb_article,
+                            work_dir=work_dir,
+                        )
+
+                    if article:
                         # Store information from our nzb_article over top of
                         # the contents in the new article we retrieved
-                        articles.add(fetched_article)
+                        if len(article) == 0:
+                            logger.warning(
+                                'No content found in segment #%.2d (%s)' % \
+                                (nzb_article.no, nzb_article.filename),
+                            )
+
+                        else:
+                            # over-ride content based on data provided by
+                            # NZBFile
+                            article.decoded[0].filename = seg.filename
+                            article.decoded[0].part = part_no + 1
+                            article.decoded[0].total_parts = total_parts
 
                     else:
                         # Uh oh, we failed to get anything; so just add
                         # our current article generated from the nzb file.
                         # Mark the object invalid and re-add it
-                        nzb_article._is_valid = False
-                        articles.add(nzb_article)
+                        logger.warning(
+                            'Failed to retrieve segment (%s)' % \
+                            seg.filename,
+                        )
 
-                    # Replace our articles in the segment
-                    seg.articles = articles
+                        # mark our article invalid as part of it's response
+                        article._is_valid = False
+
+                    # for article organization, we want to ensure our content
+                    # is ordered sequentially a it's defined in the NZBFile
+                    article.no += no
+
+                    # Store our article
+                    results.add(article)
+
+            if len(results):
+                # At this point we have a segment ready for post-processing
+                return results
+
+        # Unsupported
+        return None
 
     def _get(self, id, work_dir, group=None):
         """
@@ -1188,7 +1270,7 @@ class NNTPConnection(SocketBase):
         if not self.use_body:
             # BODY calls pull down header information too
             decoders.append(
-                CodecHeader(work_dir=work_dir, encoding=self.encoding),
+                CodecHeader(encoding=self.encoding, work_dir=work_dir),
             )
 
         decoders.extend([
@@ -1238,66 +1320,8 @@ class NNTPConnection(SocketBase):
 
         # If we reach here, we have data we can work with; build our article
         # using the content retrieved.
-        article = NNTPArticle(id=id)
+        article = NNTPArticle(id=id, work_dir=work_dir)
         article.load_response(response)
-
-        # if self._data.tell() >= self._data_len and self.article_eod:
-        #     # No more data; we're done
-        #     return None
-
-        # if 'name' in self.article and len(self.article['name']) > 1:
-        #     self.article_fname = basename(self.article['name'])
-        # else:
-        #     self.article_fname = '%s.msg' % id
-
-        #  Temporary filename for retreival)
-        # self.article_fname = '%s.msg' % id
-        #  fileout = join(work_dir, self.article_fname)
-        #  if isfile(fileout):
-        #      try:
-        #          unlink(fileout)
-        #          logger.warning('Filename %s already exists.' % fileout)
-        #      except:
-        #          logger.error(
-        #              'Could not eliminate lingering file %s' % fileout,
-        #          )
-        #          return None
-
-        #  retrieve our content passing in our Article object
-        # response = self._recv(article=article)
-        # if response.code not in NNTPResponseCode.SUCCESS_MULTILINE:
-        #     # We failed to retrieve the content
-        #     logger.error('Failed during data reception.')
-        #     self.close()
-
-        #     if self._backups:
-        #         # Try our backup servers in the sequential order they were
-        #         # added in; if they all fail; then we return None
-        #         return next((b.article for b in self._backups \
-        #                 if b.get(id, work_dir, group) != None), None)
-
-        #     # If we reach here; there are no backup servers; so we just
-        #     # return None
-        #     return None
-
-        # logger.debug('Article Info: %s' % str(self.article))
-        # if self.article_encoding == MessageEncoding.YENC:
-        #     if 'crc32' in self.article and
-        #            self.article['crc32'] != decoder.crc32():
-        #         logger.debug('CRC Match %s == %s' % (
-        #             self.article['crc32'],
-        #             decoder.crc32()
-        #         ))
-        #         # TODO: rename file; add .ERROR to extension
-        #         raise YencError('CRC Error', code=E_CRC32)
-
-        # except:
-        #     # we failed; clean up file
-        #     try:
-        #         unlink(fileout)
-        #         logger.debug('Removed partially written file %s' % fileout)
-        #     except:
-        #         pass
 
         # Return the content retrieved
         return article
@@ -1443,9 +1467,9 @@ class NNTPConnection(SocketBase):
                 )
 
             # Some Stats (TODO)
-            bytes = self._buffer.tell() - total_bytes
-            total_bytes += bytes
-            logger.debug('_recv() %d byte(s) read.' % (bytes))
+            _bytes = self._buffer.tell() - total_bytes
+            total_bytes += _bytes
+            logger.debug('_recv() %d byte(s) read.' % (_bytes))
 
             # # DEBUG START
             # self._buffer.seek(head_ptr, SEEK_SET)
@@ -1539,7 +1563,11 @@ class NNTPConnection(SocketBase):
             can_read = self.can_read()
 
             # Initialize our response object
-            response = NNTPResponse(self.last_resp_code, self.last_resp_str)
+            response = NNTPResponse(
+                self.last_resp_code,
+                self.last_resp_str,
+                work_dir=self.work_dir,
+            )
 
             # We have multi-line code to store fill our buffer before
             # proceeding.
@@ -1717,7 +1745,7 @@ class NNTPConnection(SocketBase):
                         # just alert the end user and move along
                         logger.warning(
                             '_recv() %d byte(s) ZLIB decompression failure.' \
-                            % (bytes),
+                            % (_bytes),
                         )
                         # Convert our response to that of an response Fetch
                         # Error

@@ -16,6 +16,7 @@
 
 from os.path import exists
 from newsreap.NNTPContent import NNTPContent
+from newsreap.Utils import bytes_to_strsize
 
 
 class NNTPAsciiContent(NNTPContent):
@@ -62,3 +63,22 @@ class NNTPAsciiContent(NNTPContent):
     def __str__(self):
         """ Returns content """
         return self.getvalue()
+
+    def __repr__(self):
+        """
+        Return a printable version of the file being read
+        """
+        if self.part is not None:
+            return '<NNTPAsciiContent sort=%d filename="%s" part=%d/%d len=%s />' % (
+                self.sort_no,
+                self.filename,
+                self.part,
+                self.total_parts,
+                bytes_to_strsize(len(self)),
+            )
+        else:
+            return '<NNTPAsciiContent sort=%d filename="%s" len=%s />' % (
+                self.sort_no,
+                self.filename,
+                bytes_to_strsize(len(self)),
+            )

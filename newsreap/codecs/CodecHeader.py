@@ -48,7 +48,7 @@ class CodecHeader(CodecBase):
             *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
-        self.decoded = NNTPHeader()
+        self.decoded = NNTPHeader(work_dir=self.work_dir)
 
         # Initialize Header Parsed Flag; This is used to ensure
         # the decoding of headers is only performed once
@@ -203,7 +203,7 @@ class CodecHeader(CodecBase):
         super(CodecHeader, self).reset()
 
         # Reset Our Result set
-        self.decoded = NNTPHeader()
+        self.decoded = NNTPHeader(work_dir=self.work_dir)
 
         # Initialize Header Parsed Flag; This is used to ensure
         # the decoding of headers is only performed once

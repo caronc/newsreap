@@ -37,6 +37,7 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPnzb import NNTPnzb
+
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
@@ -48,6 +49,74 @@ class NNTPnzb_Test(TestBase):
     parsing and simple iterations over our XML files.
 
     """
+
+    def test_file_parsing(self):
+        """
+        Test the filename parsing
+        """
+        # Prepare an NZB Object
+        nzbobj = NNTPnzb()
+
+        parse_str = 'Just awesome! [1/3] - "the.awesome.file.ogg" yEnc (1/1)'
+        result = nzbobj.parse_subject(parse_str)
+        assert result is not None
+        assert isinstance(result, dict)
+        assert result['desc'] == 'Just awesome!'
+        assert result['index'] == 1
+        assert result['count'] == 3
+        assert 'size' not in result
+        assert result['fname'] == 'the.awesome.file.ogg'
+        assert result['yindex'] == 1
+        assert result['ycount'] == 1
+
+        parse_str = '"Quotes on Desc" - the.awesome.file.ogg yEnc (1/2)'
+        result = nzbobj.parse_subject(parse_str)
+        assert result is not None
+        assert isinstance(result, dict)
+        assert result['desc'] == 'Quotes on Desc'
+        assert 'index' not in result
+        assert 'count' not in result
+        assert 'size' not in result
+        assert result['fname'] == 'the.awesome.file.ogg'
+        assert result['yindex'] == 1
+        assert result['ycount'] == 2
+
+        parse_str = 'A great description - the.awesome.file.ogg yEnc (/1)'
+        result = nzbobj.parse_subject(parse_str)
+        assert result is not None
+        assert isinstance(result, dict)
+        assert result['desc'] == 'A great description'
+        assert 'index' not in result
+        assert 'count' not in result
+        assert 'size' not in result
+        assert result['fname'] == 'the.awesome.file.ogg'
+        assert 'yindex' not in result
+        assert result['ycount'] == 1
+
+        parse_str = 'Another [1/1] - "the.awesome.file.ogg" yEnc (1/1) 343575'
+        result = nzbobj.parse_subject(parse_str)
+        assert result is not None
+        assert isinstance(result, dict)
+        assert result['desc'] == 'Another'
+        assert result['index'] == 1
+        assert result['count'] == 1
+        assert result['size'] == 343575
+        assert result['fname'] == 'the.awesome.file.ogg'
+        assert result['yindex'] == 1
+        assert result['ycount'] == 1
+
+        # Test escaping
+        parse_str = 'Another (4/5) - &quot;the.awesome.file.ogg&quot; yEnc (3/9) 123456'
+        result = nzbobj.parse_subject(parse_str, unescape=True)
+        assert result is not None
+        assert isinstance(result, dict)
+        assert result['desc'] == 'Another'
+        assert result['index'] == 4
+        assert result['count'] == 5
+        assert result['size'] == 123456
+        assert result['fname'] == 'the.awesome.file.ogg'
+        assert result['yindex'] == 3
+        assert result['ycount'] == 9
 
     def test_general_features(self):
         """
@@ -62,6 +131,14 @@ class NNTPnzb_Test(TestBase):
         # Test iterations
         for article in nzbobj:
             assert isinstance(article, NNTPSegmentedPost)
+
+        # Test iterations (with enumeration)
+        for _, article in enumerate(nzbobj):
+            assert isinstance(article, NNTPSegmentedPost)
+
+            for seg in article:
+                # Iterate over objects
+                assert isinstance(seg, NNTPArticle)
 
         # However until content is loaded into memory we can't use the indexes
         try:

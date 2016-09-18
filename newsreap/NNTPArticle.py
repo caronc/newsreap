@@ -20,6 +20,8 @@ from copy import deepcopy
 from itertools import chain
 from os.path import isfile
 from datetime import datetime
+from os.path import abspath
+from os.path import expanduser
 
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
@@ -27,6 +29,7 @@ from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.NNTPHeader import NNTPHeader
 from newsreap.NNTPSettings import NNTP_EOL
 from newsreap.NNTPSettings import NNTP_EOD
+from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 from newsreap.Utils import random_str
 
 # Logging
@@ -59,7 +62,8 @@ class NNTPArticle(object):
     """
 
     def __init__(self, subject=DEFAULT_NNTP_SUBJECT,
-                 poster=DEFAULT_NNTP_POSTER, groups=None, *args, **kwargs):
+                 poster=DEFAULT_NNTP_POSTER, groups=None, work_dir=None,
+                 *args, **kwargs):
         """
         Initialize NNTP Article
 
@@ -82,6 +86,11 @@ class NNTPArticle(object):
         except:
             self.no = int(kwargs.get(u'no', 1000))
 
+        if work_dir is None:
+            self.work_dir = DEFAULT_TMP_DIR
+        else:
+            self.work_dir = abspath(expanduser(work_dir))
+
         # Track the groups this article resides in.
         # This is populated for meta information when an article is
         # retrieved; but its contents are also used when posting an article.
@@ -99,10 +108,10 @@ class NNTPArticle(object):
             raise AttributeError("Invalid group set specified.")
 
         # A hash of header entries
-        self.header = NNTPHeader()
+        self.header = NNTPHeader(work_dir=self.work_dir)
 
         # Our body contains non-decoded content
-        self.body = NNTPAsciiContent()
+        self.body = NNTPAsciiContent(work_dir=self.work_dir)
 
         # TODO: rename decoded to content because decoded implies this object
         # is only used when retrieving articles when in fact it's used for
@@ -269,6 +278,7 @@ class NNTPArticle(object):
                 groups=self.groups,
                 # Increment our index #
                 no=self.no+no,
+                work_dir=self.work_dir,
             )
 
             # Set our header to be a copy of what we already have

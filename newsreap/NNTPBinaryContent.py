@@ -15,6 +15,7 @@
 # GNU Lesser General Public License for more details.
 
 from newsreap.NNTPContent import NNTPContent
+from newsreap.Utils import bytes_to_strsize
 
 class NNTPBinaryContent(NNTPContent):
     """
@@ -32,3 +33,22 @@ class NNTPBinaryContent(NNTPContent):
             begin=begin, end=end, total_size=total_size,
             work_dir=work_dir,
             sort_no=10000, *args, **kwargs)
+
+    def __repr__(self):
+        """
+        Return a printable version of the file being read
+        """
+        if self.part is not None:
+            return '<NNTPBinaryContent sort=%d filename="%s" part=%d/%d len=%s />' % (
+                self.sort_no,
+                self.filename,
+                self.part,
+                self.total_parts,
+                bytes_to_strsize(len(self)),
+            )
+        else:
+            return '<NNTPBinaryContent sort=%d filename="%s" len=%s />' % (
+                self.sort_no,
+                self.filename,
+                bytes_to_strsize(len(self)),
+            )

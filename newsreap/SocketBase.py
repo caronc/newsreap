@@ -114,10 +114,13 @@ class SocketBase(object):
                             Specify the encryption Cypher to use here
                             too.
 
+            verify_cert     Attempt to verify the SSL certificate or fail
+                            if we can't.  This is used to help detect against
+                            the man-in-the-middle attacks.
 
     """
     def __init__(self, host=None, port=0, bindaddr=None, bindport=0,
-                 secure=False, *args, **kwargs):
+                 secure=False, verify_cert=True, *args, **kwargs):
 
         try:
             self.port = int(port)
@@ -130,6 +133,7 @@ class SocketBase(object):
 
         self.connected = False
         self.secure = secure
+        self.verify_cert = verify_cert
 
         if self.secure is None:
             # a little qwirky, but allow users to set secure to
@@ -432,7 +436,11 @@ class SocketBase(object):
                     break
 
                 # Encrypt our socket (changing it into an SSLSocket Object)
-                self.__encrypt_socket(timeout=timeout, server_side=False)
+                self.__encrypt_socket(
+                    timeout=timeout,
+                    verify=self.verify_cert,
+                    server_side=False,
+                )
 
                 # If we get here, we were successful in encrypting the
                 # connection; so let's go ahead and break out of our
@@ -631,7 +639,11 @@ class SocketBase(object):
 
         try:
             # Encrypt our socket (changing it into an SSLSocket Object)
-            self.__encrypt_socket(timeout=timeout, server_side=True)
+            self.__encrypt_socket(
+                timeout=timeout,
+                verify=self.verify_cert,
+                server_side=True,
+            )
 
             # If we get here, we were successful in encrypting the connection;
             # so let's go ahead and break out of our connection loop
