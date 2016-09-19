@@ -56,6 +56,9 @@ class Server(ObjectBase):
     # NNTP SSL Enabled
     secure = Column(Boolean, default=True, nullable=False)
 
+    # Verify SSL Key
+    verify_cert = Column(Boolean, default=True, nullable=False)
+
     # NNTP Stream Type
     iostream = Column(
         Enum(*NNTP_SUPPORTED_IO_STREAMS),
@@ -131,6 +134,7 @@ class Server(ObjectBase):
             'username': self.username,
             'password': self.password,
             'secure': self.secure,
+            'verify_cert': self.verify_cert,
             'join_group': self.join_group,
             'use_head': self.use_head,
             'use_body': self.use_body,

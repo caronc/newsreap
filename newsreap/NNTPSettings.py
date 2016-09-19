@@ -24,6 +24,7 @@
 #       host: awesome.nntp.server.com
 #       port: 563
 #       secure: True
+#       verify_cert: False
 #       compress: True
 #       join_group: False
 #       use_body: False
@@ -235,6 +236,7 @@ SERVER_VARIABLES = {
     'host': None,
     'port': 119,
     'secure': None,
+    'verify_cert': None,
     'compress': True,
     'join_group': True,
     'use_head': True,
@@ -491,6 +493,7 @@ class NNTPSettings(NNTPDatabase):
                 'host': 'foo.bar.net',
                 'port': 119,
                 'secure': True,
+                'verify_cert': True,
                 'username': 'foo',
                 'password': 'bar',
                 'compress': True,
@@ -874,6 +877,7 @@ class NNTPSettings(NNTPDatabase):
                         Server.username: server['username'],
                         Server.password: server['password'],
                         Server.secure: server['secure'],
+                        Server.verify_cert: server['verify_cert'],
                         Server.iostream: iostream,
                         Server.join_group: server['join_group'],
                         Server.use_head: server['use_head'],
@@ -889,6 +893,7 @@ class NNTPSettings(NNTPDatabase):
                             username=server['username'],
                             password=server['password'],
                             secure=server['secure'],
+                            verify_cert=server['verify_cert'],
                             iostream=iostream,
                             join_group=server['join_group'],
                             use_head=server['use_head'],
