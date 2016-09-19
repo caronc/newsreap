@@ -41,6 +41,7 @@ from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 
 from newsreap.SocketBase import SocketBase
 from newsreap.SocketBase import SocketException
+from newsreap.SocketBase import SocketRetryLimit
 from newsreap.SocketBase import SignalCaughtException
 from newsreap.Utils import mkdir
 from newsreap.Utils import SEEK_SET
@@ -405,8 +406,16 @@ class NNTPConnection(SocketBase):
         # Reset tracking items
         self._soft_reset()
 
-        # call _connect()
-        return self._connect(*args, **kwargs)
+        try:
+            # call _connect()
+            result = self._connect(*args, **kwargs)
+
+        except SocketRetryLimit:
+            # We can not establish a connection and never will
+            return False
+
+        return result
+
 
     def _connect(self, *args, **kwargs):
         """
@@ -1148,7 +1157,15 @@ class NNTPConnection(SocketBase):
         # A sorted list of all articles pulled down
         results = sortedset(key=lambda x: x.key())
 
-        if isinstance(id, NNTPArticle):
+        if isinstance(id, set, tuple, sortedset, list):
+            # iterate over all items and append them to our resultset
+            for entry in id:
+                _results = self._get(id=id.id, work_dir=work_dir, group=group)
+                if _results is not None:
+                    # Append our results
+                    results |= _results
+
+        elif isinstance(id, NNTPArticle):
             # Support NNTPArticle Objects if they have an id defined
             if id.id:
                 return self._get(id=id.id, work_dir=work_dir, group=group)
