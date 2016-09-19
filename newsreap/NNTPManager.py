@@ -54,7 +54,7 @@ class Worker(Greenlet):
 
         # We always process as many queue entries as we can
         # This contains..
-        #TODO: This should contain some sort of container object that
+        # TODO: This should contain some sort of container object that
         #       allows us to process many Message-ID, but we need to know
         #       their group they belong into.  We also need their expected
         #       filename.  We want to allow the NZBFiles to force a filename
@@ -67,20 +67,19 @@ class Worker(Greenlet):
         # our exit flag, it is set externally
         self._exit = Event()
 
-
     def _run(self):
         """
         Read from the work_queue, process it using an NNTPRequest object.
         """
         # block until we have an event to handle.
-        #print "Worker %s ready!" % self
+        # print "Worker %s ready!" % self
         while not self._exit.is_set():
-            #print "Worker %s loop!" % self
+            # print "Worker %s loop!" % self
 
-            #self._event.wait(timeout=1.0)
-            #if self._exit.is_set():
-            #    # We're done
-            #    return
+            # self._event.wait(timeout=1.0)
+            # if self._exit.is_set():
+            #     # We're done
+            #     return
 
             try:
                 request = self._work_queue.get()
@@ -149,7 +148,6 @@ class NNTPManager(object):
         ))
         return
 
-
     def get_connection(self):
         """
         Grabs a connection from the thread pool and returns it by reference.
@@ -165,7 +163,7 @@ class NNTPManager(object):
         if len(self._pool):
             # Find the first connected connection
             connection = next((c for c in self._pool \
-                if c.connected == True), None)
+                if c.connected is True), None)
 
             if connection:
                 return connection
@@ -174,7 +172,6 @@ class NNTPManager(object):
 
         # Otherwise there is nothing to return
         return None
-
 
     def connect(self):
         """
@@ -194,7 +191,6 @@ class NNTPManager(object):
 
             # Track our worker
             self._workers.append(g)
-
 
     def close(self):
         """
@@ -225,7 +221,6 @@ class NNTPManager(object):
         self._workers = []
         self._pool = []
 
-
     def group(self, name, block=True):
         """
         Queue's an NNTPRequest for processing and returns a call
@@ -254,7 +249,7 @@ class NNTPManager(object):
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
             # ('function, (*args), (**kwargs) )
-            ('group', (name, ), { }),
+            ('group', (name, ), {}),
         ])
 
         # Append to Queue for processing
@@ -271,7 +266,6 @@ class NNTPManager(object):
 
         # We aren't blocking, so just return the request object
         return request
-
 
     def groups(self, filters=None, lazy=True, block=True):
         """
@@ -301,7 +295,7 @@ class NNTPManager(object):
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
             # ('function, (*args), (**kwargs) )
-            ('groups', list(), {'filters': filters, 'lazy': lazy }),
+            ('groups', list(), {'filters': filters, 'lazy': lazy}),
         ])
 
         # Append to Queue for processing
@@ -318,7 +312,6 @@ class NNTPManager(object):
 
         # We aren't blocking, so just return the request object
         return request
-
 
     def stat(self, id, full=None, group=None, block=True):
         """
@@ -366,7 +359,6 @@ class NNTPManager(object):
         # We aren't blocking, so just return the request object
         return request
 
-
     def get(self, id, work_dir, group=None, block=True):
         """
         Queue's an NNTPRequest for processing and returns it's
@@ -413,8 +405,8 @@ class NNTPManager(object):
         # We aren't blocking, so just return the request object
         return request
 
-
-    def xover(self, group, start=None, end=None, sort=XoverGrouping.BY_POSTER_TIME, block=True):
+    def xover(self, group, start=None, end=None,
+              sort=XoverGrouping.BY_POSTER_TIME, block=True):
         """
 
         If the start or end time are set to `None` then they default to the
@@ -473,7 +465,6 @@ class NNTPManager(object):
 
         # We aren't blocking, so just return the request object
         return request
-
 
     def seek_by_date(self, refdate, group=None, block=True):
         """
