@@ -31,22 +31,26 @@
 #
 #   # Poll the configured NNTP Servers in your config.yaml file for
 #   # all of the usenet groups supported.
-#   nr.py group update
+#   nr.py update groups
 #
-#   # remember, we're on a command line; the full group names might
-#   # get annoying to type time after time.  Create aliases to your
-#   # favorites this way:
-#   nr.py alias add alt.binaries.test a.b.test test
+#   # You can list them all now by typing:
+#   nr.py group list --all
 #
-#   # The above added 2 aliases to alt.binaries.test one called a.b.test and
-#   # one just called test.
-#   # Now when we work with groups, we can access them by their alias if we
-#   # want.  Simple right!?
+#   # Aliases allow you to simplify group reference so you don't have to type
+#   # the whole name out each time. The below creates an alias called
+#   # 'a.b.test' and assciates it with the group alt.binaries.test.
+#   nr.py alias add test alt.binaries.test
+#
+#   # You can list the aliases and what they're associated with by typing
+#   nr.py alias list
+#
+#   # You can also associate more then one group with the same alias
+#   nr.py alias add test alt.binaries.testing alt.binaries.test.files
 #
 #   # Index a group if you want; the below only looks back untl Jan 1st, 2014)
 #   # The below example indexes the test alias we created (so
 #   # alt.binaries.test in this case)
-#   nr.py group index --start=2014 test
+#   nr.py group index --date-from=2014 test
 #
 #   # Index a range if you want (the below looks from Jan 1st, to Feb 1st,
 #   # 2014)

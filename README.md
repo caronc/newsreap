@@ -152,15 +152,14 @@ items = sock.xover()
 #        usenet servers require this option to be set; but it's
 #        there fore those that do:
 #
-result = sock.get('message-id', tmp_dir='/tmp', group='alt.binaries.test')
+result = sock.get('message-id', work_dir='/tmp', group='alt.binaries.test')
 
 # - Retrieve a series of articles if you have an nzbfile:
 result = sock.get(
-    NNTPnzb('/path/to/NZBfile', tmp_dir='/tmp'),
+    NNTPnzb('/path/to/NZBfile', work_dir='/tmp'),
     # Define the path you want your content to download to. This is not
     # a permanent path; it's just a temporary store that can be used
     # for file storage.
     work_dir='/tmp',
 )
-
 ```

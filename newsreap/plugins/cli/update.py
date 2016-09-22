@@ -319,6 +319,12 @@ def update_search(ctx, groups, date_from, date_to, watched):
         gt = session.query(GroupTrack)\
                 .filter(GroupTrack.group_id==_id)\
                 .filter(GroupTrack.server_id==_server.id).first()
+
+        if gt is None:
+            # Not found
+            logger.error('Failed to retrieve information on group %s' % (name))
+            continue
+
         logger.info('Successfully retrieved information on group %s' % (name))
 
         # Initialize our high/low variables

@@ -2,7 +2,7 @@
 #
 #  The Server Object used to track NNTP Servers
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -92,7 +92,6 @@ class Server(ObjectBase):
     # it disabled.
     enabled = Column(Boolean, default=True, nullable=False)
 
-
     def __init__(self, host, *args, **kwargs):
         super(Server, self).__init__(*args, **kwargs)
         self.host = host
@@ -115,11 +114,9 @@ class Server(ObjectBase):
                 # NNTP Standard
                 self.iostream = NNTPIOStream.RFC3977
 
-
     def __repr__(self):
         return "<Server(id=%s, name='%s', port=%d', ssl='%s')>" % (
                              self.id, self.host, self.port, self.secure)
-
 
     def dict(self):
         """
