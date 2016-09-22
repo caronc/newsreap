@@ -1157,7 +1157,7 @@ class NNTPConnection(SocketBase):
         # A sorted list of all articles pulled down
         results = sortedset(key=lambda x: x.key())
 
-        if isinstance(id, set, tuple, sortedset, list):
+        if isinstance(id, (set, tuple, sortedset, list)):
             # iterate over all items and append them to our resultset
             for entry in id:
                 _results = self._get(id=id.id, work_dir=work_dir, group=group)
