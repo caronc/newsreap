@@ -23,6 +23,13 @@
 # Successfully executed commands always return a zero (0) to the command
 # line, otherwise a non-zero value is returned which may or may not
 # identify details on the problem that occurred.
+#
+# Drop a configuration file in your home directory:
+#    mkdir -p ~/.config/newsreap
+#    cp config.yaml ~/.config/newsreap
+#
+# Now update the configuration to reflect your NNTP Setup
+#
 
 # To initialize your workable database safely you might do the following:
 #
@@ -47,28 +54,44 @@
 #   # You can also associate more then one group with the same alias
 #   nr.py alias add test alt.binaries.testing alt.binaries.test.files
 #
-#   # Index a group if you want; the below only looks back untl Jan 1st, 2014)
-#   # The below example indexes the test alias we created (so
-#   # alt.binaries.test in this case)
-#   nr.py group index --date-from=2014 test
+#   # Index all the groups defined by our alias.
+#   # the below only looks back untl Jan 1st, 2014
+#   # Depending on how many articles are in the group, this can take a very
+#   # long time. The -vv at least lets you know something is going on.
 #
-#   # Index a range if you want (the below looks from Jan 1st, to Feb 1st,
-#   # 2014)
-#   nr.py group index --start=2013 --finish=2014.02 test
+#   # consider setting a database like PostgreSQL or MySQL for speed
+#   # alternatively, if you insist on using the default SQLite database, then
+#   # consider setting up a RAM drive for faster processing of the table
+#   # writes.
+#   nr.py -vvv update search --date-from=2014 test
 #
+#   # Index a from/to range if you want.
+#   nr.py -vvv update search --date-from=2013 --date-to=2014.02 test
+#
+#   # Newsreap also maintains a watch list which is groups you just always
+#   # intend to index. It can be a conbination of aliases you set up, or
+#   # just a few individual groups. The below adds our 'test' group to
+#   # a watch list.
+#   nr.py group watch test
+#
+#   # We can now update our search by typing this following:
+#   nr.py -vvv update search --watched
+
 #   # Index the entire group (the whole retention period you have to work with)
 #   nr.py group index test
 #
 #   # Now that you've got content indexed, you can browse for things
-#   nr.py search "keyword or string 1" "keyword or string 2" "etc..."
+#   # You must specify an alias/group as your first argument
+#   # From there, you can specify your search arguments
+#   nr.py search test "keyword or string 1" "keyword or string 2" "etc..."
 #
 #   # Getting to many hits?  Filter them; the below only shows entries
 #   # that scored higher then 30
-#   nr.py search --score=30 "keyword or string 1" "keyword or string 2" "etc..."
+#   nr.py search test --score=30 "keyword or string 1" "keyword or string 2" "etc..."
 #
 #   # You can do ranges too
 #   # The below only shows entries that have scored between -90 and 30
-#   nr.py search --score=-90-30 "keyword or string 1" "keyword or string 2" "etc..."
+#   nr.py search test --score=-90-30 "keyword or string 1" "keyword or string 2" "etc..."
 #
 #   # Want to elminate crap from your database that you know is just
 #   # taking up useless junk (and space, and thus speed because it's indexed):
@@ -83,7 +106,6 @@
 # Warnings like this on exit:
 # Exception KeyError: KeyError(139667991911952,) in \
 #       <module 'threading' from '/usr/lib64/python2.6/threading.pyc'> ignored
-
 import gevent.monkey
 gevent.monkey.patch_all()
 
@@ -93,8 +115,6 @@ from os.path import abspath
 from os.path import dirname
 from os.path import basename
 from os.path import isdir
-
-from sqlalchemy.exc import OperationalError
 
 # Path
 try:

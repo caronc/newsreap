@@ -4,6 +4,7 @@ servers:
     host: myprovider
     port: 563
     secure: True
+    verify_cert: False
     compress: True
     join_group: False
     use_body: False

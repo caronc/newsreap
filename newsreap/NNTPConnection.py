@@ -739,7 +739,11 @@ class NNTPConnection(SocketBase):
 
         index = self._seek_by_date(refdate)
         if index < 0:
-            logger.error('Failed to find date')
+            logger.warning(
+                'No entries found at (or after) date(%s) in group %s' % (
+                    refdate.strftime('%Y.%m.%d %H:%M:%S'),
+                    group,
+            ))
             self.group_index = self.group_head
             return self.group_head
 

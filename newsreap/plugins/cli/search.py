@@ -2,7 +2,7 @@
 #
 # NewsReap NNTP Search CLI Plugin
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -33,6 +33,7 @@ from sqlalchemy import not_
 #from newsreap.NNTPConnection import NNTPConnection
 #from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
+from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 
 # Logging
 import logging
@@ -189,7 +190,10 @@ def search(ctx, group, keywords, minscore, maxscore, case_insensitive):
 
     for name, _id in groups.iteritems():
         db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
-        db_file = '%s.db' % join(db_path, name)
+        db_file = '%s%s' % (
+            join(db_path, name),
+            SQLITE_DATABASE_EXTENSION,
+        )
         if not isfile(db_file):
             logger.warning(
                 "There is no cached content for '%s'." % db_file

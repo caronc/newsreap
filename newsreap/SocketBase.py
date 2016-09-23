@@ -1118,7 +1118,6 @@ class SocketBase(object):
                             # raise anything else
                             raise
 
-
                         # TODO: Store fingerprint (if not stored already)
                         #       If already stored, then verify that it hasn't
                         #       changed.

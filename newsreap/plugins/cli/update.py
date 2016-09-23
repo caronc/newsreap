@@ -44,6 +44,7 @@ from newsreap.NNTPConnection import XoverGrouping
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 
 from newsreap.Utils import mkdir
 
@@ -198,7 +199,6 @@ def update_search(ctx, groups, date_from, date_to, watched):
         logger.error("There are no servers defined.")
         exit(1)
 
-
     if date_from:
         try:
             date_from = parse(date_from, fuzzy=True)
@@ -260,7 +260,10 @@ def update_search(ctx, groups, date_from, date_to, watched):
     for name, _id in groups.iteritems():
 
         db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
-        db_file = '%s.db' % join(db_path, name)
+        db_file = '%s%s' % (
+            join(db_path, name),
+            SQLITE_DATABASE_EXTENSION,
+        )
         if not isdir(db_path):
             if not mkdir(db_path):
                 logger.error("Failed to create directory %s" % db_path)
@@ -276,7 +279,10 @@ def update_search(ctx, groups, date_from, date_to, watched):
         ram_db_file = None
         if ramdisk:
             # Create a ramdisk db
-            ram_db_file = '%s.db' % join(ramdisk, name)
+            ram_db_file = '%s%s' % (
+                join(ramdisk, name),
+                SQLITE_DATABASE_EXTENSION,
+            )
 
             # Remove the existing file if it's there
             try:
@@ -320,17 +326,6 @@ def update_search(ctx, groups, date_from, date_to, watched):
                 .filter(GroupTrack.group_id==_id)\
                 .filter(GroupTrack.server_id==_server.id).first()
 
-        if gt is None:
-            # Not found
-            logger.error('Failed to retrieve information on group %s' % (name))
-            continue
-
-        logger.info('Successfully retrieved information on group %s' % (name))
-
-        # Initialize our high/low variables
-        low = gt.high
-        high = gt.low
-
         if not gt or reset:
             # Get an connection to work with
             con = ctx['NNTPManager'].get_connection()
@@ -355,6 +350,10 @@ def update_search(ctx, groups, date_from, date_to, watched):
             )
             group_session.commit()
             session.add(gt)
+
+        # Initialize our high/low variables
+        low = gt.high
+        high = gt.low
 
         # starting pointer
         cur = gt.scan_pointer + 1

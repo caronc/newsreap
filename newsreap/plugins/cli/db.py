@@ -32,6 +32,13 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
     from newsreap.objects.nntp.Server import Server
 
+from newsreap.objects.nntp.GroupTrack import GroupTrack
+from newsreap.objects.nntp.Group import Group
+
+from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
+from newsreap.Utils import find
+from newsreap.Utils import bytes_to_strsize
+
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_CLI
@@ -86,3 +93,41 @@ def database_reset(ctx):
             logger.info('Removed %s ...' % entry)
         except:
             logger.warning('Failed to remove %s ...' % entry)
+
+
+@click.command(name='status')
+@click.pass_obj
+def database_status(ctx):
+    """
+    displays details on the current database store
+    """
+    db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
+    logger.debug('Scanning %s for databases...' % db_path)
+    results = find(
+        db_path,
+        suffix_filter=SQLITE_DATABASE_EXTENSION,
+        fsinfo=True,
+        max_depth=1,
+    )
+
+    # Use our Database first if it exists
+    session = ctx['NNTPSettings'].session()
+    if not session:
+        logger.error('Could not acquire a database connection.')
+        exit(1)
+
+    # Get a list of watched groups
+    groups = dict(session.query(Group.name, Group.id)\
+                    .filter(Group.watch==True).all())
+
+    for _, meta in results.iteritems():
+        # Open up the database
+        flags = ''
+        if meta['filename'] in groups:
+            flags += 'W'
+
+        print('%-65s %-10s %s' % (
+            meta['filename'],
+            bytes_to_strsize(meta['size']),
+            flags,
+        ))

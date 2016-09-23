@@ -208,8 +208,14 @@ DEFAULT_CLI_PLUGIN_DIRECTORIES = (
     join(expanduser('~'), '.newsreap', 'plugins', 'cli'),
 )
 
+# SQLite Database File Extension
+SQLITE_DATABASE_EXTENSION = '.db'
+
 # SQLite Database Details
-SQLITE_DATABASE_ENGINE = 'sqlite:///%s' % join(DEFAULT_CONFIG_PATH, 'core.db')
+SQLITE_DATABASE_ENGINE = 'sqlite:///%s%s' % (
+    join(DEFAULT_CONFIG_PATH, 'core.db'),
+    SQLITE_DATABASE_EXTENSION,
+)
 
 # Default block size to read and write to and from memory for
 # disk i/o
