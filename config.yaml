@@ -1,3 +1,7 @@
+global:
+   base_dir: ~/.config/newsreap/
+   work_dir: %{base_dir}/var
+
 servers:
   - username: myusername
     password: mypassword
@@ -5,7 +9,7 @@ servers:
     port: 563
     secure: True
     verify_cert: False
-    compress: True
+    iostream: gzip.rfc3977
     join_group: False
     use_body: False
     use_stat: True
@@ -13,6 +17,7 @@ servers:
 processing:
    threads: 3
    header_batch_size: 25000
+   ramdisk: None
 
 posting:
   - author: 'omg <putin@russia.ru>'

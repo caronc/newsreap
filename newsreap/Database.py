@@ -2,7 +2,7 @@
 #
 # A common NNTP Database management class for manipulating SQLAlchemy
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -72,7 +72,6 @@ class Database(object):
 
         self._session = None
         self._engine = None
-
         # Initalizes to None, and is toggled to False/True
         # if the schema is determined to exist.  This allows a
         # call to open() to check if the schema exists right after
@@ -89,7 +88,6 @@ class Database(object):
         # Used to track massive write modes
         self._write_mode = False
 
-
     def close(self):
         """
         Closes a database connection (if one is present)
@@ -103,14 +101,6 @@ class Database(object):
 
             # Reset exists flag
             self._exists = None
-
-
-    def __del__(self):
-        """
-        Gracefully clean up any lingering session data
-        """
-        self.close()
-
 
     def open(self, engine=None, reset=None):
         """
@@ -177,10 +167,10 @@ class Database(object):
             # versions don't match (or can't be retrieved, then we can handle
             # messaging that the database isn't initialized.
             try:
-                self._version = [ (v.key, int(v.value)) \
+                self._version = [(v.key, int(v.value)) \
                                  for v in self._session.query(self.Vsp)\
                     .filter_by(group=VSP_VERSION_GROUP)\
-                    .order_by(self.Vsp.order).all() ]
+                    .order_by(self.Vsp.order).all()]
 
                 # Toggle Exists Flag
                 self._exists = True
@@ -188,7 +178,9 @@ class Database(object):
             except (ValueError, TypeError):
                 # int() failed; what the heck does this database have in
                 # it anyway?
-                logger.warning('The database appears to have an integrity issue.')
+                logger.warning(
+                    'The database appears to have an integrity issue.',
+                )
                 # Toggle Exists Flag; if there really is a problem,
                 # let it fail elsewhere... we've given warning already
                 self._exists = True
@@ -201,8 +193,8 @@ class Database(object):
             if len(self._version) == 0 or \
                len(set(self._version) - set(VSP_VERSION_KEYS)):
                 # TODO: if self._exists and the version is newer, research how
-                #       to do a schema migration. Alternatively; definitely spit
-                #       out an error if the version is older!
+                #       to do a schema migration. Alternatively; definitely
+                #       spit out an error if the version is older!
                 logger.debug('Applying any database schema changes...')
                 try:
                     self.Base.metadata.create_all(self._engine)
@@ -219,7 +211,11 @@ class Database(object):
                             .update({self.Vsp.value: v[1]}):
 
                         self._session.add(
-                            self.Vsp(group=VSP_VERSION_GROUP, key=v[0], value=v[1]),
+                            self.Vsp(
+                                group=VSP_VERSION_GROUP,
+                                key=v[0],
+                                value=v[1],
+                            ),
                         )
 
                 # update our version listing
@@ -233,7 +229,6 @@ class Database(object):
             return self._session
 
         return None
-
 
     def session(self):
         """
@@ -250,7 +245,6 @@ class Database(object):
 
         return self._session
 
-
     def escape_search_str(self):
         """
         Escapes a search string for searching the database
@@ -262,3 +256,17 @@ class Database(object):
 
         """
         return parse_url(self._engine_str)
+
+    def engine_str(self):
+        """
+        Returns the engine string
+        """
+        if self._engine_str:
+            return self._engine_str
+        return MEMORY_DATABASE_ENGINE
+
+    def __del__(self):
+        """
+        Gracefully clean up any lingering session data
+        """
+        self.close()

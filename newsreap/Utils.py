@@ -342,8 +342,7 @@ def stat(path, fsinfo=True, mime=True):
 
         if mime_type is None:
             # Default MIME Type if nothing found in our backup list
-            mime_type = next((m[1] for (r, m) \
-                              in enumerate(NEWSREAP_MIME_TABLE) \
+            mime_type = next((m[1] for m in NEWSREAP_MIME_TABLE \
                   if m[0].search(_basename)), 'application/octet-stream')
 
         nfo['mime'] = mime_type
@@ -1146,3 +1145,43 @@ def random_str(count=16, seed=ascii_uppercase + digits + ascii_lowercase):
                     letters-and-digits-in-python
     """
     return ''.join(choice(seed) for _ in range(count))
+
+def parse_bool(arg, default=False):
+    """
+    Parses strings such as 'yes' and 'no' as well as other strings such as
+    'on' or 'off' , 'enable' or 'disable', etc.
+
+    This method can just simplify checks to these variables.
+
+    If the content could not be parsed, then the default is
+    returned.
+    """
+
+    if isinstance(arg, basestring):
+        # no = no - False
+        # of = short for off - False
+        # 0  = int for False
+        # fa = short for False - False
+        # f  = short for False - False
+        # n  = short for No or Never - False
+        # ne  = short for Never - False
+        # di  = short for Disable(d) - False
+        # de  = short for Deny - False
+        if arg.lower()[0:2] in ('de', 'di', 'ne', 'f', 'n', 'no', 'of',
+                                '0', 'fa'):
+            return False
+        # ye = yes - True
+        # on = short for off - True
+        # 1  = int for True
+        # tr = short for True - True
+        # t  = short for True - True
+        # al = short for Always (and Allow) - True
+        # en  = short for Enable(d) - True
+        elif arg.lower()[0:2] in ('en', 'al', 't', 'y', 'ye', 'on', '1',
+                                  'tr'):
+            return True
+        # otherwise
+        return default
+
+    # Handle other types
+    return bool(arg)

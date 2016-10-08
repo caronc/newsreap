@@ -52,6 +52,7 @@ from newsreap.Utils import pushd
 from newsreap.Utils import find
 from newsreap.Utils import rm
 from newsreap.Utils import parse_list
+from newsreap.Utils import parse_bool
 
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
@@ -823,3 +824,45 @@ class Utils_Test(TestBase):
         assert isfile(tmp_file) is True
         assert rm(tmp_file) is True
         assert isfile(tmp_file) is False
+
+    def test_parse_bool(self):
+        """
+        tests the parse_bool function which allows string interpretations
+        of what could be a Python True/False value.
+        """
+        assert parse_bool('Enabled', None) == True
+        assert parse_bool('Disabled', None) == False
+        assert parse_bool('Allow', None) == True
+        assert parse_bool('Deny', None) == False
+        assert parse_bool('Yes', None) == True
+        assert parse_bool('YES', None) == True
+        assert parse_bool('Always', None) == True
+        assert parse_bool('No', None) == False
+        assert parse_bool('NO', None) == False
+        assert parse_bool('NEVER', None) == False
+        assert parse_bool('TrUE', None) == True
+        assert parse_bool('tRUe', None) == True
+        assert parse_bool('FAlse', None) == False
+        assert parse_bool('F', None) == False
+        assert parse_bool('T', None) == True
+        assert parse_bool('0', None) == False
+        assert parse_bool('1', None) == True
+        assert parse_bool('True', None) == True
+        assert parse_bool('Yes', None) == True
+        assert parse_bool(1, None) == True
+        assert parse_bool(0, None) == False
+        assert parse_bool(True, None) == True
+        assert parse_bool(False, None) == False
+
+        # only the int of 0 will return False since the function
+        # casts this to a boolean
+        assert parse_bool(2, None) == True
+        # An empty list is still false
+        assert parse_bool([], None) == False
+        # But a list that contains something is True
+        assert parse_bool(['value',], None) == True
+
+        # Use Default (which is False)
+        assert parse_bool('OhYeah') == False
+        # Adjust Default and get a different result
+        assert parse_bool('OhYeah', True) == True

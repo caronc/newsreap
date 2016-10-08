@@ -87,11 +87,13 @@
 #
 #   # Getting to many hits?  Filter them; the below only shows entries
 #   # that scored higher then 30
-#   nr.py search test --score=30 "keyword or string 1" "keyword or string 2" "etc..."
+#   nr.py search test --score=30 "keyword or string 1" \
+#                                   "keyword or string 2" "etc..."
 #
 #   # You can do ranges too
 #   # The below only shows entries that have scored between -90 and 30
-#   nr.py search test --score=-90-30 "keyword or string 1" "keyword or string 2" "etc..."
+#   nr.py search test --score=-90-30 "keyword or string 1" \
+#                                       "keyword or string 2" "etc..."
 #
 #   # Want to elminate crap from your database that you know is just
 #   # taking up useless junk (and space, and thus speed because it's indexed):
@@ -115,6 +117,7 @@ from os.path import abspath
 from os.path import dirname
 from os.path import basename
 from os.path import isdir
+from os.path import isfile
 
 # Path
 try:
@@ -136,14 +139,17 @@ from newsreap.Logging import *
 import logging
 logger = logging.getLogger(NEWSREAP_CLI)
 
+
 # General Options
 @click.group()
+@click.option('--config', '-c',
+              help='Specify configuration file.')
 @click.option('--verbose', '-v', count=True,
               help='Verbose mode.')
 @click.option('--noprompt', '-y', is_flag=True,
               help='Assume `yes` to all prompts.')
 @click.pass_context
-def cli(ctx, verbose, noprompt):
+def cli(ctx, config, verbose, noprompt):
     ctx.obj['verbose'] = verbose
 
     # Add our handlers at the parent level
@@ -155,8 +161,14 @@ def cli(ctx, verbose, noprompt):
 
     ctx.obj['noprompt'] = noprompt
 
+    if config is not None and not isfile(config):
+        logger.error(
+            "The YAML config file '%s' was not found." % config,
+        )
+        exit(1)
+
     # NNTPSettings() for storing and retrieving settings
-    ctx.obj['NNTPSettings'] = NNTPSettings()
+    ctx.obj['NNTPSettings'] = NNTPSettings(cfg_file=config)
 
     if not ctx.obj['NNTPSettings'].is_valid():
         # our configuration was invalid
@@ -168,15 +180,14 @@ def cli(ctx, verbose, noprompt):
         settings=ctx.obj['NNTPSettings'],
     )
 
-
 # Dynamically Build CLI List; This is done by iterating through
 # plugin directories and looking for CLI_PLUGINS_MAPPING
 # which is expected to be a dictionary containing the mapping of
 # the cli group (the key) to the function prefixes defined.
 #
 # If we can load it we'll save it here
-plugins = scan_pylib(paths=[ d for d in DEFAULT_CLI_PLUGIN_DIRECTORIES \
-                    if isdir(d) is True ])
+plugins = scan_pylib(paths=[d for d in DEFAULT_CLI_PLUGIN_DIRECTORIES \
+                    if isdir(d) is True])
 
 # Now we iterate over the keys
 for k, v in plugins.iteritems():
@@ -207,7 +218,6 @@ for k, v in plugins.iteritems():
                     #    'prefix': 'function_prefix',
                     #    'desc': 'action description',
                     # }
-
                     fn_prefix = _meta.get('prefix', None)
 
                     # Get Description (if present)

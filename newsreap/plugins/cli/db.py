@@ -32,7 +32,6 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
     from newsreap.objects.nntp.Server import Server
 
-from newsreap.objects.nntp.GroupTrack import GroupTrack
 from newsreap.objects.nntp.Group import Group
 
 from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
@@ -53,6 +52,42 @@ NEWSREAP_CLI_PLUGINS = {
     },
 }
 
+
+def __db_prep(ctx):
+    """
+    A generic database initialization
+    """
+
+    session = ctx['NNTPSettings'].session()
+    if not session:
+        logger.error('Could not acquire a database connection.')
+        exit(1)
+
+    changes = False
+    # Get Group Listings for all of our servers
+    for s in ctx['NNTPSettings'].nntp_servers:
+        # get our server (if it's kept in the database)
+        server = session.query(Server)\
+            .filter(Server.host == s['host']).first()
+
+        if not server:
+            # Add it if it doesn't exist
+            session.add(Server(
+                # The name field is for display purposes only; for now we just
+                # use the hostname.
+                name=s['host'],
+
+                # Define our host
+                host=s['host'],
+            ))
+
+            # Toggle change flag
+            changes = True
+
+    if changes:
+        session.commit()
+
+
 # Define our functions below
 # all functions are prefixed with what is identified
 # above or they are simply ignored.
@@ -69,6 +104,7 @@ def database_init(ctx):
     Initializes the database if it's not already
     """
     ctx['NNTPSettings'].open(reset=False)
+    __db_prep(ctx)
 
 
 @click.command(name='reset')
@@ -79,8 +115,9 @@ def database_reset(ctx):
     """
     logger.info('Resetting database ...')
     ctx['NNTPSettings'].open(reset=True)
+    __db_prep(ctx)
 
-    db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
+    db_path = join(ctx['NNTPSettings'].base_dir, 'cache', 'search')
     logger.debug('Scanning %s for databases...' % db_path)
     for entry in listdir(db_path):
 

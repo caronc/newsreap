@@ -39,20 +39,13 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPSettings import NNTPSettings
-from newsreap.NNTPSettings import SERVER_VARIABLES
 from newsreap.NNTPSettings import SERVER_LIST_KEY
-from newsreap.NNTPSettings import DATABASE_LIST_KEY
-from newsreap.NNTPSettings import PROCESSING_VARIABLES
-from newsreap.NNTPSettings import PROCESSING_LIST_KEY
-from newsreap.Database import MEMORY_DATABASE_ENGINE
-from newsreap.objects.nntp.Server import Server
+from newsreap.NNTPSettings import DEFAULT_SERVER_VARIABLES
+from newsreap.NNTPSettings import DEFAULT_PROCESSING_VARIABLES
+from newsreap.NNTPSettings import PROCESSING_KEY
+from newsreap.NNTPSettings import VALID_SETTINGS_ENTRY
+from newsreap.NNTPIOStream import NNTPIOStream
 
-# The defaults assigned to a Settings object
-DEFAULTS = {
-    DATABASE_LIST_KEY: {},
-    SERVER_LIST_KEY: [],
-    PROCESSING_LIST_KEY: {},
-}
 
 class NNTPSettings_Test(TestBase):
     """
@@ -72,70 +65,43 @@ class NNTPSettings_Test(TestBase):
         )
 
         # Make sure the file doesn't exist
-        try:
-            unlink(cfg_file)
-        except:
-            pass
+        assert isfile(cfg_file) is False
 
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
-        )
-
-        assert settings.cfg_path is not None
-        assert len(settings.cfg_files) == 0
+        settings = NNTPSettings(cfg_file=cfg_file)
+        assert settings.is_valid() is False
         assert len(settings.nntp_servers) == 0
         assert settings.is_valid() is False
 
         # now create it and populate it with nothing
         fd = open(cfg_file, 'w')
         fd.close()
+        # File exists now
+        assert isfile(cfg_file) is True
 
         assert settings.read(cfg_file) is False
-        assert len(settings.cfg_files) == 1
-        assert basename(settings.cfg_files[0]) == basename(cfg_file)
-        assert len(settings.cfg_data) == len(DEFAULTS)
-        for k in DEFAULTS.iterkeys():
-            assert settings.cfg_data[k] == DEFAULTS[k]
+        assert basename(settings.cfg_file) == basename(cfg_file)
+        assert len(settings.cfg_data) == len(VALID_SETTINGS_ENTRY)
+        for k in VALID_SETTINGS_ENTRY.iterkeys():
+            assert k in settings.cfg_data
 
         assert settings.is_valid() is False
 
-        # change the permission so it's inaccessible and try again
-        # Note: this test doesn't work in Windows based machines
-        chmod(cfg_file, 0)
-        assert settings.read(cfg_file) is False
-        assert len(settings.cfg_files) == 1
-        assert basename(settings.cfg_files[0]) == basename(cfg_file)
-        for k in DEFAULTS.iterkeys():
-            assert settings.cfg_data[k] == DEFAULTS[k]
-        assert settings.is_valid() is False
-
-        # cleanup
+        # eliminate the file
         unlink(cfg_file)
+        # File is gone again
+        assert isfile(cfg_file) is False
 
         # Create a poorly formatted (unparseable file)
         with open(cfg_file, 'w') as fp:
             fp.write('%s\n' % SERVER_LIST_KEY)
             fp.write(' - test: apple\n')
 
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            # Make sure the existing database is reset
-            reset=True,
-        )
-
-        assert settings.cfg_path is not None
-        assert len(settings.cfg_files) == 0
+        settings = NNTPSettings(cfg_file=cfg_file)
 
         assert settings.is_valid() is False
 
         # cleanup
         unlink(cfg_file)
-
 
     def test_server_settings(self):
         """
@@ -154,6 +120,7 @@ class NNTPSettings_Test(TestBase):
             'host': 'foo.bar.net',
             'port': '563',
             'secure': 'True',
+            # compress = True sets our IOStream to gzip.rfc3977
             'compress': 'True',
             'priority': '2',
             'join_group': 'False',
@@ -165,6 +132,7 @@ class NNTPSettings_Test(TestBase):
             'host': 'bar.foo.net',
             'port': '119',
             'secure': 'False',
+            # compress = False sets our IOStream to rfc3977
             'compress': 'False',
             'join_group': 'True',
             'priority': '1',
@@ -173,26 +141,38 @@ class NNTPSettings_Test(TestBase):
         })
 
         # Create a yaml configuration entry we can test with
+        # This one has a valid parseable format
+        assert isfile(cfg_file) is False
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
             for server in servers:
                 fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
                                 for (k, v) in server.items()])))
+        assert isfile(cfg_file) is True
 
         # Now We test it out
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
-        )
+        settings = NNTPSettings(cfg_file=cfg_file)
 
         # our configuration should be valid
         assert settings.is_valid() is True
+
+        # 2 Servers Identified
         assert len(settings.nntp_servers) == 2
+
+        # Test that our priorities were assigned correctly even though they
+        # were inserted out of order
+        assert settings.nntp_servers[0]['priority'] == 1
+        assert settings.nntp_servers[1]['priority'] == 2
+
+        # Test that our compression flags correctly set the iostream
+        assert settings.nntp_servers[0]['iostream'] == \
+                NNTPIOStream.RFC3977
+        assert settings.nntp_servers[1]['iostream'] == \
+                NNTPIOStream.RFC3977_GZIP
+
         for i in range(0, len(servers)):
-            assert len(settings.nntp_servers[i]) == len(SERVER_VARIABLES)
+            assert len(settings.nntp_servers[i]) == \
+                    len(DEFAULT_SERVER_VARIABLES)
             # Confirm we don't worry about invalid entries allowing future
             # configuration files to be backwards compatible with the old
             assert invalid_entry not in settings.nntp_servers[i]
@@ -200,9 +180,14 @@ class NNTPSettings_Test(TestBase):
         # The second entry has a higher priority than the first, so it
         # should be used.
         for (k, v) in servers[1].items():
-            if k == invalid_entry:
+            if k in (invalid_entry, 'compress'):
                 # We already established the length above, therefore
                 # we can't check for this item or we'll have a problem
+
+                # It should be observed that even though 'compress' was
+                # specified as an argument, it's only there for user/cfg
+                # friendliness.  It actually sets the iostream variable
+                # instead.
                 continue
 
             assert v == str(settings.nntp_servers[0][k])
@@ -210,10 +195,14 @@ class NNTPSettings_Test(TestBase):
         # Now just check that our first entry was successfully stored second
         # since it's priority was lower
         for (k, v) in servers[0].items():
-            if k == invalid_entry:
+            if k in (invalid_entry, 'compress'):
                 # We already established the length above, therefore
                 # we can't check for this item or we'll have a problem
-                #
+
+                # It should be observed that even though 'compress' was
+                # specified as an argument, it's only there for user/cfg
+                # friendliness.  It actually sets the iostream variable
+                # instead.
                 continue
 
             assert v == str(settings.nntp_servers[1][k])
@@ -224,6 +213,7 @@ class NNTPSettings_Test(TestBase):
         except:
             pass
 
+        assert isfile(cfg_file) is False
 
     def test_processing_settings(self):
         """
@@ -241,25 +231,20 @@ class NNTPSettings_Test(TestBase):
 
         # Create a yaml configuration entry we can test with
         with open(cfg_file, 'w') as fp:
-            fp.write('%s:\n' % PROCESSING_LIST_KEY)
-            fp.write('  %s' % ('  '.join(['%s: %s\n' % (k, v) \
+            fp.write('%s:\n' % PROCESSING_KEY)
+            fp.write('    %s' % ('    '.join(['%s: %s\n' % (k, v) \
                 for (k, v) in processing.items()])))
 
         # Now We test it out
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
-        )
+        settings = NNTPSettings(cfg_file=cfg_file)
 
         # processing information alone isn't enough to be a valid
         # setting load;  We need to have servers; so this will fail
         assert settings.is_valid() is False
 
         # However, we should have still been able to load our configuration
-        assert len(settings.nntp_processing) == len(PROCESSING_VARIABLES)
+        assert len(settings.nntp_processing) == \
+                len(DEFAULT_PROCESSING_VARIABLES)
 
         # Confirm we don't worry about invalid entries allowing future
         # configuration files to be backwards compatible with the old
@@ -273,162 +258,14 @@ class NNTPSettings_Test(TestBase):
 
             assert v == settings.nntp_processing[k]
 
-
-
-    def test_sql_database_settings_01(self):
+    def test_scanner_error(self):
         """
-        Test sql database configuration passed in and defaults
+        Test YAML Scanner Settings
         """
-        # We'll create a file now but it will be empty
-        # so that will still make it invalid
-        cfg_file = join(
-            self.tmp_dir,
-            'NNTPSettings.test_database_cfg.yaml',
-        )
+        cfg_file = join(self.tmp_dir, 'NNTPSettings.test_scanner_error.yaml')
 
-        # Memory Only Configuration
-        database = {
-            'engine': MEMORY_DATABASE_ENGINE,
-        }
-
-        # make sure the file doesn't exist already
-        try:
-            unlink(cfg_file)
-        except:
-            pass
-
-        # Create a yaml configuration entry we can test with
-        with open(cfg_file, 'w') as fp:
-            fp.write('database:\n')
-            fp.write('  %s' % ('  '.join(['%s: "%s"\n' % (k, v) \
-                                for (k, v) in database.items()])))
-
-
-        # Now We test it out
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
-        )
-
-        # our configuration should not be valid because even though
-        # we successfully read the file, we had no nntp servers configured
-        assert settings.is_valid() is False
-
-        # If we insert a record into our database and try again, we'll
-        # be fine though.
-        s = settings.session()
-        s.add(Server("low", priority=2))
-        s.add(Server("high", priority=1))
-        s.commit()
-
-        # Now if we re-load our configuration, we should be good to go
-        settings.read()
-
-        assert settings.is_valid() is True
-
-        # We should have 2 entries now (read from our database)
-        assert len(settings.nntp_servers) == 2
-
-        # Test that our servers are ordered by priority
-        assert settings.nntp_servers[0]['host'] == 'high'
-        assert settings.nntp_servers[1]['host'] == 'low'
-
-        # make sure the file doesn't exist already
-        try:
-            unlink(cfg_file)
-        except:
-            pass
-
-
-    def test_sql_database_settings_02(self):
-        """
-        Similar to the test above except we test that the defined
-        database with the highest priority trumps it's duplicate reguardless
-        if it was found in the database or the flat file.
-
-        Entries are only considered unique by their hostname (port is
-        intentionally not considered). Newsreap already has the ability
-        to support multiple threads per server.  So there is no reason
-        to set up a backup server being the same as the first. If the
-        priorities found are the same, the flat file always trumps
-
-        """
-        # We'll create a file now but it will be empty
-        # so that will still make it invalid
-        cfg_file = join(
-            self.tmp_dir,
-            'NNTPSettings.test_database_cfg.yaml',
-        )
-
-        # Test File Trumping
-        file_priority = 2
-        dbase_priority = 4
-
-        # Define the name of our common host
-        common_server = {
-            'username': 'foo',
-            'password': 'bar',
-            'host': 'foo.bar.net',
-            'port': '563',
-            'secure': 'True',
-            'compress': 'True',
-            'priority': file_priority,
-            'join_group': 'False',
-        }
-
-        servers = []
-        servers.append(common_server)
-
-        # Memory Only Configuration
-        database = {
-            'engine': MEMORY_DATABASE_ENGINE,
-        }
-
-        # Create a yaml configuration entry we can test with
-        with open(cfg_file, 'w') as fp:
-            fp.write('database:\n')
-            fp.write('  %s' % ('  '.join(['%s: "%s"\n' % (k, v) \
-                                for (k, v) in database.items()])))
-            fp.write('%s:\n' % SERVER_LIST_KEY)
-            for server in servers:
-                fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                                for (k, v) in server.items()])))
-
-
-        # Now We test it out
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
-        )
-
-        # We have a flat file, so our configuration will be valid since
-        # there are 2 servers defined in it.
-        assert settings.is_valid() is True
-
-        # Create a session
-        s = settings.session()
-
-        s.add(Server(
-            name="common_server",
-            host=common_server.get('host'),
-            port=int(common_server.get('port')),
-            username=common_server.get('username'),
-            password=common_server.get('password'),
-            secure=bool(common_server.get('secure')),
-            join_group=bool(common_server.get('join_group')),
-            # Set our database priority
-            priority=dbase_priority,
-        ))
-        s.commit()
-
-        common_server = {
-            'username': 'foo',
+        server = {
+            'username': '%foo',
             'password': 'bar',
             'host': 'foo.bar.net',
             'port': '563',
@@ -438,35 +275,27 @@ class NNTPSettings_Test(TestBase):
             'join_group': 'False',
         }
 
-        # Now if we re-load our configuration, we should be good to go
-        settings.read()
+        with open(cfg_file, 'w') as fp:
+            fp.write('%s:\n' % SERVER_LIST_KEY)
+            fp.write(' - %s' % ('  '.join(['%s: %s\n' % (k, v) \
+                for (k, v) in server.items()])))
 
-        assert settings.is_valid() is True
+        # Now we test it out
+        settings = NNTPSettings(cfg_file=cfg_file)
 
-        # We will only have 1 entry (not 2) because the datab
-        assert len(settings.nntp_servers) == 1
+        # We fail because of the YAML does not accept % entries
+        # It throws a Scanner exception
+        assert settings.is_valid() is False
 
-        # remove the configuration file
-        unlink(cfg_file)
-
-        assert not isfile(cfg_file)
-
-
-    def test_multifile_server_settings(self):
+    def test_parse_error(self):
         """
-        Test server settings read from multiple files
+        Test YAML Parse Settings
         """
-        # We'll create a file now but it will be empty
-        # so that will still make it invalid
-        cfg_file_01 = join(self.tmp_dir, 'NNTPSettings.test_multi01.yaml')
-        cfg_file_02 = join(self.tmp_dir, 'NNTPSettings.test_multi02.yaml')
-
-        servers_01 = []
-        servers_02 = []
+        cfg_file = join(self.tmp_dir, 'NNTPSettings.test_parse_error.yaml')
 
         invalid_entry = 'invalid_entry'
 
-        servers_01.append({
+        server = {
             'username': 'foo',
             'password': 'bar',
             'host': 'foo.bar.net',
@@ -475,221 +304,155 @@ class NNTPSettings_Test(TestBase):
             'compress': 'True',
             'priority': '2',
             'join_group': 'False',
-        })
+            invalid_entry: 'garbage',
+        }
 
-        servers_01.append({
-            'username': 'bar',
-            'password': 'foo',
-            'host': 'bar.foo.net',
-            'port': '119',
-            'secure': 'False',
-            'compress': 'False',
-            'join_group': 'True',
-            'priority': '1',
-            # We won't crap out on unsupported entries
-            'invalid_entry': 'safely_ignored',
-        })
+        processing = {
+            'threads': 10,
+            'header_batch_size': 8000,
+            invalid_entry: 'garbage',
+        }
 
-        servers_02.append({
-            'username': 'foobar',
-            'password': 'foofoo',
-            'host': 'barfoo.foobar.net',
-            'port': '119',
-            'secure': 'False',
-            'compress': 'False',
-            'join_group': 'True',
-            'priority': '3',
-        })
+        # Create a yaml configuration entry we can test with
+        # The output is invalid (formatting)
+        with open(cfg_file, 'w') as fp:
+            fp.write('%s:\n' % PROCESSING_KEY)
+            fp.write('  %s' % ('  '.join(['%s: %s\n' % (k, v) \
+                for (k, v) in processing.items()])))
 
-        # Create a yaml configuration entry we can test with (cfg_01)
-        with open(cfg_file_01, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
-            for server in servers_01:
-                fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                                for (k, v) in server.items()])))
+            fp.write(' - %s' % ('  '.join(['%s: %s\n' % (k, v) \
+                for (k, v) in server.items()])))
 
-        # Create a yaml configuration entry we can test with (cfg_02)
-        with open(cfg_file_02, 'w') as fp:
+        # Now we test it out
+        settings = NNTPSettings(cfg_file=cfg_file)
+
+        # We fail because of the YAML formatting
+        assert settings.is_valid() is False
+
+    def test_writing_settings(self):
+        """
+        Test Writing Settings
+        """
+        cfg_file = join(self.tmp_dir, 'NNTPSettings.test_writing_cfg.yaml')
+
+        invalid_entry = 'invalid_entry'
+
+        server = {
+            'username': 'foo',
+            'password': 'bar',
+            'host': 'foo.bar.net',
+            'port': '563',
+            'secure': 'True',
+            'compress': 'True',
+            'priority': '2',
+            'join_group': 'False',
+            invalid_entry: 'garbage',
+        }
+
+        processing = {
+            'threads': 10,
+            'header_batch_size': 8000,
+            invalid_entry: 'garbage',
+        }
+
+        # Create a yaml configuration entry we can test with
+        with open(cfg_file, 'w') as fp:
+            fp.write('%s:\n' % PROCESSING_KEY)
+            fp.write('    %s' % ('    '.join(['%s: %s\n' % (k, v) \
+                for (k, v) in processing.items()])))
+
             fp.write('%s:\n' % SERVER_LIST_KEY)
-            for server in servers_02:
-                fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                                for (k, v) in server.items()])))
+            fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
+                for (k, v) in server.items()])))
 
         # Now We test it out
-        settings = NNTPSettings(
-            cfg_file=[cfg_file_01, cfg_file_02],
-            cfg_path=dirname(cfg_file_01),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
-        )
+        settings = NNTPSettings(cfg_file=cfg_file)
 
+        # processing information alone isn't enough to be a valid
+        # setting load;  We need to have servers; so this will fail
         assert settings.is_valid() is True
 
-        # All servers from all files will be loaded
-        assert len(settings.nntp_servers) == 3
+        # 1 Server Identified
+        assert len(settings.nntp_servers) == 1
 
-        for i in range(0, len(servers_01)):
-            assert len(settings.nntp_servers[i]) == len(SERVER_VARIABLES)
-            # Confirm we don't worry about invalid entries allowing future
-            # configuration files to be backwards compatible with the old
-            assert invalid_entry not in settings.nntp_servers[i]
+        # However, we should have still been able to load our configuration
+        assert len(settings.nntp_processing) == \
+                len(DEFAULT_PROCESSING_VARIABLES)
 
-        for i in range(0, len(servers_02)):
-            assert len(settings.nntp_servers[i]) == len(SERVER_VARIABLES)
-            # Confirm we don't worry about invalid entries allowing future
-            # configuration files to be backwards compatible with the old
-            assert invalid_entry not in settings.nntp_servers[i]
+        # Confirm we don't worry about invalid entries allowing future
+        # configuration files to be backwards compatible with the old
+        assert invalid_entry not in settings.nntp_processing
 
-        # We want to be sure host entries are stored in order of their
-        # defined priority
-        assert settings.nntp_servers[0]['host'] == servers_01[1]['host']
-        assert settings.nntp_servers[1]['host'] == servers_01[0]['host']
-        assert settings.nntp_servers[2]['host'] == servers_02[0]['host']
-
-
-    def test_merged_server_settings_01(self):
-        """
-        Test server settings read from a file and then later has
-        a database entry that over-rides it.
-        """
-
-        # Common Hostname to use
-        hostname = 'foobar.localhost'
-        port = 9000
-
-        cfg_file = join(self.tmp_dir, 'NNTPSettings.test_merge.yaml')
-        # We identify a server and intentionally 'do not' specify a
-        # priority.  It will default to being priority 1 since it's
-        # the first item in the list anyway, but because it lacks
-        # the priority entry, it's values can be over-ridden by a
-        # matched database entry
-        servers = []
-        servers.append({
-            'username': 'foobar',
-            'password': 'barfoo',
-            'host': hostname,
-            'port': str(port),
-            'secure': 'False',
-            'compress': 'False',
-            'join_group': 'True',
-        })
-
-        # Create a yaml configuration entry we can test with (cfg_02)
-        with open(cfg_file, 'w') as fp:
-            fp.write('%s:\n' % SERVER_LIST_KEY)
-            for server in servers:
-                fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                                for (k, v) in server.items()])))
-
-        # Create our Settings Object
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
+        new_cfg_file = join(
+            self.tmp_dir,
+            'NNTPSettings.test_new_cfg.yaml'
         )
 
-        assert len(settings.nntp_servers) == 1
-        # Our hostname should be set correctly
-        assert settings.nntp_servers[0]['host'] == hostname
-        # Our port should be set correctly
-        assert settings.nntp_servers[0]['port'] == port
-        # Defaults to priority of 1
-        assert settings.nntp_servers[0]['priority'] == 1
+        assert isfile(new_cfg_file) is False
+        assert settings.save(new_cfg_file) is True
+        # Save should have been sucessfull
+        assert isfile(new_cfg_file) is True
 
-        # Now create a record that will over-ride some of the settings
-        s = settings.session()
-        s.add(Server(hostname, port=(port+1), priority=2))
-        s.commit()
+        # Load configuration
+        new_settings = NNTPSettings(cfg_file=new_cfg_file)
 
-        # Re-read our configuration
-        settings.read()
+        # Our new settings should look like the old ones
+        assert new_settings.is_valid()
+        assert new_settings.base_dir == settings.base_dir
+        assert new_settings.work_dir == settings.work_dir
+        assert new_settings.nntp_servers == settings.nntp_servers
+        assert new_settings.nntp_processing == settings.nntp_processing
+        assert new_settings.nntp_processing == settings.nntp_processing
 
-        # Since the database entry has the same servername, it
-        # should not create a second entry
-        assert len(settings.nntp_servers) == 1
+        # change the permission so it's inaccessible and try again
+        # Note: this test doesn't work in Windows based machines
+        chmod(new_cfg_file, 0000)
+        assert settings.read(new_cfg_file) is False
+        assert basename(settings.cfg_file) == basename(new_cfg_file)
+        for k in VALID_SETTINGS_ENTRY.iterkeys():
+            assert k in settings.cfg_data
 
-        # Our hostname should be set correctly
-        assert settings.nntp_servers[0]['host'] == hostname
-        # Our port should be the over-ridden value
-        assert settings.nntp_servers[0]['port'] == port+1
-        # Priority was set to 2 above, so that should be it's value now
-        assert settings.nntp_servers[0]['priority'] == 2
+        assert settings.is_valid() is False
 
+        # Load back our old settings
+        new_settings = NNTPSettings(cfg_file=new_cfg_file)
 
-    def test_merged_server_settings_02(self):
+        # Note that we can't write to a unwritable file
+        assert settings.save(new_cfg_file) is False
+
+    def test_single_server_support(self):
         """
-        Test server settings read from a file and then later has
-        a database entry that over-rides it. However this test
-        tests that entries where the priority is defined in the
-        configuration file will over-ride the database entry
+        Test the ability to support a single server
         """
+        cfg_file = join(self.tmp_dir, 'NNTPSettings.test_single_server.yaml')
 
-        # Common Hostname to use
-        hostname = 'foobar.localhost'
-        port = 9000
+        invalid_entry = 'invalid_entry'
 
-        cfg_file = join(self.tmp_dir, 'NNTPSettings.test_merge.yaml')
-        # We identify a server and intentionally 'do not' specify a
-        # priority.  It will default to being priority 1 since it's
-        # the first item in the list anyway, but because it lacks
-        # the priority entry, it's values can be over-ridden by a
-        # matched database entry
-        servers = []
-        servers.append({
-            'username': 'foobar',
-            'password': 'barfoo',
-            'host': hostname,
-            'port': str(port),
-            'secure': 'False',
-            'compress': 'False',
-            'join_group': 'True',
-            'priority': '10',
-        })
+        server = {
+            'username': 'foo',
+            'password': 'bar',
+            'host': 'foo.bar.net',
+            'port': '563',
+            'secure': 'True',
+            'compress': 'True',
+            'priority': '2',
+            'join_group': 'False',
+            invalid_entry: 'garbage',
+        }
 
-        # Create a yaml configuration entry we can test with (cfg_02)
+        # Simply create a config script where the server is identified
+        # as a single entry (not multiple). This is just to prove
+        # we support this style too for people with just 1 server
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
-            for server in servers:
-                fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                                for (k, v) in server.items()])))
+            fp.write('  %s' % ('  '.join(['%s: %s\n' % (k, v) \
+                for (k, v) in server.items()])))
 
-        # Create our Settings Object
-        settings = NNTPSettings(
-            cfg_file=cfg_file,
-            cfg_path=dirname(cfg_file),
-            engine=MEMORY_DATABASE_ENGINE,
-            # Make sure the existing database is reset
-            reset=True,
-        )
+        # Now we test it out
+        settings = NNTPSettings(cfg_file=cfg_file)
 
+        # We should be valid
+        assert settings.is_valid() is True
+        # ... with 1 server identified
         assert len(settings.nntp_servers) == 1
-        # Our hostname should be set correctly
-        assert settings.nntp_servers[0]['host'] == hostname
-        # Our port should be set correctly
-        assert settings.nntp_servers[0]['port'] == port
-        # Defaults to priority of 1
-        assert settings.nntp_servers[0]['priority'] == 10
-
-        # Now create a record that will over-ride some of the settings
-        s = settings.session()
-        s.add(Server(hostname, port=(port+1), priority=2))
-        s.commit()
-
-        # Re-read our configuration
-        settings.read()
-
-        # Since the database entry has the same servername, it
-        # should not create a second entry
-        assert len(settings.nntp_servers) == 1
-
-        # Our hostname should be set correctly
-        assert settings.nntp_servers[0]['host'] == hostname
-        # Our port should not be over-ridden because of our priority in
-        # the configuration file
-        assert settings.nntp_servers[0]['port'] == port
-        # Priority was set to 2 above, but because a priority was identified
-        # in the configuration file; that takes priority
-        assert settings.nntp_servers[0]['priority'] == 10

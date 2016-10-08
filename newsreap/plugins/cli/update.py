@@ -87,10 +87,14 @@ def update_groups(ctx):
     for s in ctx['NNTPSettings'].nntp_servers:
         # get our server (if it's kept in the database)
         server = session.query(Server)\
-            .filter(Server.host == s['host'])\
-            .filter(Server.port == s['port']).first()
+            .filter(Server.host == s['host']).first()
 
         if not server:
+            logger.warning(
+                "Could not find NNTP Server '%s' in in the database." % (
+                    s['host'],
+                )
+            )
             continue
 
         # apply our groups
