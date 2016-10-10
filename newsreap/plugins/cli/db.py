@@ -138,7 +138,7 @@ def database_status(ctx):
     """
     displays details on the current database store
     """
-    db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
+    db_path = join(ctx['NNTPSettings'].work_dir, 'cache', 'search')
     logger.debug('Scanning %s for databases...' % db_path)
     results = find(
         db_path,
@@ -156,6 +156,10 @@ def database_status(ctx):
     # Get a list of watched groups
     groups = dict(session.query(Group.name, Group.id)\
                     .filter(Group.watch==True).all())
+
+    if not len(results):
+        logger.info('There are no groups configured to be watched.')
+        exit(0)
 
     for _, meta in results.iteritems():
         # Open up the database

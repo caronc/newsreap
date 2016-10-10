@@ -74,6 +74,10 @@ EOD_RE = re.compile(r'(\.([\r]?\n))$')
 # the below fixes this
 EOLS_RE = re.compile(r'[\r]?\n')
 
+# When data compression in in play, the following delimiter is used
+# to deliminate the chunks of compressed data
+GZIP_EOL_RE = re.compile(r'\.([\r]?\n)$')
+
 # How many consecutive misses in a row do we allow while trying to retrieve
 # historic messages (based on time) do we allow before assuming that we've
 # exceeded the the maximum retention area. This is used in the seek_by_date()
@@ -337,8 +341,19 @@ class NNTPConnection(SocketBase):
         # Temporary Buffer of read (unprocessed) data
         self._buffer = BytesIO()
 
+        # Our response code (integer) returned by the NNTPServer on the last
+        # request made
         self.last_resp_code = None
+
+        # Our response string returned by the NNTPServer on the last request
+        # made
         self.last_resp_str = ''
+
+        # A flag set to True if the payload to follow the response is gzipped.
+        # GZipped responses require a bit more CPU crunching but much less
+        # bandwidth. This value is set to None if there simply wasn't a payload
+        # at all (or an initialization value)
+        self.payload_gzipped = None
 
         self.lines = []
         self.line_count = 0
@@ -1402,10 +1417,7 @@ class NNTPConnection(SocketBase):
                 break
 
             try:
-                response = self._recv(
-                    timeout=timeout,
-                    decoders=decoders,
-                )
+                response = self._recv(timeout=0, decoders=decoders)
 
             except SocketException:
                 # Connection Lost
@@ -1529,6 +1541,9 @@ class NNTPConnection(SocketBase):
             ##################################################################
             if not self.last_resp_code:
 
+                # Reset our payload flag
+                self.payload_gzipped = None
+
                 # Seek to head of buffer
                 self._buffer.seek(head_ptr, SEEK_SET)
 
@@ -1583,6 +1598,14 @@ class NNTPConnection(SocketBase):
                 logger.debug('_recv() %d: %s' % (
                     self.last_resp_code, self.last_resp_str))
 
+                if GZIP_COMPRESS_RE.search(self.last_resp_str):
+                    # GZIP response type; toggle our flag
+                    self.payload_gzipped = True
+
+                else:
+                    # Uncompressed response type; toggle our flag
+                    self.payload_gzipped = False
+
             # Non-Multiline responses mean were done now.
             if self.last_resp_code not in NNTPResponseCode.SUCCESS_MULTILINE:
                 # We're done; flush results and move on
@@ -1633,7 +1656,7 @@ class NNTPConnection(SocketBase):
 
             if not can_read and total_bytes > 0:
                 # Offset
-                offset = min(3, total_bytes)
+                offset = min(5, total_bytes)
 
                 # The below accomplishes the same results as abs()
                 # but does it at a much faster speed (screw looking pythonic)
@@ -1645,7 +1668,7 @@ class NNTPConnection(SocketBase):
                 # Now we read what we can from the buffer
                 data = self._buffer.read()
 
-                if offset == -3:
+                if offset == -5:
                     # Adjust offset if nessisary
                     offset += 1
 
@@ -1773,8 +1796,7 @@ class NNTPConnection(SocketBase):
 
             # Compression Support
             if (tail_ptr-head_ptr) > 0:
-                if self._iostream == NNTPIOStream.RFC3977_GZIP and \
-                        GZIP_COMPRESS_RE.search(self.last_resp_str):
+                if self.payload_gzipped is True:
 
                     dc_obj = decompressobj()
                     try:
@@ -1984,8 +2006,20 @@ class NNTPConnection(SocketBase):
         self._data.truncate(0)
         self._data_len = 0
 
+        # Our response code (integer) returned by the NNTPServer on the last
+        # request made
         self.last_resp_code = None
+
+        # Our response string returned by the NNTPServer on the last request
+        # made
         self.last_resp_str = ''
+
+        # A flag set to True if the payload to follow the response is gzipped.
+        # GZipped responses require a bit more CPU crunching but much less
+        # bandwidth. This value is set to None if there simply wasn't a payload
+        # at all (or an initialization value)
+        self.payload_gzipped = None
+
         self.lines = []
         self.line_count = 0
 
