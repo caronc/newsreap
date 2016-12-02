@@ -23,7 +23,7 @@ from os.path import abspath
 from os.path import dirname
 from os.path import join
 from os.path import isfile
-
+from sqlalchemy.exc import OperationalError
 try:
     from newsreap.objects.nntp.Server import Server
 
@@ -153,9 +153,16 @@ def database_status(ctx):
         logger.error('Could not acquire a database connection.')
         exit(1)
 
-    # Get a list of watched groups
-    groups = dict(session.query(Group.name, Group.id)\
+    try:
+        # Get a list of watched groups
+        groups = dict(session.query(Group.name, Group.id)\
                     .filter(Group.watch==True).all())
+
+    except OperationalError:
+        # Get a list of watched groups
+        logger.warning('The database does not appear to be initialized.')
+        logger.info('Try running: "nr db init" first.')
+        exit(0)
 
     if not len(results):
         logger.info('There are no groups configured to be watched.')
