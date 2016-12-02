@@ -702,6 +702,10 @@ class SocketBase(object):
                     bytes are read, or until the timeout (which ever comes
                     first)
 
+            retry_wait: If the value is greater then zero, then more data
+                    is requested once the retry wait elapses if available.
+                    otherwise we use blocking mode
+
            raise an exception if connection lost.
         """
         total_data = []
@@ -717,8 +721,11 @@ class SocketBase(object):
             # No connection
             return ''
 
-        # Make sure we're not blocking
-        self.socket.setblocking(False)
+        if retry_wait:
+            # Make sure we're not blocking
+            self.socket.setblocking(False)
+        else:
+            self.socket.setblocking(True)
 
         while self.connected and bytes_read < max_bytes:
             # put in a while-loop since this can block for some time
@@ -758,12 +765,21 @@ class SocketBase(object):
                         bytes_read += len(data)
                         total_data.append(data)
 
-                    # if not timeout:
-                    #    raise SocketException('Connection lost')
+                    if not timeout:
+                        raise SocketException('Connection lost')
                     break
 
                 if timeout and bytes_read == 0:
                     # We're done
+                    break
+
+                elif retry_wait is None:
+                    # we don't try again
+                    if bytes_read == 0:
+                        # We were blocking and yet we still yielded no
+                        # results.  We must be broken
+                        self.close()
+                        raise SocketException('Connection broken')
                     break
 
                 elif bytes_read < max_bytes and not self.can_read():
@@ -776,7 +792,7 @@ class SocketBase(object):
             except ssl.SSLWantReadError, e:
                 # Raised by SSL Socket; This is okay data was received, but not
                 # all of it. Be patient and try again.
-                if self.can_read(retry_wait) is None:
+                if retry_wait and self.can_read(retry_wait) is None:
                     self.close()
                     raise SocketException('Connection broken')
                 continue
@@ -789,10 +805,7 @@ class SocketBase(object):
             except socket.error, e:
                 if e[0] == errno.EAGAIN:
                     # Timeout occurred; Sleep for a little bit
-                    sleep(retry_wait)
-
-                    # Test socket for connectivity
-                    if self.can_read(retry_wait) is None:
+                    if retry_wait and self.can_read(retry_wait) is None:
                         self.close()
                         raise SocketException('Connection broken')
                     continue
