@@ -509,7 +509,7 @@ class NNTPSocketServer(threading.Thread):
                     data.write(_data)
                     d_len = data.tell()
 
-            except socket.error:
+            except (socket.error, SocketException):
                 # Socket Issue
                 # print 'DEBUG: SOCKET ERROR (EXITING)....'
                 # print 'DEBUG: ERROR %s' % str(e)
@@ -551,6 +551,7 @@ class NNTPSocketServer(threading.Thread):
                 if not self.socket.listen():
                     # Wait for a connection
                     continue
+
             except SocketException:
                 # Lost the connection; loop
                 continue

@@ -1496,6 +1496,9 @@ class NNTPConnection(SocketBase):
         # Tracks the size of the buffer
         total_bytes = 0
 
+        # Our response object
+        response = None
+
         if not decoders:
             decoders = []
 
@@ -1512,7 +1515,7 @@ class NNTPConnection(SocketBase):
             try:
                 self._buffer.write(self.read(
                     max_bytes=self.MAX_BUFFER_SIZE-total_bytes,
-                    timeout=timeout,
+                    timeout=timeout, retry_wait=None,
                 ))
 
             except (SocketException, SignalCaughtException):
@@ -1598,7 +1601,9 @@ class NNTPConnection(SocketBase):
                 logger.debug('_recv() %d: %s' % (
                     self.last_resp_code, self.last_resp_str))
 
+                # Detect Compression from NNTP response if possible
                 if GZIP_COMPRESS_RE.search(self.last_resp_str):
+                    logger.debug('_recv() Detected compressed payload.')
                     # GZIP response type; toggle our flag
                     self.payload_gzipped = True
 
@@ -1614,7 +1619,7 @@ class NNTPConnection(SocketBase):
                 # Safety: just clean anything remaining
                 while self.can_read():
                     try:
-                        self.read()
+                        self.read(timeout=timeout, retry_wait=None)
 
                     except (SocketException, SignalCaughtException):
                         # Connection lost
@@ -1627,14 +1632,16 @@ class NNTPConnection(SocketBase):
                 return NNTPResponse(self.last_resp_code, self.last_resp_str)
 
             # Store our can_read() flag
-            can_read = self.can_read()
+            can_read = self.can_read(3)
 
-            # Initialize our response object
-            response = NNTPResponse(
-                self.last_resp_code,
-                self.last_resp_str,
-                work_dir=self.work_dir,
-            )
+            if response is None:
+                # Initialize our response object on first iteration
+                # through loop
+                response = NNTPResponse(
+                    self.last_resp_code,
+                    self.last_resp_str,
+                    work_dir=self.work_dir,
+                )
 
             # We have multi-line code to store fill our buffer before
             # proceeding.
@@ -1747,7 +1754,8 @@ class NNTPConnection(SocketBase):
             # downloaded yet.
             tail_ptr = total_bytes
 
-            if total_bytes >= self.MAX_BUFFER_SIZE and not eol:
+            if not self.payload_gzipped and \
+               total_bytes >= self.MAX_BUFFER_SIZE and not eol:
                 # We have a full buffer and there is most likely
                 # a lot more content to still download; we need to find
                 # the last new line
@@ -1783,7 +1791,7 @@ class NNTPConnection(SocketBase):
                         tail_ptr = offset + chunk_ptr
                         break
 
-            if (tail_ptr-head_ptr) > 0 and \
+            if not self.payload_gzipped and (tail_ptr-head_ptr) > 0 and \
                 tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
                 # Astraweb is absolutely terrible for sending a little
                 # bit more data a few seconds later. This is a final
@@ -1809,10 +1817,11 @@ class NNTPConnection(SocketBase):
                         # Decompression error; since compression is only used
                         # when retrieving server-side listings; it's best to
                         # just alert the end user and move along
-                        logger.warning(
+                        logger.error(
                             '_recv() %d byte(s) ZLIB decompression failure.' \
                             % (_bytes),
                         )
+
                         # Convert our response to that of an response Fetch
                         # Error
                         return NNTPResponse(
