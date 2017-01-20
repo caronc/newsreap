@@ -2,7 +2,7 @@
 #
 # Test the NNTPContent Object
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -34,6 +34,8 @@ from os import unlink
 from os import urandom
 from io import BytesIO
 
+from filecmp import cmp as compare
+
 try:
     from tests.TestBase import TestBase
 
@@ -46,7 +48,9 @@ from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPSettings import DEFAULT_BLOCK_SIZE as BLOCK_SIZE
 from newsreap.Utils import strsize_to_bytes
+from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import mkdir
+from newsreap.Utils import stat
 
 
 class NNTPContent_Test(TestBase):
@@ -565,3 +569,83 @@ class NNTPContent_Test(TestBase):
         del obj
         assert exists(my_dir) is False
         assert isdir(my_dir) is False
+
+    def test_copy(self):
+        """
+        The copy function allows us to duplicate an existing NNTPContent
+        object without obstructing the original.  Copied content is
+        always attached; so if the object falls out of scope; so does
+        the file.
+        """
+        my_dir = join(self.tmp_dir, 'NNTPContent', 'test_copy')
+        assert isdir(my_dir) is False
+        assert mkdir(my_dir) is True
+        assert isdir(my_dir) is True
+
+        #  Now create our NNTPContent object witin our directory
+        obj = NNTPContent(
+            filepath='myfile',
+            work_dir=my_dir,
+        )
+
+        # Content is attached by default
+        assert obj.is_attached() is True
+        obj.detach()
+        assert obj.is_attached() is False
+
+        new_dir = join(my_dir, 'copy')
+        assert isdir(new_dir) is False
+
+        # Create a copy of our object
+        obj_copy = obj.copy()
+
+        # Successfully loaded files are never attached reguardless
+        # of the original copy
+        assert obj_copy.is_attached() is True
+
+        # Reattach the original so it dies when this test is over
+        obj.attach()
+        assert obj.is_attached() is True
+
+        # Create a copy of our copy
+        obj_copy2 = obj_copy.copy()
+        assert obj_copy2.is_attached() is True
+        assert isfile(obj_copy2.path())
+        _path = obj_copy2.path()
+        del obj_copy2
+        assert not isfile(_path)
+
+        assert isfile(obj_copy.path())
+        _path = obj_copy.path()
+        del obj_copy
+        assert not isfile(_path)
+
+        assert isfile(obj.path())
+        _path = obj.path()
+        del obj
+        assert not isfile(_path)
+
+        # now lets do a few more tests but with actual files this time
+        tmp_file = join(my_dir, '2MB.zip')
+        assert self.touch(tmp_file, size='2MB')
+
+        #  Now create our NNTPContent object witin our directory
+        obj = NNTPContent(
+            filepath=tmp_file,
+            work_dir=my_dir,
+        )
+        assert isfile(obj.path())
+
+        obj_copy = obj.copy()
+        assert isfile(obj_copy.path())
+        stats = stat(obj_copy.path())
+        assert bytes_to_strsize(stats['size']) == "2.00MB"
+
+        # Compare that our content is the same
+        assert compare(obj_copy.path(), obj.path())
+
+        # note that the filenames are NOT the same so we are dealing with 2
+        # distinct copies here
+        assert isfile(obj_copy.path())
+        assert isfile(obj.path())
+        assert obj.path() != obj_copy.path()

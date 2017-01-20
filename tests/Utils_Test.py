@@ -734,6 +734,27 @@ class Utils_Test(TestBase):
             # 2 directories now each with the same filename
             assert 'depth02.jpeg' == basename(k)
 
+        # Create a 12th and 13th level; but store nothing in the 12th
+        work_dir_12 = join(work_dir_depth, 'level%.2d' % 12)
+
+        assert mkdir(work_dir_12) is True
+        work_dir_13 = join(work_dir_12, 'level%.2d' % 13)
+        assert self.touch(
+            join(work_dir_13, 'depth%.2d.jpeg' % 13),
+        ) is True
+
+        # Search the 12th level which contains no files
+        # (the 13th does but we're explicity not looking there)
+        results = find(
+            work_dir_12,
+            min_depth=1,
+            max_depth=1,
+        )
+        # even with no results we should get a dictionary response
+        assert isinstance(results, dict)
+        # there should be 0 now
+        assert len(results) == 0
+
     def test_rm(self):
         """
         rm is just a simple wrapper for unlink and rmtree.

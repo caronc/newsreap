@@ -23,8 +23,10 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
+from os.path import isdir
 from os.path import dirname
 from os.path import abspath
+from os.path import join
 
 try:
     from tests.TestBase import TestBase
@@ -35,6 +37,7 @@ except ImportError:
 
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 from newsreap.NNTPArticle import NNTPArticle
+from newsreap.Utils import mkdir
 
 
 class NNTPSegmentedPost_Test(TestBase):
@@ -54,6 +57,7 @@ class NNTPSegmentedPost_Test(TestBase):
         """
         # create an object
         segobj = NNTPSegmentedPost('mytestfile')
+
         # Not valid because there are no entries
         assert segobj.is_valid() is False
         article = NNTPArticle()
@@ -77,3 +81,38 @@ class NNTPSegmentedPost_Test(TestBase):
         # Test iterations
         for a in segobj:
             assert isinstance(a, NNTPArticle)
+
+
+    def test_split_and_join(self):
+        """
+        Test the split() and join() functionality of a NNTPSegmentedPost
+        """
+
+        tmp_dir = join(
+            self.tmp_dir,
+            'NNTPSegmentedPost_Test.test_split_and_join',
+        )
+
+        assert(isdir(tmp_dir) == False)
+        assert(mkdir(tmp_dir))
+        assert(isdir(tmp_dir) == True)
+
+        segobj = NNTPSegmentedPost(
+            'mytestfile',
+            subject='woo-hoo',
+            poster='<noreply@newsreap.com>',
+            groups='alt.binaries.l2g',
+        )
+
+        _files = []
+        for i in range(1, 5):
+            tmp_file = join(tmp_dir, 'file%.2d.tmp' % i)
+            assert self.touch(tmp_file, size='512K', random=True) is True
+            segobj.add(tmp_file)
+            _files.append(tmp_file)
+
+        assert(segobj.is_valid())
+        assert(len(segobj.files()) == len(_files))
+        for f in segobj.files():
+            assert(f in _files)
+

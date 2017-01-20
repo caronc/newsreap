@@ -213,23 +213,7 @@ class NNTPContent(object):
                 self._end = int(end)
 
             except (ValueError, TypeError):
-                raise AttributeError(
-                    "Invalid end specified (%s)." % \
-                    str(end),
-                )
-
-        if (begin is None and isinstance(end, int)) or \
-           (end is None and isinstance(begin, int)):
-            raise AttributeError(
-                "Invalid begin/end specified (%s/%s)." % (
-                str(begin), str(end),
-            ))
-
-        if begin is not None and begin >= end:
-            raise AttributeError(
-                "Begin (%d) value can not be larger than End (%d)." % (
-                begin, end,
-            ))
+                self._end = None
 
         # Tracks total_size (used for posting when we have parts of files
         self._total_size = None
@@ -618,6 +602,57 @@ class NNTPContent(object):
 
         return True
 
+    def copy(self):
+        """
+        copy is very close to save(); this is especially the case since
+        the save() function has a copy parameter.
+
+        the difference is copy actually duplicates/clones the content
+        object as a completely new file that is not detached and therefore
+        this copy (by default) is destroyed when the object goes out
+        of scope.
+
+        This is useful for handling downloads; one might want to create
+        a copy of the original object and build onto it or alter it. With
+        a copy to work with, you don't have to worry about obstructing the
+        original file.
+
+        copy() is just a clean way to simplify your code by wrapping
+        the save() function with error handling.  Unlike save()
+        which returns True if it was successful and False if it failed),
+        copy() returns a new NNTPContent object.
+
+        The function returns None if there was a failure
+
+        """
+
+        # mkstemp used to genrate an unused temporary file
+        _, filepath = mkstemp(dir=self.work_dir)
+        try:
+            # Remove the created file to silence any warnings
+            # from the save() call coming next
+            unlink(filepath)
+        except:
+            pass
+
+        if not self.save(filepath, copy=True):
+            return None
+
+        # Initialize a new object
+        obj = NNTPContent(
+            filepath, part=self.part, total_parts=self.total_parts,
+            begin=self._begin, end=self._end, total_size=self._total_size,
+            work_dir=self.work_dir, sort_no=self.sort_no, unique=False,
+        )
+
+        # Save our official filename
+        obj.filename = self.filename
+
+        # Ensure our copy is attached
+        obj.attach()
+
+        return obj
+
     def save(self, filepath=None, copy=False):
         """
         This function writes the content to disk using the filename
@@ -636,6 +671,10 @@ class NNTPContent(object):
         that was last loaded is saved to instead and the file is automatically
         detached from the Object.
         """
+        if filepath:
+            # Ensure we've expanded the file path
+            filepath = abspath(expanduser(filepath))
+
         if filepath is None:
             if not isdir(self.work_dir):
                 # create directory
@@ -648,10 +687,7 @@ class NNTPContent(object):
 
         elif isdir(filepath):
             if self.filename:
-                filepath = join(
-                    abspath(expanduser(filepath)),
-                    basename(self.filename),
-                )
+                filepath = join(filepath, basename(self.filename))
             else:
                 if not isdir(self.work_dir):
                     # create directory
@@ -659,12 +695,8 @@ class NNTPContent(object):
 
                 filepath = join(self.work_dir, basename(self.filepath))
 
-        elif isfile(filepath):
-            # It's a file; just make sure we're dealing with a full pathname
-            filepath = abspath(expanduser(filepath))
-
         if isfile(filepath):
-            if self.filepath != filepath:
+            if self.path() != filepath:
                 try:
                     unlink(filepath)
                     logger.warning('%s already existed (removed).' % (
@@ -696,7 +728,7 @@ class NNTPContent(object):
             action = _move
             action_str = "move"
 
-        if self.filepath != filepath:
+        if self.path() != filepath:
             try:
                 action(self.filepath, filepath)
 

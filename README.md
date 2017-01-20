@@ -143,6 +143,9 @@ sock = NNTPConnection(
 # - Retreive a group listing from the server
 groups = sock.groups()
 
+# - Alternatively you can filter the list of groups returned:
+binary_groups = sock.groups(filters="alt.binaries")
+
 # - Iterate over articles in a group (returns a listing)
 items = sock.xover()
 

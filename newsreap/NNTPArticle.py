@@ -3,7 +3,7 @@
 # A representation of an actual NNTPArticle() which can contain 1 or more
 # NNTPContent() objects in addition to header information.
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -97,6 +97,9 @@ class NNTPArticle(object):
         self.groups = groups
         if not self.groups:
             self.groups = set()
+
+        if isinstance(self.groups, basestring):
+            self.groups = [self.groups]
 
         elif isinstance(self.groups, basestring):
             self.groups = set((self.groups, ))
@@ -314,6 +317,35 @@ class NNTPArticle(object):
 
         # Return our articles
         return articles
+
+    def copy(self):
+        """
+        Creates a copy of the article returning one
+
+        """
+
+        article = NNTPArticle(
+            subject=self.subject,
+            poster=self.poster,
+            groups=self.groups,
+        )
+
+        article.id = self.id
+        article.no = self.no
+        article.work_dir = self.work_dir
+        article.header = self.header.copy()
+        article.body = self.body.copy()
+
+        for content in self.decoded:
+            obj = content.copy()
+            if obj is None:
+                return None
+
+            # Otherwise add our article
+            article.decoded.add(obj)
+
+        # Return our copy
+        return article
 
     def is_valid(self):
         """

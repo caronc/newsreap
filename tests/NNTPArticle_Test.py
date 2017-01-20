@@ -267,6 +267,7 @@ class NNTPArticle_Test(TestBase):
         # First we create a 512K file
         tmp_file = join(
             self.tmp_dir, 'NNTPArticle_Test.posting', 'file.tmp')
+
         # File should not already exist
         assert isfile(tmp_file) is False
         # Create a random file
@@ -283,3 +284,55 @@ class NNTPArticle_Test(TestBase):
         # Tests that our results are expected
         assert isinstance(results, sortedset)
         assert len(results) == 4
+
+
+    def test_article_copy(self):
+        """
+        The copy() function built into the article allows you
+        to create a duplicate copy of the original article without
+        obstructing the content from within.
+        """
+
+        tmp_dir = join(self.tmp_dir, 'NNTPArticle_Test.test_article_copy')
+        # First we create a 512K file
+        tmp_file_01 = join(tmp_dir, 'file01.tmp')
+        tmp_file_02 = join(tmp_dir, 'file02.tmp')
+
+        # Allow our files to exist
+        assert self.touch(tmp_file_01, size='512K', random=True) is True
+        assert self.touch(tmp_file_02, size='512K', random=True) is True
+
+        # Duplicates groups are are removed automatically
+        article = NNTPArticle(
+            subject='woo-hoo',
+            poster='<noreply@newsreap.com>',
+            id='random-id',
+            groups='alt.binaries.l2g',
+        )
+
+        # Store some content
+        content = NNTPBinaryContent(
+            filepath=tmp_file_01, part=1, work_dir=self.tmp_dir)
+        assert article.add(content) is True
+        content = NNTPBinaryContent(
+            filepath=tmp_file_02, part=2, work_dir=self.tmp_dir)
+        assert article.add(content) is True
+
+        # Detect our 2 articles
+        assert(len(article) == 2)
+
+        # Set a few header entries
+        article.header['Test'] = 'test'
+        article.header['Another-Entry'] = 'test2'
+
+        # Create a copy of our object
+        article_copy = article.copy()
+
+        assert len(article_copy) == len(article)
+        assert len(article_copy.header) == len(article.header)
+
+        # Make sure that if we obstruct 1 object it doesn't
+        # effect the other (hence we should have a pointer to
+        # the same location in memory
+        article.header['Yet-Another-Entry'] = 'test3'
+        assert len(article_copy.header)+1 == len(article.header)

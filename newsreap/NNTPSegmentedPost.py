@@ -16,10 +16,16 @@
 
 from blist import sortedset
 from datetime import datetime
+from os.path import isfile
+from os.path import abspath
+from os.path import expanduser
 
+from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPArticle import DEFAULT_NNTP_SUBJECT
 from newsreap.NNTPArticle import DEFAULT_NNTP_POSTER
+from newsreap.NNTPContent import NNTPContent
+from newsreap.NNTPBinaryContent import NNTPBinaryContent
 
 # Logging
 import logging
@@ -34,11 +40,17 @@ class NNTPSegmentedPost(object):
 
     When combined into one, They create a SegmentedPost
 
+    Similarily; this file makes posting easy by allowing you to add files
+    to it in order to prepare an object worthy of posting.
+
+    Every file you wish to post to an NNTP Server should be done through
+    this file for the most power/control
+
     """
 
     def __init__(self, filename, subject=DEFAULT_NNTP_SUBJECT,
                  poster=DEFAULT_NNTP_POSTER, groups=None,
-                 utc=None, *args, **kwargs):
+                 utc=None, work_dir=None, *args, **kwargs):
         """Initialize NNTP Segmented File
 
         Args:
@@ -83,7 +95,6 @@ class NNTPSegmentedPost(object):
         self.poster = poster
         self.utc = utc
         self.subject = subject
-        self.groups = groups
 
         # When writing files, this is the memory buffer to fill when
         # dealing with very large files. If this is set to None, then
@@ -101,8 +112,12 @@ class NNTPSegmentedPost(object):
                 # with the world, use the UTC as a common source
                 self.utc = datetime.utcnow()
 
+        self.groups = groups
         if not self.groups:
             self.groups = set()
+
+        if isinstance(self.groups, basestring):
+            self.groups = [self.groups]
 
         elif isinstance(self.groups, basestring):
             self.groups = set((self.groups, ))
@@ -116,18 +131,32 @@ class NNTPSegmentedPost(object):
         # A sorted set of articles
         self.articles = sortedset(key=lambda x: x.key())
 
+        if work_dir is None:
+            self.work_dir = DEFAULT_TMP_DIR
+        else:
+            self.work_dir = abspath(expanduser(work_dir))
+
     def pop(self, index=0):
         """
         Pops an Article at the specified index out of the segment table
         """
         return self.articles.pop(index)
 
-    def add(self, article):
+    def add(self, content):
         """
         Add an NNTPArticle()
         """
-        if not isinstance(article, NNTPArticle):
-            return False
+        if isinstance(content, basestring) and isfile(content):
+            # Create a content object from the data
+            # This isn't always the best route because no part #'s
+            # are assigned this way; but if it's only a single file
+            # the user is working with; this way is much easier.
+            content = NNTPBinaryContent(
+                filepath=content,
+                work_dir=self.work_dir,
+            )
+            # At this point we fall through and the next set of
+            # if checks will catch our new content object we created
 
         # duplicates are ignored in a blist and therefore
         # we just capture the length of our list before
@@ -135,16 +164,36 @@ class NNTPSegmentedPost(object):
         # value
         _bcnt = len(self.articles)
 
-        if not article.groups and self.groups:
-            article.groups = set(self.groups)
+        if isinstance(content, NNTPArticle):
+            if not content.groups and self.groups:
+                content.groups = set(self.groups)
 
-        if not article.subject and self.subject:
-            article.subject = self.subject
+            if not content.subject and self.subject:
+                content.subject = self.subject
 
-        if not article.poster and self.poster:
-            article.poster = self.poster
+            if not content.poster and self.poster:
+                content.poster = self.poster
 
-        self.articles.add(article)
+            self.articles.add(content)
+
+        elif isinstance(content, NNTPContent):
+            # Create an Article and store our content
+            a = NNTPArticle(
+                subject=self.subject,
+                poster=self.poster,
+                groups=self.groups,
+                work_dir=self.work_dir,
+            )
+
+            # Add the content to our article
+            a.add(content)
+
+            # Store the article in our collection
+            self.articles.add(content)
+
+        else:
+            # Unsupported
+            return False
 
         return len(self.articles) > _bcnt
 
@@ -194,14 +243,44 @@ class NNTPSegmentedPost(object):
         form meaning content is removed if the object goes out of scope
         """
 
-        # TODO
-        return False
+        if len(self.articles) == 1:
+            # Nothing to do; no need to fail
+            return True
+
+        if len(self.articles) < 1:
+            # Not possible to join less than 1 article
+            return False
+
+        # acquire the first article
+        head_article = None
+
+        for content in self.articles:
+            if head_article is None:
+                # First entry; create a copy of our head article.  This
+                # article is attached by default we want to leave it this way
+                head_article = content.copy()
+                continue
+
+            # Append our content
+            if not head_article.append(content):
+                del head_article
+                # We failed
+                return False
+
+        # Reset with a new sorted set of articles
+        self.articles = sortedset(key=lambda x: x.key())
+
+        # Add our new entry (leave it attached)
+        self.articles.add(head_article)
+
+        # We're done!
+        return True
 
     def files(self):
         """
         Returns a list of the files within article
         """
-        return [ x.keys() for x in self.articles ]
+        return [ x.path() for x in self.articles ]
 
     def size(self):
         """
