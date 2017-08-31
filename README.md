@@ -1,3 +1,6 @@
+[![Paypal](http://repo.nuxref.com/pub/img/paypaldonate.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MHANV39UZNQ5E)
+[![Patreon](http://repo.nuxref.com/pub/img/patreondonate.svg)](https://www.patreon.com/lead2gold)
+
 ## Introduction
 NewsReap is a library written to wrap around the NNTP protocol. It simplifies
 a lot of development. But it also comes with a standalone script that can allow
