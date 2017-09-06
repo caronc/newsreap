@@ -91,6 +91,13 @@ NNTP_RESPONSE_RE = re.compile(
     re.MULTILINE,
 )
 
+# We use this check when send() is called so that we can prevent
+# personal content from being sent to log files
+NNTP_AUTHINFO_CHECK = re.compile(
+    r'^AUTHINFO[\s]+(?P<key>[^\s]+)[\s]+(?P<value>.+)[\s]*$',
+    re.IGNORECASE,
+)
+
 # Group Response (when we switch to a group)
 NNTP_GROUP_RESPONSE_RE = re.compile(
     r'(?P<count>[0-9]+)\s+(?P<low>[0-9]+)\s+' +
@@ -1406,7 +1413,14 @@ class NNTPConnection(SocketBase):
                     'No Connection',
                 )
 
-        logger.debug('send(%s)' % command)
+        match = NNTP_AUTHINFO_CHECK.match(command)
+        if not match:
+            logger.debug('send(%s)' % command)
+
+        else:
+            logger.debug('send(AUTHINFO %s ********)' % (
+                match.group('key'),
+            ))
 
         total_retries = retries
         while True:
