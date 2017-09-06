@@ -197,7 +197,14 @@ for k, v in plugins.iteritems():
         if not hasattr(obj, CLI_PLUGINS_MAPPING):
             continue
 
-        if isinstance(obj.NEWSREAP_CLI_PLUGINS, dict):
+        if isinstance(obj.NEWSREAP_CLI_PLUGINS, basestring):
+            # 1-1 mapping of a function
+            _click_func = getattr(obj, obj.NEWSREAP_CLI_PLUGINS, None)
+            if callable(_click_func):
+                cli.add_command(_click_func)
+                break
+
+        elif isinstance(obj.NEWSREAP_CLI_PLUGINS, dict):
             # parse format:
             # shorthand:function
             for sf, _meta in obj.NEWSREAP_CLI_PLUGINS.iteritems():
@@ -278,8 +285,9 @@ for k, v in plugins.iteritems():
                         # Set the flag and fall through
                         command = False
 
-                    # Get our fn_suffix
-                    fn_suffix = fn[len(fn_prefix)+1:]
+                    if fn_prefix:
+                        # Get our fn_suffix
+                        fn_suffix = fn[len(fn_prefix)+1:]
 
                     # Store our function
                     _click_func = getattr(obj, fn)
