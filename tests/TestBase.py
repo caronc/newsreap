@@ -170,7 +170,7 @@ class TestBase(unittest.TestCase):
 
         if perm is not None:
             # Adjust permissions
-            chmod(path, 0000)
+            chmod(path, perm)
 
         # Return True
         return True
