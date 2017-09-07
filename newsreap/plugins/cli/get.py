@@ -25,8 +25,10 @@ import sys
 
 from os.path import abspath
 from os.path import dirname
+from os.path import basename
+from os.path import splitext
 from os.path import isfile
-from os.path import isdir
+from os.path import join
 
 # Logging
 import logging
@@ -38,6 +40,8 @@ except ImportError:
     from newsreap.Logging import NEWSREAP_CLI
 
 logger = logging.getLogger(NEWSREAP_CLI)
+
+from newsreap.NNTPnzb import NNTPnzb
 
 # Define our function
 NEWSREAP_CLI_PLUGINS = 'get'
@@ -54,8 +58,7 @@ NEWSREAP_CLI_PLUGINS = 'get'
 @click.argument('sources', nargs=-1)
 def get(ctx, group, workdir, inspect, sources):
     """
-    Retrieves content from Usenet when provided a NZB-File, A directory
-    containing NZB-File(s), and/or a Message-ID
+    Retrieves content from Usenet when provided a NZB-File and/or a Message-ID
     """
     session = ctx['NNTPSettings'].session()
     if not session:
@@ -70,26 +73,62 @@ def get(ctx, group, workdir, inspect, sources):
     mgr = ctx['NNTPManager']
 
     for source in sources:
-        if isfile(source):
-            logger.debug("Scanning file '%s'." % (source))
-            # TODO: Deal with NZB-File
-            pass
 
-        elif isdir(source):
-            logger.debug("Scanning directory '%s'." % (source))
-            # TODO: Deal with a directory containing NZB-File(s)
-            pass
+        if isfile(source):
+            logger.debug("Scanning NZB-File '%s'." % (source))
+
+            # Open up our NZB-File
+            nzb = NNTPnzb(source)
+
+            if not nzb.is_valid():
+                # Check that the file is valid
+                logger.warning("Skipping invalid NZB-File '%s'." % (source))
+                continue
+
+            if inspect:
+                #  Scan each element in our NZB-File
+                for article in nzb:
+                    for segment in article:
+                        # Iterate over objects and inspect our Message-ID
+                        # only; do not download
+                        response = mgr.stat(segment.msgid(), full=True, group=group)
+                        if response:
+                            print('****')
+                            for k,v in response.iteritems():
+                                print('%s: %s' % (k,v))
+                        pass
+                continue
+
+            # If we reach here, we need to download the contents
+            # associated with the NZB-File
+            if not workdir:
+                workdir = join(
+                    abspath(dirname(source)),
+                    splitext(basename(source))[0],
+                )
+
+            response = mgr.get(nzb, work_dir=workdir)
 
         else:
-            logger.debug("Retrieving Message-ID '%s'." % (source))
+            logger.debug("Handling Message-ID '%s'." % (source))
             # Download content by its Message-ID
-            if not inspect:
-                mgr.get(source, work_dir=workdir, group=group)
-            else:
-                # Acquire our response
+
+            if inspect:
+                # Inspect our Message-ID only; do not download
                 response = mgr.stat(source, full=True, group=group)
                 if response:
                     print('****')
                     for k,v in response.iteritems():
                         print('%s: %s' % (k,v))
+
+                # Move along
+                continue
+
+            # If we reach here, we need to download the contents
+            # associated with the Message-ID
+            if not workdir:
+                # Get Default Working Directory
+                workdir = basename(source)
+
+            response = mgr.get(source, work_dir=workdir, group=group)
 
