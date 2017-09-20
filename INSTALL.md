@@ -13,7 +13,8 @@ sudo yum --enablerepo=nuxref* install \
            python-blist python-yenc \
            PyYAML python-sqlalchemy \
            python-gevent python-click \
-           python-cryptography
+           python-dateutil \
+           python-cryptography pytz
 
 # Testers might want to also install the following:
 sudo yum --enablerepo=nuxref* --best install \

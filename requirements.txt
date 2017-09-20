@@ -1,9 +1,10 @@
 click >= 5.1
+pytz
 blist
-pyaml
+pyyaml
 sqlalchemy >= 1.0
 gevent >= 1.1.2
-dateutils
+dateutil
 cryptography >= 0.7
 yenc >= 0.4
 lxml >= 3.0
