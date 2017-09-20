@@ -106,7 +106,7 @@ except ImportError:
         ord('.'), ord('='),
     )] + [
         # Ignore Types (we simply ignore these types if they are found)
-        (chr('\r'), ''), (chr('\n'), ''),
+        ('\r', ''), ('\n', ''),
     ])
 
     # A map used for encoding content
