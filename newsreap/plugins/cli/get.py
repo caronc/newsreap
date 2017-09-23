@@ -46,6 +46,7 @@ from newsreap.NNTPnzb import NNTPnzb
 # Define our function
 NEWSREAP_CLI_PLUGINS = 'get'
 
+
 @click.command()
 @click.pass_obj
 @click.option('--group', type=basestring,
@@ -91,11 +92,21 @@ def get(ctx, group, workdir, inspect, sources):
                     for segment in article:
                         # Iterate over objects and inspect our Message-ID
                         # only; do not download
-                        response = mgr.stat(segment.msgid(), full=True, group=group)
+                        response = mgr.stat(
+                            segment.msgid(),
+                            full=True,
+                            group=group,
+                        )
+
                         if response:
                             print('****')
-                            for k,v in response.iteritems():
-                                print('%s: %s' % (k,v))
+                            print(response.str())
+
+                        else:
+                            logger.warning(
+                                "No Response Retrieved (from %s)." % (
+                                    segment.msgid()),
+                            )
                         pass
                 continue
 
@@ -118,8 +129,13 @@ def get(ctx, group, workdir, inspect, sources):
                 response = mgr.stat(source, full=True, group=group)
                 if response:
                     print('****')
-                    for k,v in response.iteritems():
-                        print('%s: %s' % (k,v))
+                    print(response.str())
+
+                else:
+                    logger.warning(
+                        "No Response Retrieved (from %s)." % (
+                            segment.msgid()),
+                    )
 
                 # Move along
                 continue
@@ -131,4 +147,3 @@ def get(ctx, group, workdir, inspect, sources):
                 workdir = basename(source)
 
             response = mgr.get(source, work_dir=workdir, group=group)
-

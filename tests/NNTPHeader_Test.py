@@ -15,6 +15,8 @@
 # GNU Lesser General Public License for more details.
 
 import sys
+import re
+
 if 'threading' in sys.modules:
     #  gevent patching since pytests import
     #  the sys library before we do.
@@ -33,6 +35,7 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPHeader import NNTPHeader
+from newsreap.NNTPHeader import HEADER_PRINT_SEQUENCE
 
 
 class NNTPHeader_Test(TestBase):
@@ -88,7 +91,7 @@ class NNTPHeader_Test(TestBase):
         Test that we properly format the header for posting
         """
 
-        # Initialize Codec
+        # Initialize Header
         hdr = NNTPHeader()
         hdr['message-id'] = '<msgid1234>'
         hdr['Newsgroups'] = 'alt.binaries.test,alt.binaries.test2'
@@ -97,3 +100,31 @@ class NNTPHeader_Test(TestBase):
         hdr['X-Newsposter'] = 'newsreap'
 
         assert isinstance(hdr.post_iter(), basestring)
+
+    def test_print_ordering(self):
+        # Initialize Header
+        hdr = NNTPHeader()
+        hdr['date'] = 'Mon, 05 Jun 2017 07:54:52 -0700'
+        hdr['From'] = 'l2g <noreply@newsreap.com>'
+        hdr['Newsgroups'] = 'alt.binaries.test,alt.binaries.test2'
+        hdr['message-id'] = '<msgid1234>'
+        hdr['Subject'] = 'Test Subject'
+
+        # Manage a iterator to hdrseq
+        hdrseq = iter(HEADER_PRINT_SEQUENCE)
+
+        # get our results
+        results = str(hdr)
+        for line in re.split('[\r\n]+', results):
+            key = re.split(':', line)[0]
+
+            # Get next expected entry even if it means
+            # iterating a bit further down the list
+            expected = next(hdrseq)
+            while expected != key:
+                expected = next(hdrseq)
+
+            # Our entries defined were specifically specified because
+            # they exist on this list somewhere.  For full bulletproofing
+            # every type of entry should be added above
+            assert key == expected

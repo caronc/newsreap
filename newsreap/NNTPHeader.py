@@ -17,6 +17,25 @@ import re
 from newsreap.NNTPSettings import NNTP_EOL
 from newsreap.NNTPMetaContent import NNTPMetaContent
 
+# When printing of the object is required, content is returned as
+# it appears in this list (sequentially).  Anything not matched
+# here is simply printed at the end.
+HEADER_PRINT_SEQUENCE = (
+    'Subject',
+    'From',
+    'Date',
+    'Message-ID',
+    'Lines',
+    'Size',
+    'Newsgroups',
+    'Content-Type',
+    'Mime-Version',
+    'Content-Transfer-Encoding'
+
+    # Defined X-Entries
+    'X-Newsposter'
+)
+
 class NNTPHeader(NNTPMetaContent):
     """
     A Header representation of an NNTP Article
@@ -118,6 +137,32 @@ class NNTPHeader(NNTPMetaContent):
         """
         key = self.__fmt_key(key)
         return self.content.pop(key, d)
+
+    def str(self, delimiter=': ', eol='\r\n', count=0):
+        """Returns a nice consistent message header enforcing header sequence.
+        Anything not defined in the sequence is printed at the end.
+
+        use count to specfy how may header lines to print; if you set this
+        to zero, then all of the matched header lines are printed.
+
+        This function attempts to honour print sequence allowing for a
+        consistent output.
+        """
+        response = []
+        for k in HEADER_PRINT_SEQUENCE:
+            if k in self.content:
+                response.append('%s%s%s' % (k, delimiter, self.content[k]))
+
+        for k, v in self.content.iteritems():
+            if k not in HEADER_PRINT_SEQUENCE:
+                response.append('%s%s%s' % (k, delimiter, v))
+
+        return eol.join(response)
+
+    def __str__(self):
+        """General str() default message format
+        """
+        return self.str()
 
     def __fmt_key(self, key):
         """Formats the hash key for more consistent hits; hence fetching the

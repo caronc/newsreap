@@ -1134,7 +1134,7 @@ class NNTPConnection(SocketBase):
 
             if response.is_success(multiline=True):
                 # Return our content
-                return response.decoded.pop().content
+                return response.decoded.pop()
 
         if response.code in NNTPResponseCode.NO_ARTICLE:
             if self._backups:
