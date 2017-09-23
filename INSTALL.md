@@ -16,6 +16,12 @@ sudo yum --enablerepo=nuxref* install \
            python-dateutil \
            python-cryptography pytz
 
+7zip support (add /usr/bin/7za)
+sudo yum --enablerepo=nuxref* install p7zip
+
+rar support (add /usr/bin/rar)
+sudo yum --enablerepo=nuxref* install rar
+
 # Testers might want to also install the following:
 sudo yum --enablerepo=nuxref* --best install \
            python-nose
