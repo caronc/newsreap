@@ -155,98 +155,95 @@ class CodecPar(CodecFile):
         if not self.can_exe(self._par):
             return None
 
-        # Base entry on first file in the list
-        name = basename(next(iter(self.archive)))
+        for target in self.archive:
+            # Base entry on first file in the list
+            name = basename(target)
+            target_dir = dirname(target)
 
-        tmp_path, tmp_file = self.mkstemp(content=name, suffix='.par2')
+            #tmp_path, tmp_file = self.mkstemp(content=name, suffix='.par2')
 
-        # Initialize our command
-        execute = [
-            # Our Executable PAR Application
-            self._par,
-            # Use Create Flag
-            'create',
-        ]
+            # Initialize our command
+            execute = [
+                # Our Executable PAR Application
+                self._par,
+                # Use Create Flag
+                'create',
+            ]
 
-        # Handle PAR Block Size
-        if self.block_size:
-            execute.append('-s%s' % self.block_size)
+            # Handle PAR Block Size
+            if self.block_size:
+                execute.append('-s%s' % self.block_size)
 
-        if self.recovery_percent:
-            execute.append('-r%d' % self.recovery_percent)
+            if self.recovery_percent:
+                execute.append('-r%d' % self.recovery_percent)
 
-        if self.cpu_cores is not None and self.cpu_cores > 1:
-            # to repair concurrently - uses multiple threads
-            execute.append('-t+')
+            if self.cpu_cores is not None and self.cpu_cores > 1:
+                # to repair concurrently - uses multiple threads
+                execute.append('-t+')
 
-        # Stop Switch Parsing
-        execute.append('--')
+            # Stop Switch Parsing
+            execute.append('--')
 
-        # Now place content within directory identifed by it's name
-        execute.append('%s' % name)
+            # Now add our target (we can only do one at a time which i why we
+            # loop) and run our setups
+            execute.append(target)
 
-        # Specify the Destination Path
-        execute.append(tmp_file)
+            found_set = sortedset()
+            with pushd(target_dir):
+                # Create our SubProcess Instance
+                sp = SubProcess(execute)
 
-        # Add all of our paths now
-        for _path in self:
-            execute.append(_path)
+                # Start our execution now
+                sp.start()
 
-        found_set = sortedset()
+                while not sp.is_complete(timeout=1.5):
 
-        with pushd(tmp_path):
-            # Create our SubProcess Instance
-            sp = SubProcess(execute)
+                    found_set = self.watch_dir(
+                        target_dir,
+                        prefix=name,
+                        regex=PAR_PART_RE,
+                        ignore=found_set,
+                    )
 
-            # Start our execution now
-            sp.start()
-
-            while not sp.is_complete(timeout=1.5):
-
-                found_set = self.watch_dir(
-                    tmp_path,
-                    prefix=name,
-                    ignore=found_set,
-                )
-
-        # Handle remaining content
-        found_set = self.watch_dir(
-            tmp_path,
-            prefix=name,
-            ignore=found_set,
-            seconds=-1,
-        )
-
-        # Let the caller know our status
-        if not sp.successful():
-            # Cleanup Temporary Path
-            rm(tmp_path)
-            return None
-
-        if not len(found_set):
-            return None
-
-        # Create a resultset
-        results = sortedset(key=lambda x: x.key())
-
-        part = 0
-        # iterate through our found_set and create NNTPBinaryContent()
-        # objects from them.
-        for path in found_set:
-            # Iterate over our found files and determine their part
-            # information
-            part += 1
-            content = NNTPBinaryContent(
-                path,
-                part=part,
-                total_parts=len(found_set),
+            # Handle remaining content
+            found_set = self.watch_dir(
+                target_dir,
+                prefix=name,
+                regex=PAR_PART_RE,
+                ignore=found_set,
+                seconds=-1,
             )
 
-            # Loaded data is by default detached; we want to attach it
-            content.attach()
+            # Let the caller know our status
+            if not sp.successful():
+                # We're done; we failed
+                return None
 
-            # Add our attached content to our results
-            results.add(content)
+            if not len(found_set):
+                # We're done; we failed
+                return None
+
+            # Create a resultset
+            results = sortedset(key=lambda x: x.key())
+
+            part = 0
+            # iterate through our found_set and create NNTPBinaryContent()
+            # objects from them.
+            for path in found_set:
+                # Iterate over our found files and determine their part
+                # information
+                part += 1
+                content = NNTPBinaryContent(
+                    path,
+                    part=part,
+                    total_parts=len(found_set),
+                )
+
+                # Loaded data is by default detached; we want to attach it
+                content.attach()
+
+                # Add our attached content to our results
+                results.add(content)
 
         # Clean our are list of objects to archive
         self.clear()

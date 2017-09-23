@@ -342,7 +342,8 @@ class CodecFile(object):
         # Return our results
         return results
 
-    def watch_dir(self, path, prefix=None, ignore=None, seconds=15):
+    def watch_dir(self, path, regex=None, prefix=None, suffix=None,
+            ignore=None, case_sensitive=True, seconds=15):
         """Monitors a directory for files that have been added/changed
 
             path: is the path to monitor
@@ -356,8 +357,10 @@ class CodecFile(object):
 
         findings = find(
             path, fsinfo=True,
+            regex_filter=regex,
             prefix_filter=prefix,
-            case_sensitive=True,
+            suffix_filter=suffix,
+            case_sensitive=case_sensitive,
         )
 
         findings = [
