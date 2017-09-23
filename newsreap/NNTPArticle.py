@@ -98,11 +98,8 @@ class NNTPArticle(object):
         if not self.groups:
             self.groups = set()
 
-        if isinstance(self.groups, basestring):
-            self.groups = [self.groups]
-
         elif isinstance(self.groups, basestring):
-            self.groups = set((self.groups, ))
+            self.groups = { self.groups, }
 
         elif isinstance(self.groups, (list, tuple)):
             self.groups = set([ x.lower() for x in self.groups])
