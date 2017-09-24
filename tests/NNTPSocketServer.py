@@ -3,7 +3,7 @@
 #
 # This is a simple dumb NNTP Server that is useful for unit testing.
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -14,7 +14,6 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
-
 import sys
 if 'threading' in sys.modules:
     #  gevent patching since pytests import
@@ -34,7 +33,6 @@ gevent.monkey.patch_all()
 import threading
 
 import re
-from pprint import pformat
 from io import BytesIO
 from zlib import compress
 from os.path import dirname
@@ -139,11 +137,11 @@ class NNTPClient(SocketBase):
         if eol:
             line = line + NNTP_EOL
 
-        print "Sent: %s" % line.strip()
+        # print("DEBUG: CLIENT TX: %s" % line.strip())
         self.send(line)
         response = self.read()
-        print "Received: %s" % response.strip()
-        print
+        # print("DEBUG: CLIENT RX: %s" % response.strip())
+        # print('')
 
         return response
 
@@ -264,7 +262,7 @@ class NNTPSocketServer(threading.Thread):
         Pushes directly to the NNTPSocketServer without need of a remote
         connection and acquires the response
         """
-        # print 'Scanning Against: "%s"' % line
+        # print('Scanning Against: "%s"' % line)
 
         # cur_thread = threading.current_thread()
         # response = "{}: {}".format(cur_thread.name, data)
@@ -347,8 +345,7 @@ class NNTPSocketServer(threading.Thread):
                             break
 
                         # create a file from our fetch map
-                        entry = self.fetch_map\
-                            [self.current_group].get(
+                        entry = self.fetch_map[self.current_group].get(
                             str(_result.group('id')),
                             self.default_fetch,
                         )
@@ -356,8 +353,7 @@ class NNTPSocketServer(threading.Thread):
                     else:
                         try:
                             # If we are in a group, test it first
-                            entry = self.fetch_map\
-                                [self.current_group].get(
+                            entry = self.fetch_map[self.current_group].get(
                                 str(_result.group('id')),
                                 self.default_fetch,
                             )
@@ -466,7 +462,7 @@ class NNTPSocketServer(threading.Thread):
                 self.socket.send(welcome_str + NNTP_EOD)
             except:
                 # connection lost
-                # print 'DEBUG: SOCKET ERROR DURING SEND (EXITING)....'
+                # print('DEBUG: SOCKET ERROR DURING SEND (EXITING)....')
                 return
 
             self.sent_welcome = True
@@ -475,7 +471,7 @@ class NNTPSocketServer(threading.Thread):
         d_len = data.tell()
 
         while self._active.is_set() and self.socket.connected:
-            # print 'DEBUG: SERVER LOOP'
+            # print('DEBUG: SERVER LOOP')
 
             # ptr manipulation
             d_ptr = data.tell()
@@ -486,7 +482,7 @@ class NNTPSocketServer(threading.Thread):
                 data.seek(d_ptr)
 
             try:
-                # print 'DEBUG: SERVER BLOCKING FOR DATA'
+                # print('DEBUG: SERVER BLOCKING FOR DATA')
                 pending = self.socket.can_read(0.8)
                 if pending is None:
                     # No more data
@@ -497,13 +493,14 @@ class NNTPSocketServer(threading.Thread):
                     continue
 
                 while self.socket.can_read():
-                    # print 'DEBUG: SERVER BLOCKING FOR DATA....'
+                    # print('DEBUG: SERVER BLOCKING FOR DATA....')
                     _data = self.socket.read()
                     if not _data:
-                        # print 'DEBUG: SERVER NO DATA (EXITING)....'
+                        # print('DEBUG: SERVER NO DATA (EXITING)....')
                         # Reset our settings to prepare for another connection
                         self.reset()
                         return
+                    # print('DEBUG: SERVER READ DATA: %s' % _data.rstrip())
 
                     # Buffer response
                     data.write(_data)
@@ -511,8 +508,8 @@ class NNTPSocketServer(threading.Thread):
 
             except (socket.error, SocketException):
                 # Socket Issue
-                # print 'DEBUG: SOCKET ERROR (EXITING)....'
-                # print 'DEBUG: ERROR %s' % str(e)
+                # print('DEBUG: SOCKET ERROR (EXITING)....')
+                # print('DEBUG: ERROR %s' % str(e))
                 # Reset our sent_welcome flag
                 self.sent_welcome = False
                 return
@@ -533,10 +530,10 @@ class NNTPSocketServer(threading.Thread):
                 self.socket.send(response + NNTP_EOD)
             except:
                 # connection lost
-                # print 'DEBUG: SOCKET ERROR DURING SEND (EXITING)....'
+                # print('DEBUG: SOCKET ERROR DURING SEND (EXITING)....')
                 return
 
-        # print 'DEBUG: handle() (EXITING)....'
+        # print('DEBUG: handle() (EXITING)....')
 
     def run(self):
         """
@@ -556,7 +553,7 @@ class NNTPSocketServer(threading.Thread):
                 # Lost the connection; loop
                 continue
 
-            # print 'DEBUG: SERVERSIDE CONNECTION ESTABLISHED!'
+            # print('DEBUG: SERVERSIDE CONNECTION ESTABLISHED!')
 
             # If we reach we have a connection
             self.nntp_server()
@@ -648,7 +645,7 @@ if __name__ == "__main__":
     # SSL Checking
     nntp_server = NNTPSocketServer(
         secure=ssl.PROTOCOL_TLSv1,
-        #secure=False,
+        # secure=False,
     )
     # Launch thread
     # nntp_server.daemon = True
@@ -660,7 +657,7 @@ if __name__ == "__main__":
     socket.put("AUTHINFO USER valid")
     nntp_server.shutdown()
 
-    ## NON SSL
+    # NON SSL
     nntp_server = NNTPSocketServer(
         secure=False,
     )

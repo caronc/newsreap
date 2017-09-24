@@ -53,7 +53,6 @@ class Worker(Greenlet):
         self._event = Event()
 
         # We always process as many queue entries as we can
-        # This contains..
         # TODO: This should contain some sort of container object that
         #       allows us to process many Message-ID, but we need to know
         #       their group they belong into.  We also need their expected
@@ -83,6 +82,12 @@ class Worker(Greenlet):
 
             try:
                 request = self._work_queue.get()
+                if request is StopIteration:
+                    # during a close() call (defined below) we force
+                    # a StopIteration into the queue to force an exit
+                    # from a program level
+                    return
+
                 if request.is_set():
                     # Process has been aborted or is no longer needed
                     continue
