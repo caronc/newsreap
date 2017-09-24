@@ -55,7 +55,7 @@ class CodecYENC_Test(TestBase):
         yenc Style v1.1
         """
         # Initialize Codec
-        yd = CodecYenc()
+        yd = CodecYenc(work_dir=self.test_dir)
 
         yenc_meta = yd.detect(
             "=ybegin part=1 line=128 size=500000 name=mybinary.dat",
@@ -76,7 +76,7 @@ class CodecYENC_Test(TestBase):
         yenc Style v1.2
         """
         # Initialize Codec
-        yd = CodecYenc()
+        yd = CodecYenc(work_dir=self.test_dir)
 
         yenc_meta = yd.detect(
             "=ybegin line=128 size=123456 name=mybinary.dat",
@@ -169,7 +169,7 @@ class CodecYENC_Test(TestBase):
         Make sure we fail on bad headers
         """
         # Initialize Codec
-        yd = CodecYenc()
+        yd = CodecYenc(work_dir=self.test_dir)
 
         assert yd.detect(
             "=ybegin line=NotDigit size=BAD",
@@ -225,7 +225,7 @@ class CodecYENC_Test(TestBase):
         fd_c = BytesIO()
 
         # Initialize Codec
-        decoder = CodecYenc()
+        decoder = CodecYenc(work_dir=self.test_dir)
 
         # Force to operate in python (manual/slow) mode
         CodecYenc.FAST_YENC_SUPPORT = False
@@ -310,7 +310,7 @@ class CodecYENC_Test(TestBase):
         fd2_c = BytesIO()
 
         # Initialize Codec
-        decoder = CodecYenc()
+        decoder = CodecYenc(work_dir=self.test_dir)
 
         contents_py = []
         contents_c = []
@@ -388,7 +388,7 @@ class CodecYENC_Test(TestBase):
         assert isfile(binary_filepath)
 
         # Initialize Codec
-        encoder_c = CodecYenc()
+        encoder_c = CodecYenc(work_dir=self.test_dir)
 
         content_c = encoder_c.encode(binary_filepath)
 
@@ -403,7 +403,7 @@ class CodecYENC_Test(TestBase):
         CodecYenc.FAST_YENC_SUPPORT = False
 
         # Initialize Codec
-        encoder_py = CodecYenc()
+        encoder_py = CodecYenc(work_dir=self.test_dir)
 
         content_py = encoder_py.encode(binary_filepath)
 
@@ -432,7 +432,7 @@ class CodecYENC_Test(TestBase):
         assert isfile(binary_filepath)
 
         # Initialize Codec
-        encoder = CodecYenc()
+        encoder = CodecYenc(work_dir=self.test_dir)
 
         # Create an NNTPContent Object
         content = NNTPBinaryContent(binary_filepath)
@@ -460,7 +460,9 @@ class CodecYENC_Test(TestBase):
         assert new_content_a.md5() == new_content_b.md5()
 
         # Chain our encodings
-        new_content = content.encode([CodecYenc, CodecYenc()])
+        new_content = content.encode(
+            [CodecYenc, CodecYenc(work_dir=self.test_dir)],
+        )
 
         # We should have gotten an ASCII Content Object
         assert isinstance(new_content, NNTPAsciiContent) is True
@@ -484,7 +486,7 @@ class CodecYENC_Test(TestBase):
         assert isfile(binary_filepath)
 
         # Initialize Codec
-        encoder = CodecYenc()
+        encoder = CodecYenc(work_dir=self.test_dir)
 
         # Create an NNTPArticle Object
         article = NNTPArticle()
@@ -514,10 +516,81 @@ class CodecYENC_Test(TestBase):
         assert new_article_a[0].md5() == new_article_b[0].md5()
 
         # Chain our encodings
-        new_article = article.encode([CodecYenc, CodecYenc()])
+        new_article = article.encode(
+            [CodecYenc, CodecYenc(work_dir=self.test_dir)],
+        )
 
         # We should have gotten an ASCII Content Object
         assert isinstance(new_article, NNTPArticle) is True
 
         # We should actually have article associated with out data
         assert len(new_article) > 0
+
+    def test_partial_download(self):
+        """
+        Test the handling of a download that is explicitly ordered to abort
+        after only some content is retrieved.  A way of 'peeking' if you will.
+
+        This test is identicle to test_decoding_yenc_single_part defined in
+        this same test file with the exception of testing the early abort.
+        """
+        # A simple test for ensuring that the yenc
+        # library exists; otherwise we want this test
+        # to fail; the below line will handle this for
+        # us; we'll let the test fail on an import error
+        import yenc
+
+        # Input File
+        encoded_filepath = join(self.var_dir, '00000005.ntx')
+        assert isfile(encoded_filepath)
+
+        # Compare File
+        decoded_filepath = join(self.var_dir, 'testfile.txt')
+        assert isfile(decoded_filepath)
+
+        # Python Solution
+        fd_py = BytesIO()
+
+        # C Solution
+        fd_c = BytesIO()
+
+        # Initialize Codec (restrict content to be no larger then 10 bytes)
+        decoder = CodecYenc(work_dir=self.test_dir, max_bytes=10)
+
+        # Force to operate in python (manual/slow) mode
+        CodecYenc.FAST_YENC_SUPPORT = False
+        with open(encoded_filepath, 'r') as fd_in:
+            content_py = decoder.decode(fd_in)
+
+        # our content should be valid
+        assert isinstance(content_py, NNTPBinaryContent)
+
+        # Force to operate with the C extension yenc
+        # This require the extensions to be installed
+        # on the system
+        CodecYenc.FAST_YENC_SUPPORT = True
+        with open(encoded_filepath, 'r') as fd_in:
+            content_c = decoder.decode(fd_in)
+
+        # our content should be valid
+        assert isinstance(content_c, NNTPBinaryContent)
+
+        # Our content is subject to an early exit so in all cases we should
+        # not have valid content
+        assert content_py.is_valid() is False
+        assert content_c.is_valid() is False
+
+        # Confirm that our output from our python implimentation
+        # matches that of our yenc C version.
+        assert fd_py.tell() == fd_c.tell()
+
+        with open(decoded_filepath, 'r') as fd_in:
+            decoded = fd_in.read()
+
+        # Compare our processed content with the expected results
+        length_py = len(content_py.getvalue())
+        length_c = len(content_c.getvalue())
+
+        # Compare our processed content with the expected results
+        assert decoded[0:length_py] == content_py.getvalue()
+        assert decoded[0:length_c] == content_c.getvalue()

@@ -24,6 +24,7 @@ from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.Utils import SEEK_SET
+from newsreap.Utils import SEEK_END
 from newsreap.codecs.CodecBase import CodecBase
 
 # Logging
@@ -319,6 +320,13 @@ class CodecUU(CodecBase):
 
             # Write data to out stream
             self.decoded.write(decoded)
+
+            if self._max_bytes > 0 and self._decoded >= self._max_bytes:
+                # If we specified a limit and hit it then we're done at
+                # this point. Before we do so; advance to the end of our
+                # stream
+                stream.seek(0, SEEK_END)
+                break
 
         # Reset our meta tracking
         self._meta = {}

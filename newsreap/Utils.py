@@ -51,6 +51,8 @@ from random import choice
 from string import ascii_uppercase
 from string import digits
 from string import ascii_lowercase
+from string import ascii_letters
+from string import punctuation
 
 from datetime import datetime
 
@@ -1146,6 +1148,7 @@ def random_str(count=16, seed=ascii_uppercase + digits + ascii_lowercase):
     """
     return ''.join(choice(seed) for _ in range(count))
 
+
 def parse_bool(arg, default=False):
     """
     Parses strings such as 'yes' and 'no' as well as other strings such as
@@ -1185,3 +1188,27 @@ def parse_bool(arg, default=False):
 
     # Handle other types
     return bool(arg)
+
+
+def hexdump(src, length=16, sep='.'):
+    """
+    Displays a hex output of the content it is passed.
+
+    This was based on https://gist.github.com/7h3rAm/5603718 with some
+    minor modifications
+    """
+    allowed = digits + ascii_letters + punctuation + ' '
+
+    print_map = ''.join(((x if x in allowed else '.') \
+        for x in map(chr, range(256))))
+    lines = []
+
+    for c in xrange(0, len(src), length):
+        chars = src[c:c+length]
+        hex = ' '.join(["%02x" % ord(x) for x in chars])
+        if len(hex) > 24:
+            hex = "%s %s" % (hex[:24], hex[24:])
+        printable = ''.join(["%s" % (
+            (ord(x) <= 127 and print_map[ord(x)]) or sep) for x in chars])
+        lines.append("%08x:  %-*s  |%s|" % (c, length*3, hex, printable))
+    return '\n'.join(lines)

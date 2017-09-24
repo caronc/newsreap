@@ -359,7 +359,7 @@ class NNTPManager(object):
         # We aren't blocking, so just return the request object
         return request
 
-    def get(self, id, work_dir, group=None, block=True):
+    def get(self, id, work_dir, group=None, max_bytes=0, block=True):
         """
         Queue's an NNTPRequest for processing and returns it's
         response if block is set to True.
@@ -378,6 +378,12 @@ class NNTPManager(object):
         any of the response contents or articles contents prior to
         it's flag being set (marking completion)
 
+        max_bytes is set to the number of bytes you want to have received
+        before you automatically abort the connection and flag the object as
+        having only been partially complete  Use this option when you need to
+        inspect the first bytes of a binary file. Set this to zero to download
+        the entire thing (this is the default value)
+
         """
         if not len(self._workers):
             # Handle connections
@@ -387,7 +393,10 @@ class NNTPManager(object):
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
             # ('function, (*args), (**kwargs) )
-            ('get', (id, work_dir), {'group': group}),
+            ('get', (id, work_dir), {
+                'group': group,
+                'max_bytes': max_bytes,
+            }),
         ])
 
         # Append to Queue for processing

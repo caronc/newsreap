@@ -294,3 +294,46 @@ class NNTPYencArticle_Test(TestBase):
 
         # cleanup our file
         unlink(new_filepath)
+
+    def test_partial_yenc_get(self):
+        """
+        Tests the handling of a partial yenc message
+        """
+
+        # Create a non-secure connection
+        sock = NNTPConnection(
+            host=self.nttp_ipaddr,
+            port=self.nntp_portno,
+            username='valid',
+            password='valid',
+            secure=False,
+            join_group=True,
+        )
+
+        assert sock.connect() is True
+        assert sock._iostream == NNTPIOStream.RFC3977_GZIP
+        article = sock.get(
+            '5',
+            work_dir=self.tmp_dir,
+            group=self.common_group,
+            max_bytes=10,
+        )
+        assert isinstance(article, NNTPArticle) is True
+        assert len(article.decoded) == 1
+        assert isinstance(iter(article.decoded).next(), NNTPBinaryContent)
+        # Our content isn't valid because it's only a subset/partial download
+        assert iter(article.decoded).next().is_valid() is False
+
+        # Compare File
+        decoded_filepath = join(self.var_dir, 'testfile.txt')
+        assert isfile(decoded_filepath)
+        with open(decoded_filepath, 'r') as fd_in:
+            decoded = fd_in.read()
+
+        # Compare our processed content (which is a subset because we
+        # specified the max_bytes argument) with the expected results
+        length = len(iter(article.decoded).next().getvalue())
+        assert decoded[0:length] == iter(article.decoded).next().getvalue()
+
+        # Close up our socket
+        sock.close()

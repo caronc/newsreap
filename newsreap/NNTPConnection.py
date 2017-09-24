@@ -128,6 +128,12 @@ NNTP_RESPONSE_TIMEOUT = 30.0
 # send it's welcome message before aborting the connection
 NNTP_WELCOME_MESSAGE_TIMEOUT = 15.0
 
+# The smallest the NNTP READ Buffer can be. This value must consider
+# a worst case scenario where when the buffer is full, we can always
+# read at least 1 line (a line defined by having '\n' at the end of
+# it. The smaller this value, the faster content previews can occur
+NNTP_MIN_READ_BUFFER_SIZE = 1024
+
 # Defines the number of lines to scan into a message
 # to try and find the =ybegin entry (identifing a YENC message)
 SCAN_FROM_HEAD = 40
@@ -1163,13 +1169,19 @@ class NNTPConnection(SocketBase):
         # Return
         return True
 
-    def get(self, id, work_dir=None, group=None):
+    def get(self, id, work_dir=None, group=None, max_bytes=0):
         """
         A wrapper to the _get call allowing support for more then one type
         of object (oppose to just _get() which only accepts the message id
 
         This function returns the articles as a sortedset() containing the
         downloaded content based on what was passed in.
+
+        max_bytes is set to the number of bytes you want to have received
+        before you automatically abort the connection and flag the object as
+        having only been partially complete  Use this option when you need to
+        inspect the first bytes of a binary file. Set this to zero to download
+        the entire thing (this is the default value)
 
         """
         if work_dir is None:
@@ -1178,7 +1190,12 @@ class NNTPConnection(SocketBase):
 
         if isinstance(id, basestring):
             # We're dealing a Message-ID (Article-ID)
-            return self._get(id=id, work_dir=work_dir, group=group)
+            return self._get(
+                id=id,
+                work_dir=work_dir,
+                group=group,
+                max_bytes=max_bytes,
+            )
 
         # A sorted list of all articles pulled down
         results = sortedset(key=lambda x: x.key())
@@ -1186,7 +1203,12 @@ class NNTPConnection(SocketBase):
         if isinstance(id, (set, tuple, sortedset, list)):
             # iterate over all items and append them to our resultset
             for entry in id:
-                _results = self._get(id=id.id, work_dir=work_dir, group=group)
+                _results = self._get(
+                    id=id.id,
+                    work_dir=work_dir,
+                    group=group,
+                    max_bytes=max_bytes,
+                )
                 if _results is not None:
                     # Append our results
                     results |= _results
@@ -1194,7 +1216,12 @@ class NNTPConnection(SocketBase):
         elif isinstance(id, NNTPArticle):
             # Support NNTPArticle Objects if they have an id defined
             if id.id:
-                return self._get(id=id.id, work_dir=work_dir, group=group)
+                return self._get(
+                    id=id.id,
+                    work_dir=work_dir,
+                    group=group,
+                    max_bytes=max_bytes,
+                )
 
         elif isinstance(id, NNTPSegmentedPost):
             # Support NNTPSegmentedPost() Objects
@@ -1213,6 +1240,7 @@ class NNTPConnection(SocketBase):
                             id=_article,
                             work_dir=work_dir,
                             group=group,
+                            max_bytes=max_bytes,
                         )
 
                         if article:
@@ -1234,6 +1262,7 @@ class NNTPConnection(SocketBase):
                     article = self._get(
                         id=_article,
                         work_dir=work_dir,
+                        max_bytes=max_bytes,
                     )
 
                 if article:
@@ -1306,17 +1335,22 @@ class NNTPConnection(SocketBase):
         # Unsupported
         return None
 
-    def _get(self, id, work_dir, group=None):
+    def _get(self, id, work_dir, group=None, max_bytes=0):
         """
-        Download a specified message to the work_dir specified.
-        This function returns an NNTPArticle() object if it can.
+        Download a specified message to the work_dir specified. This function
+        returns an NNTPArticle() object if it can.
 
-        None is returned if the content could not be retrieved due
-        to an error or DMCA.
+        None is returned if the content could not be retrieved due to an error
+        or DMCA.
 
-        This function will always attempt to retrieve missing content
-        from any identified backup servers in the order they were
-        saved.
+        This function will always attempt to retrieve missing content from any
+        identified backup servers in the order they were saved.
+
+        max_bytes is set to the number of bytes you want to have received
+        before you automatically abort the connection and flag the object as
+        having only been partially complete  Use this option when you need to
+        inspect the first bytes of a binary file. Set this to zero to download
+        the entire thing (this is the default value)
 
         """
 
@@ -1341,9 +1375,9 @@ class NNTPConnection(SocketBase):
 
         decoders.extend([
             # Yenc Encoder/Decoder
-            CodecYenc(work_dir=work_dir),
+            CodecYenc(work_dir=work_dir, max_bytes=max_bytes),
             # UUEncoder/Decoder
-            CodecUU(work_dir=work_dir),
+            CodecUU(work_dir=work_dir, max_bytes=max_bytes),
         ])
 
         if self.use_body:
@@ -1513,11 +1547,33 @@ class NNTPConnection(SocketBase):
         # Our response object
         response = None
 
+        # The maximum allowable bytes we can parse before we abort
+        # this is calculated from the decoders
+        max_bytes = 0
+
         if not decoders:
             decoders = []
 
         elif isinstance(decoders, CodecBase):
             decoders = [decoders, ]
+
+        if len(decoders):
+            # If at least 1 decoder is defined, we scan it for it's
+            # max_bytes() value which tells us the maximum # of bytes we're
+            # expecting before completing the transaction (early).  max_bytes()
+            # is set from get() and _get() calls.
+
+            # If we determine the end user has specified a max_bytes value,
+            # then we adjust the total buffer read size.  This allows us to force
+            # an earlier processing.  The minimum buffer size can never be less
+            # than 2048
+            max_bytes = max([ d.max_bytes() for d in decoders])
+            if max_bytes > 0:
+                if max_bytes < NNTP_MIN_READ_BUFFER_SIZE:
+                    self.MAX_BUFFER_SIZE = NNTP_MIN_READ_BUFFER_SIZE
+                else:
+                    self.MAX_BUFFER_SIZE = min([max_bytes, self.MAX_BUFFER_SIZE])
+        logger.debug('Read Buffer set to %d bytes' % self.MAX_BUFFER_SIZE)
 
         while not self.article_eod:
             # This loop really only takes effect if we aren't forced
@@ -1805,8 +1861,9 @@ class NNTPConnection(SocketBase):
                         tail_ptr = offset + chunk_ptr
                         break
 
-            if not self.payload_gzipped and (tail_ptr-head_ptr) > 0 and \
-                tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
+            if not self.payload_gzipped and (tail_ptr-head_ptr) > 0 \
+                and total_bytes < self.MAX_BUFFER_SIZE \
+                and tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
                 # Astraweb is absolutely terrible for sending a little
                 # bit more data a few seconds later. This is a final
                 # call to try to handle these stalls just before the last
@@ -1984,6 +2041,13 @@ class NNTPConnection(SocketBase):
                     # the content parsed out (and decoded)
                     response.body.write(repr(result) + EOL)
 
+                    if max_bytes > 0:
+                        # We're instructed to only retrieve 'some' content and abort
+                        # for peaking purposes; so we're done now.
+                        self.close()
+                        return response
+
+
         # Track lines processed
         self.line_count += len(self.lines)
 
@@ -2006,6 +2070,7 @@ class NNTPConnection(SocketBase):
         self.can_post = False
 
         if self.connected:
+            logger.debug('Closing Connection')
             try:
                 # Prevent Recursion by calling parent send()
                 super(NNTPConnection, self).send('QUIT' + EOL)

@@ -53,7 +53,7 @@ class CodecUU_Test(TestBase):
         # Make sure we don't pick up on yenc content
         assert ud.detect(
             "=ybegin line=1024 size=12345",
-        ) == None
+        ) is None
 
         yenc_meta = ud.detect(
             "begin BDP FILENAME",
@@ -62,7 +62,6 @@ class CodecUU_Test(TestBase):
         assert len(yenc_meta) == 2
         assert yenc_meta['key'] == 'begin'
         assert yenc_meta['name'] == 'BDP FILENAME'
-
 
     def test_uu_headers(self):
         """
@@ -105,7 +104,6 @@ class CodecUU_Test(TestBase):
         assert len(uu_meta) == 1
         assert uu_meta['key'] == '`'
 
-
     def test_decoding_uuenc_single_part(self):
         """
         Decodes a single UUEncoded message
@@ -119,7 +117,7 @@ class CodecUU_Test(TestBase):
         assert isfile(decoded_filepath)
 
         # Initialize Codec
-        ud_py = CodecUU()
+        ud_py = CodecUU(work_dir=self.test_dir)
 
         # Read data and decode it
         with open(encoded_filepath, 'r') as fd_in:
@@ -148,7 +146,7 @@ class CodecUU_Test(TestBase):
         assert isfile(binary_filepath)
 
         # Initialize Codec
-        encoder = CodecUU()
+        encoder = CodecUU(work_dir=self.test_dir)
 
         content = encoder.encode(binary_filepath)
 
@@ -157,7 +155,6 @@ class CodecUU_Test(TestBase):
 
         # We should actually have content associated with out data
         assert len(content) > 0
-
 
     def test_yenc_v1_3_NNTPContent_encode(self):
         """
@@ -169,7 +166,7 @@ class CodecUU_Test(TestBase):
         assert isfile(binary_filepath)
 
         # Initialize Codec
-        encoder = CodecUU()
+        encoder = CodecUU(work_dir=self.test_dir)
 
         # Create an NNTPContent Object
         content = NNTPBinaryContent(binary_filepath)
@@ -197,7 +194,9 @@ class CodecUU_Test(TestBase):
         assert new_content_a.md5() == new_content_b.md5()
 
         # Chain our encodings
-        new_content = content.encode([CodecUU, CodecUU()])
+        new_content = content.encode(
+            [CodecUU, CodecUU(work_dir=self.test_dir)],
+        )
 
         # We should have gotten an ASCII Content Object
         assert isinstance(new_content, NNTPAsciiContent) is True
@@ -215,7 +214,7 @@ class CodecUU_Test(TestBase):
         assert isfile(binary_filepath)
 
         # Initialize Codec
-        encoder = CodecUU()
+        encoder = CodecUU(work_dir=self.test_dir)
 
         # Create an NNTPArticle Object
         article = NNTPArticle()
@@ -245,10 +244,51 @@ class CodecUU_Test(TestBase):
         assert new_article_a[0].md5() == new_article_b[0].md5()
 
         # Chain our encodings
-        new_article = article.encode([CodecUU, CodecUU()])
+        new_article = article.encode(
+            [CodecUU, CodecUU(work_dir=self.test_dir)],
+        )
 
         # We should have gotten an ASCII Content Object
         assert isinstance(new_article, NNTPArticle) is True
 
         # We should actually have article associated with out data
         assert len(new_article) > 0
+
+    def test_partial_download(self):
+        """
+        Test the handling of a download that is explicitly ordered to abort
+        after only some content is retrieved.  A way of 'peeking' if you will.
+        """
+
+        # Input File
+        encoded_filepath = join(self.var_dir, 'uuencoded.tax.jpg.msg')
+        assert isfile(encoded_filepath)
+
+        # Compare File
+        decoded_filepath = join(self.var_dir, 'uudecoded.tax.jpg')
+        assert isfile(decoded_filepath)
+
+        # Initialize Codec (restrict content to be no larger then 10 bytes)
+        ud_py = CodecUU(work_dir=self.test_dir, max_bytes=10)
+
+        # Read data and decode it
+        with open(encoded_filepath, 'r') as fd_in:
+            article = ud_py.decode(fd_in)
+
+        # our content should be valid
+        assert isinstance(article, NNTPBinaryContent)
+
+        # Our article should not be considered valid on an
+        # early exit
+        assert article.is_valid() is False
+
+        with open(decoded_filepath, 'r') as fd_in:
+            decoded = fd_in.read()
+
+        # Compare our processed content with the expected results
+        length = len(article.getvalue())
+
+        # Even though we have't decoded all of our content, we're
+        # still the same as the expected result up to what has been
+        # processed.
+        assert decoded[0:length] == article.getvalue()

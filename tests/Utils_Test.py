@@ -53,6 +53,7 @@ from newsreap.Utils import find
 from newsreap.Utils import rm
 from newsreap.Utils import parse_list
 from newsreap.Utils import parse_bool
+from newsreap.Utils import hexdump
 
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
@@ -887,3 +888,21 @@ class Utils_Test(TestBase):
         assert parse_bool('OhYeah') == False
         # Adjust Default and get a different result
         assert parse_bool('OhYeah', True) == True
+
+    def test_hexdump(self):
+        """converts binary content to hexidecimal in a standard
+        easy to read format
+        """
+        # Compare File
+        hexdump_file = join(self.var_dir, 'hexdump.txt')
+        assert isfile(hexdump_file)
+
+        all_characters = ''.join(map(chr, range(0, 256)))
+        with open(hexdump_file, 'r') as fd_in:
+            ref_data = fd_in.read()
+
+        # when reading in content, there is a new line appeneded
+        # after the last line (even if one isn't otherwise present)
+        # rstrip() to just simplify the test by stripping off
+        # all trailing whitespace
+        assert hexdump(all_characters) == ref_data.rstrip()

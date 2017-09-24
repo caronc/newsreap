@@ -38,16 +38,23 @@ E_CRC32 = 65
 # The mask to apply to all CRC checking
 BIN_MASK = 0xffffffffL
 
+
 class CodecBase(object):
 
     def __init__(self, work_dir=None, throttle_cycles=8000, throttle_time=0.2,
-                 *args, **kwargs):
+                 max_bytes=0, *args, **kwargs):
         """
         The dir identfies the directory to store our sessions in
         until they can be properly handled.
 
         Throttling is used to give a break to the thread and not consume all
         of the cpu usage while their are still other threads in play.
+
+        max_bytes is set to the number of bytes you want to have received
+        before you automatically abort the connection and flag the object as
+        having only been partially complete  Use this option when you need to
+        inspect the first bytes of a binary file. Set this to zero to download
+        the entire thing (this is the default value)
 
         """
 
@@ -61,6 +68,9 @@ class CodecBase(object):
 
         # Track the number of bytes decoded
         self._decoded = 0
+
+        # Initialize our byte tracking maximum threshold
+        self._max_bytes = max_bytes
 
         # Our Decoded content should get placed here
         self.decoded = None
@@ -112,6 +122,14 @@ class CodecBase(object):
         """
         self._escape = crc32(decoded, self._escape)
         self._crc = (self._escape ^ -1)
+
+    def max_bytes(self):
+        """
+        Allows one to wrap the return of the _max_bytes  if the wish
+        in child classes.  Otherwise we just return the max_bytes
+
+        """
+        return self._max_bytes
 
     def detect(self, line, relative=True):
         """

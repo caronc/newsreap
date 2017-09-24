@@ -17,7 +17,7 @@
 # get allows you to pull content directly from usenet if you know
 # the message-id, or nzbpath
 #
-# If you add the --inspect flag then only details surrounding what
+# If you add the --headers flag then only details surrounding what
 # you specified is fetched from usenet
 
 import click
@@ -42,6 +42,7 @@ except ImportError:
 logger = logging.getLogger(NEWSREAP_CLI)
 
 from newsreap.NNTPnzb import NNTPnzb
+from newsreap.Utils import hexdump
 
 # Define our function
 NEWSREAP_CLI_PLUGINS = 'get'
@@ -54,10 +55,12 @@ NEWSREAP_CLI_PLUGINS = 'get'
               help="Identify the group to reference")
 @click.option('--workdir', type=basestring, default=None,
               help="A directory we can manage our fetched content from.")
+@click.option('--headers', default=False, flag_value=True,
+              help="Return header details")
 @click.option('--inspect', default=False, flag_value=True,
-              help="Inspect the results only")
+              help="Inspect the first few bytes of the body only")
 @click.argument('sources', nargs=-1)
-def get(ctx, group, workdir, inspect, sources):
+def get(ctx, group, workdir, headers, inspect, sources):
     """
     Retrieves content from Usenet when provided a NZB-File and/or a Message-ID
     """
@@ -86,28 +89,48 @@ def get(ctx, group, workdir, inspect, sources):
                 logger.warning("Skipping invalid NZB-File '%s'." % (source))
                 continue
 
-            if inspect:
+            if headers or inspect:
                 #  Scan each element in our NZB-File
                 for article in nzb:
                     for segment in article:
-                        # Iterate over objects and inspect our Message-ID
-                        # only; do not download
-                        response = mgr.stat(
-                            segment.msgid(),
-                            full=True,
-                            group=group,
-                        )
-
-                        if response:
-                            print('****')
-                            print(response.str())
-
-                        else:
-                            logger.warning(
-                                "No Response Retrieved (from %s)." % (
-                                    segment.msgid()),
+                        if headers:
+                            # Inspect our article header
+                            response = mgr.stat(
+                                segment.msgid(),
+                                full=True,
+                                group=group,
                             )
-                        pass
+
+                            if response:
+                                print('****')
+                                print(response.str())
+
+                        if inspect:
+                            # Inspect our article body
+                            response = mgr.get(
+                                segment.msgid(),
+                                work_dir=workdir,
+                                group=group,
+                                max_bytes=64,
+                            )
+
+                            if response is None:
+                                logger.warning(
+                                    "No Response Retrieved (from %s)." % (
+                                        segment.msgid()),
+                                )
+                                continue
+
+                            if response.body:
+                                # Display our message body (if one is set)
+                                print('****')
+                                print(response.body.getvalue().strip())
+
+                            if response and len(response):
+                                # Display any binary content:
+                                print('****')
+                                print(hexdump(response.decoded[0].getvalue()))
+
                 continue
 
             # If we reach here, we need to download the contents
@@ -124,18 +147,38 @@ def get(ctx, group, workdir, inspect, sources):
             logger.debug("Handling Message-ID '%s'." % (source))
             # Download content by its Message-ID
 
-            if inspect:
-                # Inspect our Message-ID only; do not download
-                response = mgr.stat(source, full=True, group=group)
-                if response:
-                    print('****')
-                    print(response.str())
+            if headers or inspect:
+                if headers:
+                    # Inspect our Message-ID only; do not download
+                    response = mgr.stat(source, full=True, group=group)
+                    if response:
+                        print('****')
+                        print(response.str())
 
-                else:
-                    logger.warning(
-                        "No Response Retrieved (from %s)." % (
-                            segment.msgid()),
+                if inspect:
+                    # Preview our Message by Message-ID only; do not download
+                    response = mgr.get(
+                        source,
+                        work_dir=workdir,
+                        group=group,
+                        max_bytes=64,
                     )
+                    if response is None:
+                        logger.warning(
+                            "No Response Retrieved (from %s)." % (
+                                source),
+                        )
+                        continue
+
+                    if response.body:
+                        # Display our message body (if one is set)
+                        print('****')
+                        print(response.body.getvalue().strip())
+
+                    if response and len(response):
+                        # Display any binary content:
+                        print('****')
+                        print(hexdump(response.decoded[0].getvalue()))
 
                 # Move along
                 continue
