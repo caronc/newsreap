@@ -338,9 +338,9 @@ class Utils_Test(TestBase):
 
         # Now 2 lists with lots of duplicates and other delimiters
         results = parse_list('.mkv,.avi,.divx,.xvid,' + \
-                '.mov,.wmv,.mp4,.mpg .mpeg,.vob,,; ;',
-                '.mkv,.avi,.divx,.xvid,' + \
-                '.mov        .wmv,.mp4;.mpg,.mpeg,.vob,.iso')
+            '.mov,.wmv,.mp4,.mpg .mpeg,.vob,,; ;',
+            '.mkv,.avi,.divx,.xvid,' + \
+            '.mov        .wmv,.mp4;.mpg,.mpeg,.vob,.iso')
         assert results == [
             '.divx', '.iso', '.mkv', '.mov', '.mpg',
             '.avi', '.mpeg', '.vob', '.xvid', '.wmv', '.mp4',
@@ -852,42 +852,42 @@ class Utils_Test(TestBase):
         tests the parse_bool function which allows string interpretations
         of what could be a Python True/False value.
         """
-        assert parse_bool('Enabled', None) == True
-        assert parse_bool('Disabled', None) == False
-        assert parse_bool('Allow', None) == True
-        assert parse_bool('Deny', None) == False
-        assert parse_bool('Yes', None) == True
-        assert parse_bool('YES', None) == True
-        assert parse_bool('Always', None) == True
-        assert parse_bool('No', None) == False
-        assert parse_bool('NO', None) == False
-        assert parse_bool('NEVER', None) == False
-        assert parse_bool('TrUE', None) == True
-        assert parse_bool('tRUe', None) == True
-        assert parse_bool('FAlse', None) == False
-        assert parse_bool('F', None) == False
-        assert parse_bool('T', None) == True
-        assert parse_bool('0', None) == False
-        assert parse_bool('1', None) == True
-        assert parse_bool('True', None) == True
-        assert parse_bool('Yes', None) == True
-        assert parse_bool(1, None) == True
-        assert parse_bool(0, None) == False
-        assert parse_bool(True, None) == True
-        assert parse_bool(False, None) == False
+        assert parse_bool('Enabled', None) is True
+        assert parse_bool('Disabled', None) is False
+        assert parse_bool('Allow', None) is True
+        assert parse_bool('Deny', None) is False
+        assert parse_bool('Yes', None) is True
+        assert parse_bool('YES', None) is True
+        assert parse_bool('Always', None) is True
+        assert parse_bool('No', None) is False
+        assert parse_bool('NO', None) is False
+        assert parse_bool('NEVER', None) is False
+        assert parse_bool('TrUE', None) is True
+        assert parse_bool('tRUe', None) is True
+        assert parse_bool('FAlse', None) is False
+        assert parse_bool('F', None) is False
+        assert parse_bool('T', None) is True
+        assert parse_bool('0', None) is False
+        assert parse_bool('1', None) is True
+        assert parse_bool('True', None) is True
+        assert parse_bool('Yes', None) is True
+        assert parse_bool(1, None) is True
+        assert parse_bool(0, None) is False
+        assert parse_bool(True, None) is True
+        assert parse_bool(False, None) is False
 
         # only the int of 0 will return False since the function
         # casts this to a boolean
-        assert parse_bool(2, None) == True
+        assert parse_bool(2, None) is True
         # An empty list is still false
-        assert parse_bool([], None) == False
+        assert parse_bool([], None) is False
         # But a list that contains something is True
-        assert parse_bool(['value',], None) == True
+        assert parse_bool(['value', ], None) is True
 
         # Use Default (which is False)
-        assert parse_bool('OhYeah') == False
+        assert parse_bool('OhYeah') is False
         # Adjust Default and get a different result
-        assert parse_bool('OhYeah', True) == True
+        assert parse_bool('OhYeah', True) is True
 
     def test_hexdump(self):
         """converts binary content to hexidecimal in a standard

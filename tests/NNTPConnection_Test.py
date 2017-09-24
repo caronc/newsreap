@@ -126,7 +126,6 @@ class NNTPConnection_Test(TestBase):
         # Invalid Password
         assert sock.connect(timeout=5.0) is False
 
-
     def test_secure_authentication(self):
         sock = NNTPConnection(
             host=self.nttps_ipaddr,
@@ -186,10 +185,10 @@ class NNTPConnection_Test(TestBase):
             'alt.binaries.multimedia:100',
         )
 
-        assert result != None
+        assert result is not None
         # ID (Unique)
         assert result.group('subject') == \
-                'A Package [001/001] "file.rar" yEnc (001/001)'
+            'A Package [001/001] "file.rar" yEnc (001/001)'
         # Message-ID (Unique)
         assert result.group('id') == 'foeVWs8FHWoKYXByTLD8_78o259@JBinUp.local'
         # Article ID
@@ -198,7 +197,7 @@ class NNTPConnection_Test(TestBase):
         assert result.group('poster') == 'Magnum Opus <sir@john.doe>'
         # Date
         assert parse(result.group('date')) == \
-                datetime(2014, 8, 11, 8, 33, 07, tzinfo=pytz.UTC)
+            datetime(2014, 8, 11, 8, 33, 07, tzinfo=pytz.UTC)
         # Size (Bytes)
         assert int(result.group('size')) == 1061463
         # Lines
@@ -207,16 +206,15 @@ class NNTPConnection_Test(TestBase):
         entries = (
             # This article has a missing lines field (no content)
             '780331982\t(18/29) "Ma Dent Fait 123.part17.rar" -' +\
-                ' 647,91 MB - yEnc (5/79)\tFracas <fracas@get2mail.fr>\t' +\
-                'Fri, 31 Jul 2015 22:12:03 -0000\t<O7RJVBU8NlWc81zxmz20_' +\
-                '18o29@JBinUp.local>\t\t398150\t\tXref: news-big.astrawe' +\
-                'b.com alt.binaries.mp3:780331982',
+            ' 647,91 MB - yEnc (5/79)\tFracas <fracas@get2mail.fr>\t' +\
+            'Fri, 31 Jul 2015 22:12:03 -0000\t<O7RJVBU8NlWc81zxmz20_' +\
+            '18o29@JBinUp.local>\t\t398150\t\tXref: news-big.astrawe' +\
+            'b.com alt.binaries.mp3:780331982',
         )
 
         for entry in entries:
             # Test Entries
             assert NNTP_XOVER_RESPONSE_RE.match(entry) is not None
-
 
     def test_group_searching(self):
         """
@@ -247,7 +245,7 @@ class NNTPConnection_Test(TestBase):
             join_group=False,
         )
 
-        assert sock.connect(timeout=5.0) == True
+        assert sock.connect(timeout=5.0) is True
 
         # Assign a cached grouplist
         sock._grouplist = grouplist
