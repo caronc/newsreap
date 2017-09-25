@@ -525,3 +525,9 @@ class NNTPManager(object):
 
         # We aren't blocking, so just return the request object
         return request
+
+    def __del__(self):
+        """
+        Gracefully clean up any lingering connections
+        """
+        self.close()
