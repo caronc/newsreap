@@ -23,7 +23,7 @@ class NNTPBinaryContent(NNTPContent):
     """
     def __init__(self, filepath=None, part=None, total_parts=None,
                  begin=None, end=None, total_size=None,
-                 work_dir=None, *args, **kwargs):
+                 work_dir=None, sort_no=10000, *args, **kwargs):
         """ Intitialize NNTPBinaryContent
         """
 
@@ -32,7 +32,7 @@ class NNTPBinaryContent(NNTPContent):
             part=part, total_parts=total_parts,
             begin=begin, end=end, total_size=total_size,
             work_dir=work_dir,
-            sort_no=10000, *args, **kwargs)
+            sort_no=sort_no, *args, **kwargs)
 
     def __repr__(self):
         """

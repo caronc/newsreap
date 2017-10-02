@@ -2,7 +2,7 @@
 #
 # Test the yEnc Codec
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -173,17 +173,17 @@ class CodecYENC_Test(TestBase):
 
         assert yd.detect(
             "=ybegin line=NotDigit size=BAD",
-        ) == None
+        ) is None
 
         # Make sure we don't pick up uuencoded content
         assert yd.detect(
             "begin 644 a.wonderful.uuencoded.file",
-        ) == None
+        ) is None
 
         # Bad ordering
         assert yd.detect(
             "=ybegin name=",
-        ) == None
+        ) is None
 
     def test_decoding_yenc_single_part(self):
         """
@@ -470,7 +470,7 @@ class CodecYENC_Test(TestBase):
         # We should actually have content associated with out data
         assert len(new_content) > 0
 
-    def test_yenc_v1_3_NNTPArticle_encode(self):
+    def test_yenc_v1_3_NNTPArticle_encode_01(self):
         """
         Test the encoding of data; this is nessisary prior to a post
         """
@@ -525,6 +525,47 @@ class CodecYENC_Test(TestBase):
 
         # We should actually have article associated with out data
         assert len(new_article) > 0
+
+    def test_yenc_v1_3_NNTPArticle_encode_02(self):
+        """
+        Test the encoding of fresh new data
+        """
+
+        # A simple test for ensuring that the yenc
+        # library exists; otherwise we want this test
+        # to fail; the below line will handle this for
+        # us; we'll let the test fail on an import error
+        import yenc
+
+        # Our private Key Location
+        tmp_file = join(
+            self.tmp_dir,
+            'test_yenc_v1_3_NNTPArticle_encode_02.tmp',
+        )
+
+        # Create a larger file
+        assert(self.touch(tmp_file, size='1M', random=True))
+
+        # Create an NNTPContent Object pointing to our new data
+        content = NNTPBinaryContent(tmp_file)
+
+        # Create a Yenc Codec instance
+        encoder = CodecYenc(work_dir=self.test_dir)
+
+        # This should produce our yEnc object now
+        encoded = encoder.encode(content)
+        assert isinstance(encoded, NNTPAsciiContent) is True
+
+        # Now we want to decode the content we just encoded
+        decoded = encoder.decode(encoded)
+
+        # We should get a Binary Object in return
+        assert isinstance(decoded, NNTPBinaryContent) is True
+
+        # Our original content should be the same as our decoded
+        # content
+        assert(decoded.crc32() == content.crc32())
+        assert(decoded.md5() == content.md5())
 
     def test_partial_download(self):
         """

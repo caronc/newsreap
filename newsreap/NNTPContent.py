@@ -32,7 +32,7 @@ from tempfile import mkstemp
 from shutil import move as _move
 from shutil import copy as _copy
 from shutil import Error as ShutilError
-from binascii import crc32
+from zlib import crc32
 from blist import sortedset
 from types import MethodType
 
@@ -169,7 +169,7 @@ class NNTPContent(object):
 
             except (ValueError, TypeError):
                 raise AttributeError(
-                    "Invalid part specified (%s)." % \
+                    "Invalid part specified (%s)." %
                     str(part),
                 )
 
@@ -181,15 +181,16 @@ class NNTPContent(object):
 
             except (ValueError, TypeError):
                 raise AttributeError(
-                    "Invalid total_parts specified (%s)." % \
+                    "Invalid total_parts specified (%s)." %
                     str(total_parts),
                 )
 
             if self.total_parts < self.part:
                 raise AttributeError(
                     "Invalid parts/total_parts specified (%s/%s)." % (
-                    str(part), str(total_parts),
-                ))
+                        str(part), str(total_parts),
+                    )
+                )
         else:
             self.total_parts = self.part
 
@@ -203,8 +204,7 @@ class NNTPContent(object):
 
             except (ValueError, TypeError):
                 raise AttributeError(
-                    "Invalid begin specified (%s)." % \
-                    str(begin),
+                    "Invalid begin specified (%s)." % str(begin),
                 )
 
         self._end = None
@@ -223,7 +223,7 @@ class NNTPContent(object):
 
             except (ValueError, TypeError):
                 raise AttributeError(
-                    "Invalid total_size specified (%s)." % \
+                    "Invalid total_size specified (%s)." %
                     str(total_size),
                 )
 
@@ -288,7 +288,6 @@ class NNTPContent(object):
                 # Store our filename
                 self.filename = basename(filepath)
 
-
     def getvalue(self):
         """
         This is mostly just used for unit testing, but it
@@ -341,13 +340,9 @@ class NNTPContent(object):
         You can also pass in an already open stream which
         causes it to operate in a detached state
 
-        if a filepath is specified, mode default to BINARY_RW
+        default open mode is BINARY_RW
 
-        if no filepath is specified, then the filepath saved
-        in the article is used (self.filepath) and mode
-        default to 'rb' (NNTPFileMode.BINARY_RO).
-
-        if eof is set to True, then the file is opened and the
+        if eof is set to True, then after the file is opened, the
         pointer is placed at the end of the file (oppose to
         the head)
         """
@@ -386,13 +381,13 @@ class NNTPContent(object):
                 self.filemode = mode
 
                 logger.debug(
-                    'Opened %s (mode=%s)' % \
+                    'Opened %s (mode=%s)' %
                     (self.filepath, mode),
                 )
 
             except OSError:
                 logger.error(
-                    'Could not open %s (mode=%s)' % \
+                    'Could not open %s (mode=%s)' %
                     (self.filepath, mode),
                 )
                 return False
@@ -417,13 +412,13 @@ class NNTPContent(object):
 
                 logger.debug(
                     # D flag for Detached
-                    'Opened %s (mode=%s) (flag=D)' % \
+                    'Opened %s (mode=%s) (flag=D)' %
                     (self.filepath, mode),
                 )
 
             except (IOError, OSError):
                 logger.error(
-                    'Could not open %s (mode=%s) (flag=D)' % \
+                    'Could not open %s (mode=%s) (flag=D)' %
                     (self.filepath, mode),
                 )
                 return False
@@ -448,8 +443,7 @@ class NNTPContent(object):
 
         else:
             logger.error(
-                'Could not open object %s' % \
-                (type(self.filepath)),
+                'Could not open object %s' % (type(self.filepath))
             )
             return False
 
@@ -480,7 +474,7 @@ class NNTPContent(object):
 
         if not isinstance(encoder, (tuple, sortedset, list)):
             # work with a tuple for now
-            encoder = ( encoder,  )
+            encoder = (encoder, )
 
         if not isinstance(encoder, (tuple, sortedset, list)):
             # We expect a list at this point
@@ -700,13 +694,15 @@ class NNTPContent(object):
                 try:
                     unlink(filepath)
                     logger.warning('%s already existed (removed).' % (
-                        filepath,
-                    ))
+                            filepath,
+                        )
+                    )
                 except:
                     logger.error(
                         '%s already existed (and could not be removed).' % (
-                        filepath,
-                    ))
+                            filepath,
+                        )
+                    )
                     return False
 
         # else: treat it as full path and filename included
@@ -819,6 +815,9 @@ class NNTPContent(object):
         # Total Bytes Read
         total_bytes = 0
 
+        # Initialize dummy value
+        obj = None
+
         # Now read our chunks as per our memory restrictions
         while True:
 
@@ -875,13 +874,14 @@ class NNTPContent(object):
                     if e[0] is errno.ENOSPC:
                         # most probably a disk space issue
                         logger.error(
-                            'Ran out of disk space while writing %s.' % \
+                            'Ran out of disk space while writing %s.' %
                             (obj.filepath),
                         )
                     else:
                         # most probably a disk space issue
                         logger.error(
-                            'An I/O error (%d) occured while writing %s to disk.' % \
+                            'An I/O error '
+                            '(%d) occured while writing %s to disk.' %
                             (e[0], obj.filepath),
                         )
                     return None
@@ -899,7 +899,6 @@ class NNTPContent(object):
 
         # code will never reach here
         return None
-
 
     def write(self, data, eof=True):
         """
@@ -966,7 +965,7 @@ class NNTPContent(object):
 
         """
         if isinstance(content, NNTPContent):
-            content = [ content ]
+            content = [content]
 
         if not self.open(mode=NNTPFileMode.BINARY_RW, eof=True):
             return False
@@ -1032,7 +1031,8 @@ class NNTPContent(object):
 
     def detach(self):
         """
-        Detach the article stored on disk from being further managed by this class
+        Detach the article stored on disk from being further managed by this
+        class
         """
         self._detached = True
         return
@@ -1096,16 +1096,14 @@ class NNTPContent(object):
         BIN_MASK = 0xffffffffL
 
         # Initialize
-        _escape = 0
-        _crc = BIN_MASK
+        _crc = 0
 
         if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in iter(
-                lambda: self.stream.read(block_size), b''):
-                _escape = crc32(chunk, _escape)
-                _crc = (_escape ^ -1)
+            for chunk in iter(lambda: self.stream.read(block_size), b''):
+                _crc = crc32(chunk, _crc)
 
-            return "%08x" % (_crc ^ BIN_MASK)
+            return format(_crc & BIN_MASK, '08x')
+
         return None
 
     def md5(self):
@@ -1116,8 +1114,8 @@ class NNTPContent(object):
         """
         md5 = hashlib.md5()
         if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in iter(
-                lambda: self.stream.read(128*md5.block_size), b''):
+            for chunk in \
+                    iter(lambda: self.stream.read(128*md5.block_size), b''):
                 md5.update(chunk)
             return md5.digest()
         return None
@@ -1130,8 +1128,8 @@ class NNTPContent(object):
         """
         sha1 = hashlib.sha1()
         if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in iter(
-                lambda: self.stream.read(128*sha1.block_size), b''):
+            for chunk in \
+                    iter(lambda: self.stream.read(128*sha1.block_size), b''):
                 sha1.update(chunk)
             return sha1.digest()
         return None
@@ -1144,11 +1142,39 @@ class NNTPContent(object):
         """
         sha256 = hashlib.sha256()
         if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in iter(
-                lambda: self.stream.read(128*sha256.block_size), b''):
+            for chunk in \
+                    iter(lambda: self.stream.read(128*sha256.block_size), b''):
                 sha256.update(chunk)
             return sha256.digest()
         return None
+
+    def tell(self):
+        """
+        Allows reference to our object from within a Codec()
+
+        """
+        if not self.filepath:
+            # If there is no filepath, then we're probably dealing with a
+            # stream in memory like a StringIO or BytesIO stream.
+            if self.stream:
+                # Advance to the end of the file
+                return self.stream.tell()
+
+        else:
+            if self.stream and self._dirty is True:
+                self.stream.flush()
+                self._dirty = False
+
+        if not self.stream:
+            if not self.open(mode=NNTPFileMode.BINARY_RO):
+                return None
+
+        return self.stream.tell()
+
+    def readline(self, *args, **kwargs):
+        if not self.stream:
+            return ''
+        return self.stream.readline(*args, **kwargs)
 
     def next(self):
         """
@@ -1251,13 +1277,14 @@ class NNTPContent(object):
         Return a printable version of the file being read
         """
         if self.part is not None:
-            return '<NNTPContent sort=%d filename="%s" part=%d/%d len=%s />' % (
-                self.sort_no,
-                self.filename,
-                self.part,
-                self.total_parts,
-                bytes_to_strsize(len(self)),
-            )
+            return \
+                '<NNTPContent sort=%d filename="%s" part=%d/%d len=%s />' % (
+                    self.sort_no,
+                    self.filename,
+                    self.part,
+                    self.total_parts,
+                    bytes_to_strsize(len(self))
+                )
         else:
             return '<NNTPContent sort=%d filename="%s" len=%s />' % (
                 self.sort_no,

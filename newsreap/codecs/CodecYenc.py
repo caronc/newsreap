@@ -39,19 +39,19 @@ EOL = '\r\n'
 # Check for =ybegin, =yend and =ypart
 YENC_RE = re.compile(
     # Standard yEnc structure
-    r'^\s*(=y((?P<key_1>begin|part|end))2?(' +\
-        r'(\s+part=(?P<part_1>[0-9]+))?(\s+total=(?P<total>[0-9]+))?' +\
-        r'(\s+line=(?P<line>[0-9]+))?(\s+size=(?P<size_1>[0-9]+))?' +\
-        r'(\s+name=[\s\'"]*(?P<name_1>.+)[\'"]*)?|' +\
+    r'^\s*(=y((?P<key_1>begin|part|end))2?(' +
+        r'(\s+part=(?P<part_1>[0-9]+))?(\s+total=(?P<total>[0-9]+))?' +
+        r'(\s+line=(?P<line>[0-9]+))?(\s+size=(?P<size_1>[0-9]+))?' +
+        r'(\s+name=[\s\'"]*(?P<name_1>.+)[\'"]*)?|' +
 
-        r'(\s+size=(?P<size_2>[0-9]+))?(\s+part=(?P<part_2>[0-9]+))?' +\
-        r'(\s+pcrc32=(?P<pcrc32_1>[A-Za-z0-9]+))?' +\
-        r'(\s+crc32=(?P<crc32_1>[A-Za-z0-9]+))?|' +\
+        r'(\s+size=(?P<size_2>[0-9]+))?(\s+part=(?P<part_2>[0-9]+))?' +
+        r'(\s+pcrc32=(?P<pcrc32_1>[A-Za-z0-9]+))?' +
+        r'(\s+crc32=(?P<crc32_1>[A-Za-z0-9]+))?|' +
 
-        r'(\s+begin=(?P<begin>[0-9]+))?(\s+end=(?P<end>[0-9]+))?|' +\
-        r'(\s+size=(?P<size_3>[0-9]+))?(\s+part=(?P<part_3>[0-9]+)\s+)?' +\
-        r'(\s+pcrc32=(?P<pcrc32_2>[A-Za-z0-9]+))?' +\
-        r'(\s+crc32=(?P<crc32_2>[A-Za-z0-9]+))?' +\
+        r'(\s+begin=(?P<begin>[0-9]+))?(\s+end=(?P<end>[0-9]+))?|' +
+        r'(\s+size=(?P<size_3>[0-9]+))?(\s+part=(?P<part_3>[0-9]+)\s+)?' +
+        r'(\s+pcrc32=(?P<pcrc32_2>[A-Za-z0-9]+))?' +
+        r'(\s+crc32=(?P<crc32_2>[A-Za-z0-9]+))?' +
     r'))\s*$',
     re.IGNORECASE,
 )
@@ -68,12 +68,19 @@ YENC_KEY_MAP = {
     'crc32_1': 'crc32', 'crc32_2': 'crc32',
 }
 
+# The default amount of memory to work with within the yEnc buffer
+# The larger this value, the faster the decoding process however
+# it stacks with other threads (if any) also using this.
+DEFAULT_BUFFER_SIZE = 1048576
+
+
 class YencError(Exception):
     """ Class for specific yEnc errors
     """
     def __str__(self):
         return "yEnc.Error: %d:%s\n" % (
             self.code, self.value)
+
 
 try:
     # Yenc Support
@@ -135,7 +142,7 @@ class CodecYenc(CodecBase):
     def __init__(self, descriptor=None, work_dir=None,
                  linelen=128, *args, **kwargs):
         super(CodecYenc, self).__init__(descriptor=descriptor,
-            work_dir=work_dir, *args, **kwargs)
+                work_dir=work_dir, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
         self._meta = {}
@@ -148,8 +155,7 @@ class CodecYenc(CodecBase):
         # characters to display per line.
         self.linelen = linelen
 
-
-    def encode(self, content, mem_buf=1048576):
+    def encode(self, content, mem_buf=DEFAULT_BUFFER_SIZE):
         """
         Encodes an NNTPContent object passed in
         """
@@ -160,9 +166,6 @@ class CodecYenc(CodecBase):
                 filepath=content.filename,
                 part=content.part,
                 total_parts=content.total_parts,
-                begin=content.begin(),
-                end=content.end(),
-                total_size=self._total_size(),
                 sort_no=content.sort_no,
                 work_dir=self.work_dir,
                 # We want to ensure we're working with a unique attached file
@@ -170,6 +173,8 @@ class CodecYenc(CodecBase):
             )
 
         else:
+            # If we reach here, we presume our content is a filename
+
             # Create our ascii instance
             _encoded = NNTPAsciiContent(
                 work_dir=self.work_dir,
@@ -177,21 +182,18 @@ class CodecYenc(CodecBase):
                 unique=True,
             )
 
+            # Convert our content object into an NNTPContent object
             content = NNTPContent(
                 filepath=content,
                 work_dir=self.work_dir,
             )
 
-        if not content.open():
-            return None
-
-        results = ""
-
-		# yEnc (v1.3) begin
+        # yEnc (v1.3) begin
         fmt_ybegin = '=ybegin part=%d total=%d line=%d size=%d name=%s' % (
             content.part, content.total_parts, self.linelen,
             len(content), content.filename,
         )
+
         # yEnc part
         fmt_ypart = '=ypart begin=%d end=%d' % (
             content.begin() + 1,
@@ -201,21 +203,30 @@ class CodecYenc(CodecBase):
         if isinstance(content._parent, NNTPContent):
             # yEnc end
             fmt_yend = '=yend size=%d part=%d pcrc32=%s crc32=%s' % (
-                content.end() - content.begin(), content.part,
+                len(content), content.part,
                 content.crc32(), content._parent.crc32(),
             )
 
         else:
             # yEnc end
             fmt_yend = '=yend size=%d part=%d pcrc32=%s' % (
-                content.end() - content.begin(), content.part,
-                content.crc32(),
+                len(content), content.part, content.crc32(),
             )
 
         # Write =ybegin line
         _encoded.write(fmt_ybegin + EOL)
         # Write =ypart line
         _encoded.write(fmt_ypart + EOL)
+
+        if not content.open():
+            return None
+
+        # Prepare our result set
+        results = ""
+
+        # Column is used for decoding
+        column = 0
+        crc = BIN_MASK
 
         # We need to parse the content until we either reach
         # the end of the file or get to an 'end' tag
@@ -228,21 +239,22 @@ class CodecYenc(CodecBase):
 
             if FAST_YENC_SUPPORT:
                 try:
-                    _results, self._crc, self._escape = \
-                            encode_string(data, self._crc, self._escape)
-
+                    _results, crc, column = encode_string(data, crc, column)
+                    # Append our parsed content onto our ongoing buffer
                     results += _results
 
-                except YencError:
-                    logger.error("Failed to Yenc %s." % content)
+                except YencError as e:
+                    logger.error("Failed to encode Yenc for %s." % content)
+                    logger.debug('Yenc exception: %s' % (str(e)))
                     return None
+
             else:
                 # The slow and painful way, the below looks complicated
                 # but it really isn't at the the end of the day; yEnc is
                 # pretty basic;
                 #  - first we translate the all of the characters by adding
                 #    42 to their value with the exception of a few special
-                #    characters that are explitely reserved for the yEnc
+                #    characters that are explicitly reserved for the yEnc
                 #    language (and conflict with the NNTP Server language).
                 #
                 #  - next, we need to apply our ENCODE_SPECIAL_MAP to be
@@ -259,13 +271,22 @@ class CodecYenc(CodecBase):
                     data.translate(YDEC42),
                 )
 
-            # Insert a new line as per defined settings
-            for i in range(0, len(results), self.linelen):
-                _encoded.write(results[i:i+self.linelen] + EOL)
+            # Our offset
+            offset = 0
 
-            # Save the last half we couldn't append
-            if len(results) % self.linelen:
-                results = results[-len(results) % self.linelen + 1:]
+            while offset < (len(results)-self.linelen+1):
+                eol = offset+self.linelen
+                if results[offset:eol][-1] == '=':
+                    # Lines can't end with the escape sequence (=). If we get
+                    # here then this one did. We just adjust our end-of-line
+                    # by 1 and keep moving
+                    eol -= 1
+
+                _encoded.write(results[offset:eol] + EOL)
+                offset = eol
+
+            if offset < len(results):
+                results = results[-(len(results) - offset):]
 
             else:
                 # reset string
@@ -280,6 +301,10 @@ class CodecYenc(CodecBase):
 
         # Write footer
         _encoded.write(fmt_yend + EOL)
+
+        if _encoded:
+            # close article when complete
+            _encoded.close()
 
         # Return our encoded object
         return _encoded
@@ -303,7 +328,7 @@ class CodecYenc(CodecBase):
             return None
 
         # Merge Results
-        f_map = dict((YENC_KEY_MAP[k], v) \
+        f_map = dict((YENC_KEY_MAP[k], v)
                     for k, v in yenc_re.groupdict().iteritems() if v)
 
         # Tidy filename (whitespace)
@@ -438,7 +463,7 @@ class CodecYenc(CodecBase):
 
                 except YencError:
                     logger.warning(
-                        "Yenc corruption detected on line %d." % \
+                        "Yenc corruption detected on line %d." %
                         self._lines,
                     )
 
