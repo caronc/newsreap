@@ -104,7 +104,6 @@ except ImportError:
 
     # A Translation Map
     YENC42 = ''.join(map(lambda x: chr((x-42) & 255), range(256)))
-    YDEC42 = ''.join(map(lambda x: chr((42+x) & 255), range(256)))
 
     YENC_DECODE_SPECIAL_MAP = dict([('=%s' % chr(k+64), chr(k)) for k in (
         # Non-Printable
@@ -118,22 +117,25 @@ except ImportError:
     ])
 
     # A map used for encoding content
-    YENC_ENCODE_SPECIAL_MAP = dict([(chr(k), '=%s' % chr(k+64)) for k in (
-        # Non-Printable
-        ord('\0'), ord('\r'), ord('\n'),  ord(' '), ord('\t'),
+    YENC_ENCODE_ESCAPED_CHARACTERS = (
+        ord('\0'), ord('\r'), ord('\n'), ord('='),
+        # Whitespace only has to be escaped if it's the first element
+        # in a row (or the last). At this time manual encoding escapes
+        # everything because it's easier to code that way (but results
+        # in a larger encoded file then it has to be).
+        # TODO: Update the manual step to only escape spaces and/or
+        # tabs if they're the first/or last entry in a row
+        ord(' '), ord('\t'),
 
-        # Printable
-        ord('.'), ord('='),
-    )])
+        # Dot's only have to be escaped if they start a line
+        # similar to the above comment, the manual code currently escapes
+        # all dots. TODO: Fix this to only escape the first dot if present
+        ord('.'),
+    )
 
     # Compile our map into a decode table
     YENC_DECODE_SPECIAL_RE = re.compile(
         r'(' + r'|'.join(YENC_DECODE_SPECIAL_MAP.keys()) + r')',
-    )
-
-    # Compile our map into a encode table
-    YENC_ENCODE_SPECIAL_RE = re.compile(
-        r'(' + r'|'.join(YENC_ENCODE_SPECIAL_MAP.keys()) + r')',
     )
 
 
@@ -266,10 +268,20 @@ class CodecYenc(CodecBase):
                 #    to many characters (horizontally).  So we need to split
                 #    our content up
                 #
-                results += YENC_ENCODE_SPECIAL_RE.sub(
-                    lambda x: YENC_ENCODE_SPECIAL_MAP[x.group()],
-                    data.translate(YDEC42),
-                )
+
+                idx = 0
+                while idx < len(data):
+                    _byte = (ord(data[idx]) + 42) & 0xff
+                    if _byte in YENC_ENCODE_ESCAPED_CHARACTERS:
+                        _byte = (_byte + 64) & 0xff
+                        # Esape Sequence
+                        results += '='
+
+                    # Store our character
+                    results += chr(_byte)
+
+                    # Increment Index
+                    idx += 1
 
             # Our offset
             offset = 0
