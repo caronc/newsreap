@@ -2,7 +2,7 @@
 #
 # A Codec for handling UU encoded messages
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -37,9 +37,13 @@ EOL = '\r\n'
 
 # Check for begin and end
 UUENCODE_RE = re.compile(
-    r'^\s*((?P<key_1>begin)\s+(?P<perm>[0-9]{3,4})?[\s\'"]*(?P<name>.+)[\'"]*|' +
-    r'(?P<key_2>end)|' +
-    r'(?P<key_3>`)' +
+    # Begin Entry
+    r'^\s*((?P<key_1>begin)\s+'
+    r'(?P<perm>[0-9]{3,4})?[\s\'"]*(?P<name>.+)[\'"]*|'
+
+    # End Entry(s)
+    r'(?P<key_2>end)|'
+    r'(?P<key_3>`)'
     ')\s*$',
     re.IGNORECASE,
 )
@@ -77,7 +81,6 @@ class CodecUU(CodecBase):
         # characters to display per line.
         self.linelen = linelen
 
-
     def encode(self, content, mem_buf=UUENCODE_BLOCK_SIZE):
         """
         Encodes an NNTPContent object passed in
@@ -89,9 +92,6 @@ class CodecUU(CodecBase):
                 filepath=content.filename,
                 part=content.part,
                 total_parts=content.total_parts,
-                begin=content.begin(),
-                end=content.end(),
-                total_size=self._total_size(),
                 sort_no=content.sort_no,
                 work_dir=self.work_dir,
                 # We want to ensure we're working with a unique attached file
@@ -111,23 +111,27 @@ class CodecUU(CodecBase):
                 work_dir=self.work_dir,
             )
 
-        if not content.open():
-            return None
-
         if mem_buf > UUENCODE_BLOCK_SIZE:
             logger.warning(
-                "mem_buf (%d) reduced to %d due to uuencode limitations" % \
+                "mem_buf (%d) reduced to %d due to uuencode limitations" %
                 mem_buf, UUENCODE_BLOCK_SIZE,
             )
             mem_buf = UUENCODE_BLOCK_SIZE
-        results = ""
 
         # Header/Footer
         fmt_ubegin = 'begin %o %s' % (self.perm, content.filename)
-        fmt_uend = '`' + EOL + 'end'
+
+        # EOL Separation for UU Encoding just consists of a single \n
+        fmt_uend = '`\nend'
 
         # Write ubegin line
         _encoded.write(fmt_ubegin + EOL)
+
+        if not content.open():
+            return None
+
+        # Prepare our result set
+        results = ""
 
         # We need to parse the content until we either reach
         # the end of the file or get to an 'end' tag
@@ -139,29 +143,21 @@ class CodecUU(CodecBase):
                 break
 
             # Encode content
-            results += b2a_uu(data)
+            results = b2a_uu(data)
 
-            # Insert a new line as per defined settings
-            for i in range(0, len(results), self.linelen):
-                _encoded.write(results[i:i+self.linelen] + EOL)
-
-            # Save the last half we couldn't append
-            if len(results) % self.linelen:
-                results = results[-len(results) % self.linelen + 1:]
-
-            else:
-                # reset string
-                results = ''
+            if results:
+                # write our content as is
+                _encoded.write(results)
 
         # We're done reading our data
         content.close()
 
-        if len(results):
-            # We still have content left in our buffer
-            _encoded.write(results + EOL)
-
         # Write footer
         _encoded.write(fmt_uend + EOL)
+
+        if _encoded:
+            # close article when complete
+            _encoded.close()
 
         # Return our encoded object
         return _encoded
@@ -185,8 +181,10 @@ class CodecUU(CodecBase):
             return None
 
         # Merge Results
-        f_map = dict((UUENCODE_KEY_MAP[k], v) \
-                    for k, v in uuencode_re.groupdict().iteritems() if v)
+        f_map = dict(
+            (UUENCODE_KEY_MAP[k], v) for k, v
+            in uuencode_re.groupdict().iteritems() if v
+        )
 
         if relative:
             # detect() relative to what has been decoded
@@ -256,6 +254,13 @@ class CodecUU(CodecBase):
                 # store our key
                 self._meta[_meta['key']] = _meta
 
+                if '`' in self._meta:
+                    # Mark the binary as being valid
+                    self.decoded._is_valid = True
+
+                    # But keep going because we'll probably get an 'end' next
+                    continue
+
                 if 'end' in self._meta:
                     # Mark the binary as being valid
                     self.decoded._is_valid = True
@@ -299,8 +304,9 @@ class CodecUU(CodecBase):
                 except BinAsciiError:
                     # Log corruption
                     logger.warning(
-                        "Corruption on line %d." % \
-                                 self._lines,
+                        "Corruption on line %d." % (
+                            self._lines,
+                        )
                     )
 
                     # Line Tracking
