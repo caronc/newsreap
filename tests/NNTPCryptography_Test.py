@@ -206,15 +206,18 @@ class NNTPCryptography_Test(TestBase):
         )
         # Returns None in all cases below because either the alg
         assert(obj.decrypt(encrypted,
-            alg=HashType.SHA256, mgf1=HashType.SHA512) is None)
+               alg=HashType.SHA256, mgf1=HashType.SHA512) is None)
         assert(obj.decrypt(encrypted,
-            alg=HashType.SHA512, mgf1=HashType.SHA256) is None)
+               alg=HashType.SHA512, mgf1=HashType.SHA256) is None)
         assert(obj.decrypt(encrypted,
-            alg=HashType.SHA384, mgf1=HashType.SHA1) is None)
+               alg=HashType.SHA384, mgf1=HashType.SHA1) is None)
 
         # However if we use the right hash
-        decrypted = obj.decrypt(encrypted,
-            alg=HashType.SHA512, mgf1=HashType.SHA512)
+        decrypted = obj.decrypt(
+            encrypted,
+            alg=HashType.SHA512,
+            mgf1=HashType.SHA512,
+        )
 
         # It will succeed again
         assert(str(content) == str(decrypted))
@@ -266,3 +269,31 @@ class NNTPCryptography_Test(TestBase):
 
                         # Test it out
                         assert(str(chunk) == str(decrypted))
+
+    def test_decode_encode_keys(self):
+        """
+        test decoding and encoding of keys.
+        """
+        # Create our Cryptography Object
+        obj = NNTPCryptography()
+
+        # We can't load our keys if we've got none
+        assert (obj.encode_public_key() is None)
+        assert (obj.encode_private_key() is None)
+
+        # Generate our keys
+        (prv, pub) = obj.genkeys()
+
+        encoded_pub = obj.encode_public_key()
+        encoded_prv = obj.encode_private_key()
+        assert (obj.encode_public_key() is not None)
+        assert (obj.encode_private_key() is not None)
+
+        # Decoding
+        assert (obj.decode_private_key(None) is False)
+        assert (obj.decode_public_key(None) is False)
+        assert (obj.decode_private_key('') is False)
+        assert (obj.decode_public_key('') is False)
+
+        assert (obj.decode_private_key(encoded_prv) is True)
+        assert (obj.decode_public_key(encoded_pub) is True)
