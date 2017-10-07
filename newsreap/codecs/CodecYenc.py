@@ -387,8 +387,8 @@ class CodecYenc(CodecBase):
             # Read in our data
             data = stream.readline()
             if not data:
-                # We're done
-                break
+                # We're done for now
+                return True
 
             # Total Line Tracking
             self._total_lines += 1
@@ -519,6 +519,8 @@ class CodecYenc(CodecBase):
                 # this point. Before we do so; advance to the end of our
                 # stream
                 stream.seek(0, SEEK_END)
+
+                # We're done
                 break
 
         # Reset our meta tracking

@@ -1575,6 +1575,10 @@ class NNTPConnection(SocketBase):
                     self.MAX_BUFFER_SIZE = min([max_bytes, self.MAX_BUFFER_SIZE])
         logger.debug('Read Buffer set to %d bytes' % self.MAX_BUFFER_SIZE)
 
+        #  We track the last codec activated using the codec_active
+        #  variable.
+        codec_active = None
+
         while not self.article_eod:
             # This loop really only takes effect if we aren't forced
             # to just wait for a server command line. Otherwise
@@ -1917,10 +1921,6 @@ class NNTPConnection(SocketBase):
             #                                                                #
             ##################################################################
 
-            #  We track the last codec activated using the codec_active
-            #  variable.
-            codec_active = None
-
             self._data_len = self._data.seek(0, SEEK_END)
             d_head = self._data.seek(0, SEEK_SET)
             while d_head < self._data_len and self.connected:
@@ -1966,6 +1966,13 @@ class NNTPConnection(SocketBase):
 
                 # Adjust our pointer
                 d_head = self._data.tell()
+
+                # If we're at the end of our buffer; we can go ahead and clear it
+                if d_head >= self._data_len:
+                    # Reset our data object once we're done parsing
+                    self._data.truncate(0)
+                    # Adjust pointer for processing
+                    self._data.seek(0, SEEK_SET)
 
                 # A little Decoder 101 for anyone reading my code; the below
                 # identifies the possible return types from a Codec

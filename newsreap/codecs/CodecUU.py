@@ -222,8 +222,8 @@ class CodecUU(CodecBase):
             # Read in our data
             data = stream.readline()
             if not data:
-                # We're done
-                break
+                # We're done for now
+                return True
 
             # Total Line Tracking
             self._total_lines += 1
