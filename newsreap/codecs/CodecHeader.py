@@ -28,7 +28,9 @@ logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Check for begin and end
 HEADER_RE = re.compile(
-    r'^\s*(?P<key>[a-z0-9-]+)\s*:\s*(?P<value>.*[^\s])\s*$',
+    r'^(\s*(?P<key>[a-z0-9-]+)\s*:\s*(?P<value>.*[^\s])\s*'
+    # Sometimes lines start with a tab in the header section
+    r'|\t\s*(?P<extra>.*[^\s])\s*)$',
     re.IGNORECASE,
 )
 
@@ -44,8 +46,8 @@ class CodecHeader(CodecBase):
     This class is used for interpreting NNTP Headers
     """
     def __init__(self, descriptor=None, encoding=None, *args, **kwargs):
-        super(CodecHeader, self).__init__(descriptor=descriptor,
-            *args, **kwargs)
+        super(CodecHeader, self).__init__(
+                descriptor=descriptor, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
         self.decoded = NNTPHeader(work_dir=self.work_dir)
@@ -53,6 +55,10 @@ class CodecHeader(CodecBase):
         # Initialize Header Parsed Flag; This is used to ensure
         # the decoding of headers is only performed once
         self.header_parsed = False
+
+        # We track the last key we stored because lines that start with a tab
+        # are assumed to be concatinated to this entry
+        self.last_key = None
 
         # The character set encoding usenet content is retrieved in
         if encoding is None:
@@ -86,9 +92,23 @@ class CodecHeader(CodecBase):
             # this function
             return None
 
+        _key = header_re.group('key')
+        if _key:
+            _value = header_re.group('value')
+            self.last_key = _key
+
+        elif self.last_key:
+            # append our old value
+            _key = self.last_key
+            _value = header_re.group('extra')
+
+        else:
+            # Can't be a header
+            return None
+
         return {
-            'key': header_re.group('key').decode(self.encoding),
-            'value': header_re.group('value').decode(self.encoding),
+            'key': _key.decode(self.encoding),
+            'value': _value.decode(self.encoding),
         }
 
     def decode(self, stream):
@@ -166,7 +186,12 @@ class CodecHeader(CodecBase):
             # To keep things fast; we specifically place content directly
             # into the content object to avoid the extra un-nessisary
             # function call per line
-            self.decoded[header['key']] = header['value']
+            if not header['key'] in self.decoded:
+                self.decoded[header['key']] = header['value']
+
+            else:
+                # Append our content to the last match
+                self.decoded[header['key']] += u',' + header['value']
 
         # Returns true because we're still expecting more content
         return True
@@ -188,7 +213,7 @@ class CodecHeader(CodecBase):
         # If we reach here; we've decoded the file, the next thing
         # we need to do is check for some common entries that
         # would oherwise have made it so it's not valid
-        if next((True for k in self.decoded.iterkeys() \
+        if next((True for k in self.decoded.iterkeys()
                  if NNTP_NUKED_MSG.match(k) is not None), False):
             # Headers check failed!
             return False
