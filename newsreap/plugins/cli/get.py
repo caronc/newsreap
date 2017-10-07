@@ -111,7 +111,7 @@ def get(ctx, group, workdir, headers, inspect, sources):
                                 segment.msgid(),
                                 work_dir=workdir,
                                 group=group,
-                                max_bytes=64,
+                                max_bytes=128,
                             )
 
                             if response is None:
@@ -161,7 +161,7 @@ def get(ctx, group, workdir, headers, inspect, sources):
                         source,
                         work_dir=workdir,
                         group=group,
-                        max_bytes=64,
+                        max_bytes=128,
                     )
                     if response is None:
                         logger.warning(
