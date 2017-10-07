@@ -39,19 +39,23 @@ EOL = '\r\n'
 # Check for =ybegin, =yend and =ypart
 YENC_RE = re.compile(
     # Standard yEnc structure
-    r'^\s*(=y((?P<key_1>begin|part|end))2?(' +
-        r'(\s+part=(?P<part_1>[0-9]+))?(\s+total=(?P<total>[0-9]+))?' +
-        r'(\s+line=(?P<line>[0-9]+))?(\s+size=(?P<size_1>[0-9]+))?' +
-        r'(\s+name=[\s\'"]*(?P<name_1>.+)[\'"]*)?|' +
+    r'^\s*(=y((?P<key_1>begin|part|end))2?('
+    # group 1
+    r'(\s+part=(?P<part_1>[0-9]+))?(\s+total=(?P<total>[0-9]+))?'
+    r'(\s+line=(?P<line>[0-9]+))?(\s+size=(?P<size_1>[0-9]+))?'
+    r'(\s+name=[\s\'"]*(?P<name_1>.+)[\'"]*)?|'
 
-        r'(\s+size=(?P<size_2>[0-9]+))?(\s+part=(?P<part_2>[0-9]+))?' +
-        r'(\s+pcrc32=(?P<pcrc32_1>[A-Za-z0-9]+))?' +
-        r'(\s+crc32=(?P<crc32_1>[A-Za-z0-9]+))?|' +
+    # group 2
+    r'(\s+size=(?P<size_2>[0-9]+))?(\s+part=(?P<part_2>[0-9]+))?'
+    r'(\s+pcrc32=(?P<pcrc32_1>[A-Za-z0-9]+))?'
+    r'(\s+crc32=(?P<crc32_1>[A-Za-z0-9]+))?|'
 
-        r'(\s+begin=(?P<begin>[0-9]+))?(\s+end=(?P<end>[0-9]+))?|' +
-        r'(\s+size=(?P<size_3>[0-9]+))?(\s+part=(?P<part_3>[0-9]+)\s+)?' +
-        r'(\s+pcrc32=(?P<pcrc32_2>[A-Za-z0-9]+))?' +
-        r'(\s+crc32=(?P<crc32_2>[A-Za-z0-9]+))?' +
+    # group 3
+    r'(\s+begin=(?P<begin>[0-9]+))?(\s+end=(?P<end>[0-9]+))?|'
+    r'(\s+size=(?P<size_3>[0-9]+))?(\s+part=(?P<part_3>[0-9]+)\s+)?'
+    r'(\s+pcrc32=(?P<pcrc32_2>[A-Za-z0-9]+))?'
+    r'(\s+crc32=(?P<crc32_2>[A-Za-z0-9]+))?'
+    # end
     r'))\s*$',
     re.IGNORECASE,
 )
@@ -143,8 +147,8 @@ class CodecYenc(CodecBase):
 
     def __init__(self, descriptor=None, work_dir=None,
                  linelen=128, *args, **kwargs):
-        super(CodecYenc, self).__init__(descriptor=descriptor,
-                work_dir=work_dir, *args, **kwargs)
+        super(CodecYenc, self).__init__(
+                descriptor=descriptor, work_dir=work_dir, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
         self._meta = {}
@@ -340,8 +344,8 @@ class CodecYenc(CodecBase):
             return None
 
         # Merge Results
-        f_map = dict((YENC_KEY_MAP[k], v)
-                    for k, v in yenc_re.groupdict().iteritems() if v)
+        f_map = dict((YENC_KEY_MAP[k], v) for k, v
+                     in yenc_re.groupdict().iteritems() if v)
 
         # Tidy filename (whitespace)
         if 'name' in f_map:
