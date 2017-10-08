@@ -35,6 +35,10 @@ logger = logging.getLogger(NEWSREAP_CODEC)
 # Defines the new line delimiter
 EOL = '\r\n'
 
+# The Tilda is reserved as a marker to delimit the last line
+# EOM = End of Message
+EOM = '`'
+
 # Check for begin and end
 UUENCODE_RE = re.compile(
     # Begin Entry
@@ -254,19 +258,19 @@ class CodecUU(CodecBase):
                 # store our key
                 self._meta[_meta['key']] = _meta
 
-                if '`' in self._meta:
-                    # Mark the binary as being valid
-                    self.decoded._is_valid = True
-
-                    # But keep going because we'll probably get an 'end' next
-                    continue
-
                 if 'end' in self._meta:
                     # Mark the binary as being valid
                     self.decoded._is_valid = True
 
                     # We're done!
                     break
+
+                elif EOM in self._meta:
+                    # Mark the binary as being valid
+                    self.decoded._is_valid = True
+
+                    # But keep going because we'll probably get an 'end' next
+                    continue
 
                 elif _meta['key'] == 'begin':
 

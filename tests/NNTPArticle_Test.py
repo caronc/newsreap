@@ -2,7 +2,7 @@
 #
 # A base testing class/library to test the workings of an NNTPArticle
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -44,7 +44,6 @@ except ImportError:
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPHeader import NNTPHeader
-from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPResponse import NNTPResponse
 from newsreap.Utils import strsize_to_bytes
 
@@ -53,7 +52,7 @@ class NNTPArticle_Test(TestBase):
 
     def test_loading_response(self):
         """
-        Tests the load_response() function of the article
+        Tests the load() function of the article
         """
 
         # Prepare a Response
@@ -67,7 +66,7 @@ class NNTPArticle_Test(TestBase):
         assert article.is_valid() is False
 
         # Load and Check
-        assert article.load_response(response) is True
+        assert article.load(response) is True
         assert article.header is None
         assert len(article.decoded) == 1
         assert len(article.decoded) == len(article.files())
@@ -104,13 +103,36 @@ class NNTPArticle_Test(TestBase):
         article = NNTPArticle(id='random-id')
 
         # Load and Check
-        assert article.load_response(response) is True
+        assert article.load(response) is True
         assert isinstance(article.header, NNTPHeader)
         assert len(article.decoded) == 1
 
         for no, decoded in enumerate(article.decoded):
             # Test equality
             assert article[no] == decoded
+
+        # We can also load another article ontop of another
+        # This used when associating downloaded articles with ones
+        # found in NZB-Files
+        new_article = NNTPArticle(
+                msgid='brand-new-id',
+                no=article.no+1,
+                groups='a.b.c,d.e.f',
+        )
+        new_article.subject = 'test-subject-l2g'
+        new_article.poster = 'test-poster-l2g'
+        new_article.header = 'test-header-l2g'
+
+        assert article.load(new_article) is True
+        assert(article.id == new_article.id)
+        assert(article.no == new_article.no)
+        assert(article.groups == new_article.groups)
+        assert(article.poster == new_article.poster)
+        assert(article.subject == new_article.subject)
+        assert(article.header == new_article.header)
+        assert(article.body == new_article.body)
+        assert(article.decoded == new_article.decoded)
+        assert(article.groups == new_article.groups)
 
     def test_group(self):
         """
@@ -284,7 +306,6 @@ class NNTPArticle_Test(TestBase):
         # Tests that our results are expected
         assert isinstance(results, sortedset)
         assert len(results) == 4
-
 
     def test_article_copy(self):
         """

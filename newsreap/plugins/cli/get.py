@@ -142,6 +142,8 @@ def get(ctx, group, workdir, headers, inspect, sources):
                 )
 
             response = mgr.get(nzb, work_dir=workdir)
+            # TODO: Call a post-process-download hooks here
+            # TODO: Assemble content and save it
 
         else:
             logger.debug("Handling Message-ID '%s'." % (source))

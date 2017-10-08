@@ -1225,8 +1225,6 @@ class NNTPConnection(SocketBase):
 
         elif isinstance(id, NNTPSegmentedPost):
             # Support NNTPSegmentedPost() Objects
-            # Anything defined in an NNTPSegmentPost object will always
-            # over-ride any content retrieved (filenames, etc)
 
             # Get segment count
             total_parts = len(id)
@@ -1247,7 +1245,7 @@ class NNTPConnection(SocketBase):
                             # Found
                             break
 
-                    # If we reach here, we failed to fetch the item, so
+                    # If we reach here we failed to fetch the item, so
                     # we'll try the next group
                     logger.warning(
                         'Failed to fetch segment #%.2d (%s)' % \
@@ -1266,20 +1264,12 @@ class NNTPConnection(SocketBase):
                     )
 
                 if article:
-                    # Store information from our nzb_article over top of
-                    # the contents in the new article we retrieved
+
                     if len(article) == 0:
                         logger.warning(
                             'No content found in segment #%.2d (%s)' % \
                             (_article.no, _article.filename),
                         )
-
-                    else:
-                        # over-ride content based on data provided by
-                        # NNTPSegmentedFile object
-                        article.decoded[0].filename = id.filename
-                        article.decoded[0].part = part_no + 1
-                        article.decoded[0].total_parts = total_parts
 
                 else:
                     # Uh oh, we failed to get anything; so just add
@@ -1293,12 +1283,12 @@ class NNTPConnection(SocketBase):
                     # mark our article invalid as part of it's response
                     article._is_valid = False
 
-                # Store our article
-                results.add(article)
+                # Store information from our nzb_article over top of
+                # the contents in the new article we retrieved
+                _article.load(article)
 
-            if len(results):
-                # At this point we have a segment ready for post-processing
-                return results
+                # Store our article
+                results.add(_article)
 
         elif isinstance(id, NNTPnzb):
             # We're dealing with an NZB File
@@ -1308,32 +1298,19 @@ class NNTPConnection(SocketBase):
             # We iterate over each segment defined int our NZBFile and merge
             # them into 1 file. We do this until we've processed all the
             # segments and we return a list of articles
-            for no, seg in enumerate(id):
-                # A sorted set of segments (all segments making up multiple
-                # NNTPContent() objects
+            for segpost_no, segpost in enumerate(id):
+                for article in iter(segpost):
+                    _results = self.get(article)
+                    if _results is not None:
+                        # Append our results
+                        results |= _results
 
-                # Get segment count
-                total_parts = len(seg)
-                # Recursively call ourselves to proccess NNTPSegmentedPost()
-                # objects
-                _results = self.get(seg)
+        else:
+            # Unsupported
+            return None
 
-                if _results:
-                    # for article organization, we want to ensure our content
-                    # is ordered sequentially as it's defined in the NZBFile
-                    for article in _results:
-                        # Bump article no count to allow ordering
-                        article.no += no
-
-                    # Store our results
-                    results |= _results
-
-            if len(results):
-                # At this point we have a segment ready for post-processing
-                return results
-
-        # Unsupported
-        return None
+        # Return our results
+        return results
 
     def _get(self, id, work_dir, group=None, max_bytes=0):
         """
@@ -1421,7 +1398,7 @@ class NNTPConnection(SocketBase):
         # If we reach here, we have data we can work with; build our article
         # using the content retrieved.
         article = NNTPArticle(id=id, work_dir=work_dir)
-        article.load_response(response)
+        article.load(response)
 
         # Return the content retrieved
         return article
@@ -1546,6 +1523,9 @@ class NNTPConnection(SocketBase):
 
         # Our response object
         response = None
+
+        # Our decoded result
+        decoded = None
 
         # The maximum allowable bytes we can parse before we abort
         # this is calculated from the decoders
@@ -1962,7 +1942,7 @@ class NNTPConnection(SocketBase):
                 self._data.seek(d_head, SEEK_SET)
 
                 # Begin decoding content
-                result = codec_active.decode(self._data)
+                decoded = codec_active.decode(self._data)
 
                 # Adjust our pointer
                 d_head = self._data.tell()
@@ -1994,7 +1974,7 @@ class NNTPConnection(SocketBase):
                 #                     with the decoder. Like an abort if you
                 #                     will
                 #
-                if result is None:
+                if decoded is None:
                     # The Codec has completed and has nothing to return for
                     # storing. We gracefully move along at this point.
                     logger.debug(
@@ -2006,7 +1986,7 @@ class NNTPConnection(SocketBase):
 
                     continue
 
-                elif result is True:
+                elif decoded is True:
                     # We're expecting more data a long as the End of Data
                     # (EOD) flag hasn't been picked up.
                     if not self.article_eod:
@@ -2025,7 +2005,7 @@ class NNTPConnection(SocketBase):
                     # rebuild it if it is infact damaged.
                     if isinstance(codec_active, CodecBase):
                         # Store our decoded content (complete or not)
-                        result = codec_active.decoded
+                        decoded = codec_active.decoded
 
                 # If we got here, our content was good; we can safely
                 # toggle our codec_active back to off since we're going to
@@ -2033,7 +2013,7 @@ class NNTPConnection(SocketBase):
                 logger.debug('Decoding completed. %s' % codec_active)
                 codec_active = None
 
-                if not isinstance(result, NNTPContent):
+                if not isinstance(decoded, NNTPContent):
                     # We ignore any other return type, Decoders should always
                     # return an NNTPContent type; anything else is considered
                     # moot
@@ -2041,12 +2021,12 @@ class NNTPConnection(SocketBase):
 
                 # Add to our NNTPContent() to our decoded set associated with
                 # our NNTPResponse() object
-                response.decoded.add(result)
+                response.decoded.add(decoded)
 
-                if not isinstance(result, NNTPMetaContent):
+                if not isinstance(decoded, NNTPMetaContent):
                     # Print a representative string into the body to identify
                     # the content parsed out (and decoded)
-                    response.body.write(repr(result) + EOL)
+                    response.body.write(repr(decoded) + EOL)
 
                     if max_bytes > 0:
                         # We're instructed to only retrieve 'some' content and abort

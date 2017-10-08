@@ -3,7 +3,7 @@
 # A manager that can control multiple NNTP connections and
 # orchastrate them together in a single class
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -21,10 +21,14 @@ gevent.monkey.patch_all()
 import signal
 from gevent import Greenlet
 from gevent.event import Event
+from gevent.lock import Semaphore
 from gevent.queue import Queue
 from gevent.queue import Empty as EmptyQueueException
 
 from newsreap.NNTPConnection import NNTPConnection
+from newsreap.NNTPnzb import NNTPnzb
+from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPConnection import XoverGrouping
 from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
 
@@ -34,6 +38,76 @@ from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
+class WorkTracker(object):
+    """
+    Our Work Tracking object we use to determine who's working and who isn't.
+
+    By keeping it in it's own object, it allows us to wrap communication to
+    and from it with a mutex (supporting threading).
+
+    The idea is that we want to consult the tracker to see who's available
+    before creating work. If there isn't enough workers available, then we
+    spin another worker before assigning the task.
+
+    Without this logic, a new connection to the NNTP Provier is made with
+    each request up until the total number of max threads have been met. The
+    goal of this is to re-use threads that area already connected before going
+    through the painful overhead of creating another connection.
+
+    """
+
+    def __init__(self):
+        """
+        Initialize our object
+        """
+        super(WorkTracker, self).__init__()
+
+        self.lock = Semaphore(value=1)
+
+        # Track our available workers
+        self.available = set()
+
+        # Track our busy workers
+        self.busy = set()
+
+    def mark_available(self, worker):
+        """
+        Marks a worker available
+        """
+        try:
+            self.lock.acquire(blocking=True)
+            # Store our worker
+            self.available.add(worker)
+            self.busy.discard(worker)
+            return True
+
+        finally:
+            self.lock.release()
+
+        return False
+
+    def mark_busy(self, worker):
+        """
+        Marks a worker unavailable
+        """
+        try:
+            self.lock.acquire(blocking=True)
+            self.busy.add(worker)
+            self.available.discard(worker)
+            return True
+
+        finally:
+            self.lock.release()
+
+        return False
+
+    def __len__(self):
+        """
+        Return our hash list (not thread safe)
+        """
+        return len(self.available) + len(self.busy)
+
+
 class Worker(Greenlet):
     """
     This class actually performs all of the grunt work, a worker
@@ -41,7 +115,7 @@ class Worker(Greenlet):
     of connections defined.
     """
 
-    def __init__(self, connection, work_queue):
+    def __init__(self, connection, work_queue, work_tracker):
         Greenlet.__init__(self, run=None)
 
         # Store NNTPConnection Object
@@ -63,6 +137,9 @@ class Worker(Greenlet):
         #       an article ID though)
         self._work_queue = work_queue
 
+        # Store our work tracker
+        self._work_tracker = work_tracker
+
         # our exit flag, it is set externally
         self._exit = Event()
 
@@ -73,13 +150,7 @@ class Worker(Greenlet):
         # block until we have an event to handle.
         # print "Worker %s ready!" % self
         while not self._exit.is_set():
-            # print "Worker %s loop!" % self
-
-            # self._event.wait(timeout=1.0)
-            # if self._exit.is_set():
-            #     # We're done
-            #     return
-
+            # Begin our loop
             try:
                 request = self._work_queue.get()
                 if request is StopIteration:
@@ -100,8 +171,22 @@ class Worker(Greenlet):
                 # Nothing available for us
                 continue
 
+            # Mark ourselves busy
+            self._work_tracker.mark_busy(self)
+
             # If we reach here, we have a request to process
             request.run(connection=self._connection)
+
+            # Mark ourselves available again
+            self._work_tracker.mark_available(self)
+
+        # Ensure our connection is closed before we exit
+        self._connection.close()
+
+    def __del__(self):
+        # If Ctrl-C is pressed or we're forced to break earlier then we may
+        # end up here. Ensure our connection is closed before we exit
+        self._connection.close()
 
 
 class NNTPManager(object):
@@ -127,6 +212,11 @@ class NNTPManager(object):
         # A mapping of active worker threads
         self._workers = []
 
+        # Keep track of the workers available for processing
+        # we will use this value to determine if we need to spin
+        # up another process or not.
+        self._work_tracker = WorkTracker()
+
         # Queue Control
         self._work_queue = Queue()
 
@@ -135,23 +225,52 @@ class NNTPManager(object):
 
         if not len(settings.nntp_servers):
             logger.warning("There were no NNTP Servers defined to load.")
-            return
+            raise AttributeError('No NNTP Servers Defined')
 
-        for _ in range(settings.nntp_processing['threads']):
-            con = NNTPConnection(**settings.nntp_servers[0])
-            if len(settings.nntp_servers) > 1:
-                # Append backup servers (if any defined)
-                for idx in range(1, len(settings.nntp_servers)):
-                    _con = NNTPConnection(**settings.nntp_servers[idx])
-                    con.append(_con)
+        # Store our defined settings
+        self._settings = settings
 
-            # Appened connection to pool
-            self._pool.append(con)
-
-        logger.debug("Loaded %d pools with %d NNTP Servers" % (
-            len(self._pool), len(settings.nntp_servers),
-        ))
         return
+
+    def spawn_workers(self, count=1):
+        """
+        Spawns X workers (but never more then the total allowed)
+        """
+        _count = 0
+        while len(self._pool) < self._settings.nntp_processing['threads']:
+            # First we build our connection object
+            connection = NNTPConnection(**self._settings.nntp_servers[0])
+            if len(self._settings.nntp_servers) > 1:
+                # Append backup servers (if any defined)
+                for idx in range(1, len(self._settings.nntp_servers)):
+                    _connection = NNTPConnection(
+                            **self._settings.nntp_servers[idx])
+                    connection.append(_connection)
+
+            # Appened connection object to a pool
+            self._pool.append(connection)
+
+            logger.debug("Spawning worker...")
+            g = Worker(
+                connection=connection,
+                work_queue=self._work_queue,
+                work_tracker=self._work_tracker,
+            )
+            g.start()
+
+            # Track our worker
+            self._workers.append(g)
+
+            _count += 1
+            if _count >= count:
+                # Stop spawning
+                break
+
+        if _count > 0:
+            logger.info("Loaded %d new worker(s)." % (_count))
+            return True
+
+        return False
 
     def get_connection(self):
         """
@@ -167,35 +286,17 @@ class NNTPManager(object):
 
         if len(self._pool):
             # Find the first connected connection
-            connection = next((c for c in self._pool \
-                if c.connected is True), None)
+            connection = next(
+                    (c for c in self._pool if c.connected is True), None)
 
             if connection:
                 return connection
+
             # Return the first entry if nothing is already connected
             return self._pool[0]
 
         # Otherwise there is nothing to return
         return None
-
-    def connect(self):
-        """
-        Sets up NNTP Workers and connections to server
-
-        """
-        if len(self._workers):
-            return True
-
-        for entry in self._pool:
-            logger.debug("Spawning worker...")
-            g = Worker(
-                connection=entry,
-                work_queue=self._work_queue,
-            )
-            g.start()
-
-            # Track our worker
-            self._workers.append(g)
 
     def close(self):
         """
@@ -226,6 +327,27 @@ class NNTPManager(object):
         self._workers = []
         self._pool = []
 
+    def put(self, request):
+        """
+        Handles the adding to the worker queue
+
+        """
+
+        # Determine if we need to spin a worker or not
+        self._work_tracker.lock.acquire(blocking=True)
+
+        if len(self._work_tracker.available) == 0:
+            if len(self._work_tracker) < self._settings\
+                                            .nntp_processing['threads']:
+                # Spin up more work
+                self.spawn_workers(count=1)
+
+        # Append to Queue for processing
+        self._work_queue.put(request)
+
+        # Release our lock
+        self._work_tracker.lock.release()
+
     def group(self, name, block=True):
         """
         Queue's an NNTPRequest for processing and returns a call
@@ -246,10 +368,6 @@ class NNTPManager(object):
         it's flag being set (marking completion)
 
         """
-        if not len(self._workers):
-            # Handle connections
-            self.connect()
-
         # Push request to the queue
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
@@ -258,7 +376,7 @@ class NNTPManager(object):
         ])
 
         # Append to Queue for processing
-        self._work_queue.put(request)
+        self.put(request)
 
         # We'll know when our request has been handled because the
         # request is included in the response.
@@ -292,10 +410,6 @@ class NNTPManager(object):
         it's flag being set (marking completion)
 
         """
-        if not len(self._workers):
-            # Handle connections
-            self.connect()
-
         # Push request to the queue
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
@@ -304,7 +418,7 @@ class NNTPManager(object):
         ])
 
         # Append to Queue for processing
-        self._work_queue.put(request)
+        self.put(request)
 
         # We'll know when our request has been handled because the
         # request is included in the response.
@@ -338,10 +452,6 @@ class NNTPManager(object):
         it's flag being set (marking completion)
 
         """
-        if not len(self._workers):
-            # Handle connections
-            self.connect()
-
         # Push request to the queue
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
@@ -350,7 +460,7 @@ class NNTPManager(object):
         ])
 
         # Append to Queue for processing
-        self._work_queue.put(request)
+        self.put(request)
 
         # We'll know when our request has been handled because the
         # request is included in the response.
@@ -364,7 +474,8 @@ class NNTPManager(object):
         # We aren't blocking, so just return the request object
         return request
 
-    def get(self, id, work_dir, group=None, max_bytes=0, block=True):
+    def get(self, id, work_dir, group=None, max_bytes=0, block=True,
+            force=False):
         """
         Queue's an NNTPRequest for processing and returns it's
         response if block is set to True.
@@ -389,35 +500,173 @@ class NNTPManager(object):
         inspect the first bytes of a binary file. Set this to zero to download
         the entire thing (this is the default value)
 
+        The force flag when set to true forces the download of content even
+        if it has previously already been retrieved.
         """
-        if not len(self._workers):
-            # Handle connections
-            self.connect()
 
-        # Push request to the queue
-        request = NNTPConnectionRequest(actions=[
-            # Append list of NNTPConnection requests in a list
-            # ('function, (*args), (**kwargs) )
-            ('get', (id, work_dir), {
-                'group': group,
-                'max_bytes': max_bytes,
-            }),
-        ])
+        # A list of results
+        requests = []
 
-        # Append to Queue for processing
-        self._work_queue.put(request)
+        if isinstance(id, NNTPnzb):
+            # We're dealing with an NZB-File
+            if not id.is_valid():
+                return None
+
+            # Pre-Spawn workers based on the number of segments found in our
+            # NZB-File.
+            self.spawn_workers(id.segcount())
+
+            # We iterate over each segment defined int our NZBFile and merge
+            # them into 1 file. We do this until we've processed all the
+            # segments and we return a list of articles
+            for segpost_no, segpost in enumerate(id):
+                for article_no, article in enumerate(segpost):
+
+                    # Push request to the queue
+                    request = NNTPConnectionRequest(actions=[
+                        # Append list of NNTPConnection requests in a list
+                        # ('function, (*args), (**kwargs) )
+                        ('get', (article, work_dir), {
+                            'group': group,
+                            'max_bytes': max_bytes,
+                        }),
+                    ])
+
+                    # Append to Queue for processing
+                    self.put(request)
+
+                    # Store our request
+                    requests.append(request)
+
+        elif isinstance(id, NNTPSegmentedPost):
+            # Pre-Spawn workers based on the number of segments we find.
+            self.spawn_workers(len(id))
+
+            # We iterate over each segment defined int our NZBFile and merge
+            # them into 1 file. We do this until we've processed all the
+            # segments and we return a list of articles
+            for article_no, article in enumerate(id):
+
+                # Push request to the queue
+                request = NNTPConnectionRequest(actions=[
+                    # Append list of NNTPConnection requests in a list
+                    # ('function, (*args), (**kwargs) )
+                    ('get', (article, work_dir), {
+                        'group': group,
+                        'max_bytes': max_bytes,
+                    }),
+                ])
+
+                # Append to Queue for processing
+                self.put(request)
+
+                # Store our request
+                requests.append(request)
+
+        elif isinstance(id, NNTPArticle):
+            # We're dealing with a single Article
+
+            # Push request to the queue
+            request = NNTPConnectionRequest(actions=[
+                # Append list of NNTPConnection requests in a list
+                # ('function, (*args), (**kwargs) )
+                ('get', (id, work_dir), {
+                    'group': group,
+                    'max_bytes': max_bytes,
+                }),
+            ])
+
+            # Append to Queue for processing
+            self.put(request)
+
+            # Store our request
+            requests.append(request)
+
+        if isinstance(id, basestring):
+            # We're dealing a Message-ID (Article-ID)
+
+            # Push request to the queue
+            request = NNTPConnectionRequest(actions=[
+                # Append list of NNTPConnection requests in a list
+                # ('function, (*args), (**kwargs) )
+                ('get', (id, work_dir), {
+                    'group': group,
+                    'max_bytes': max_bytes,
+                }),
+            ])
+
+            # Append to Queue for processing
+            self.put(request)
+
+            # Store our request
+            requests.append(request)
 
         # We'll know when our request has been handled because the
         # request is included in the response.
-        if block:
-            request.wait()
+        if not block:
+            # We aren't blocking, so just return the request objects
+            return requests
 
-            # Simplify things by returning just the response object
-            # instead of the request
-            return request.response[0]
+        # Block indefinitely on all pending requests
+        [req.wait() for req in iter(requests)]
 
-        # We aren't blocking, so just return the request object
-        return request
+        # Simplify things by returning just the response object
+        # instead of the request
+        responses = [req.response[0] for req in iter(requests)]
+
+        if isinstance(id, NNTPnzb):
+            # NZB-File; Assign our Article Responses with their respected
+            # locations in the NZB-File. This is done in addition to returning
+            # our response objects
+            resp_iter = iter(responses)
+
+            # Iterate over our NZB-File (SegmentedPost) Entries
+            for segpost in iter(id):
+                # Iterate over our Segmented Post Entries
+                for article in iter(segpost):
+                    # For each segment in our list
+                    resp = resp_iter.next()
+
+                    # This should always equate since our response list
+                    # was generated from our post
+                    assert(article.id == resp.id)
+
+                    # Load our response back to our NNTPnzb object
+                    article.load(resp)
+
+        elif isinstance(id, NNTPSegmentedPost):
+            # Support NNTPSegmentedPost() Objects
+            resp_iter = iter(responses)
+
+            # Iterate over our Segmented Post Entries
+            for article in iter(segpost):
+                # For each segment in our list
+                resp = resp_iter.next()
+
+                # This should always equate since our response list
+                # was generated from our post
+                assert(article.id == resp.id)
+
+                # Load our response back to our NNTPnzb object
+                article.load(resp)
+
+        elif isinstance(id, NNTPArticle):
+            # This should always equate since our response list
+            # was generated from our post
+            assert(id.id == responses[0].id)
+
+            # Load our response back to our NNTPnzb object
+            article.load(responses[0])
+
+            # Return our single article
+            return responses[0]
+
+        elif isinstance(id, basestring):
+            # Message-ID: Just return our response directly
+            return responses[0]
+
+        # Return our responses
+        return responses
 
     def xover(self, group, start=None, end=None,
               sort=XoverGrouping.BY_POSTER_TIME, block=True):
@@ -449,10 +698,6 @@ class NNTPManager(object):
               }
 
         """
-        if not len(self._workers):
-            # Handle connections
-            self.connect()
-
         # Push request to the queue
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
@@ -466,7 +711,7 @@ class NNTPManager(object):
         ])
 
         # Append to Queue for processing
-        self._work_queue.put(request)
+        self.put(request)
 
         # We'll know when our request has been handled because the
         # request is included in the response.
@@ -500,10 +745,6 @@ class NNTPManager(object):
         it's flag being set (marking completion)
 
         """
-        if not len(self._workers):
-            # Handle connections
-            self.connect()
-
         # Push request to the queue
         request = NNTPConnectionRequest(actions=[
             # Append list of NNTPConnection requests in a list
@@ -512,7 +753,7 @@ class NNTPManager(object):
         ])
 
         # Append to Queue for processing
-        self._work_queue.put(request)
+        self.put(request)
 
         # We'll know when our request has been handled because the
         # request is included in the response.

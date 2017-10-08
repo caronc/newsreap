@@ -286,3 +286,66 @@ class NNTPnzb_Test(TestBase):
 
         # Test Length
         assert len(nzbobj) == 0
+
+
+    def test_parse_subject(self):
+        """
+        Tests the parse_subject function
+        """
+
+        scanset = {
+            # index and count included
+            'description [2/3] - "fname" yEnc (0/1)': {
+                'desc': 'description',
+                'fname': 'fname',
+                'index': 2,
+                'count': 3,
+                'yindex': 0,
+                'ycount': 1,
+            },
+            # quotes around fname
+            'description - "fname" yEnc (0/1)': {
+                'desc': 'description',
+                'fname': 'fname',
+                'yindex': 0,
+                'ycount': 1,
+            },
+            # No quotes around anything
+            'description - fname yEnc (0/1)': {
+                'desc': 'description',
+                'fname': 'fname',
+                'yindex': 0,
+                'ycount': 1,
+            },
+            # quotes around description
+            '"description" - fname yEnc (0/1)': {
+                'desc': 'description',
+                'fname': 'fname',
+                'yindex': 0,
+                'ycount': 1,
+            },
+            # keyword yEnc and size included
+            '"description" - fname yEnc (0/1) 300': {
+                'desc': 'description',
+                'fname': 'fname',
+                'yindex': 0,
+                'ycount': 1,
+                'size': 300,
+            },
+            '"description" - fname yEnc (/1)': {
+                'desc': 'description',
+                'fname': 'fname',
+                'ycount': 1,
+            },
+        }
+
+        # Create our NZB Object
+        nzbobj = NNTPnzb()
+
+        for subject, meta in scanset.items():
+            results = nzbobj.parse_subject(subject)
+            assert(results is not None)
+            for key, value in meta.items():
+                assert(key in results)
+                assert(results[key] == value)
+                assert(type(results[key]) == type(value))

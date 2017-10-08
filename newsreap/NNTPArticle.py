@@ -15,6 +15,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import re
 from blist import sortedset
 from copy import deepcopy
 from itertools import chain
@@ -23,6 +24,7 @@ from datetime import datetime
 from os.path import abspath
 from os.path import expanduser
 
+from newsreap.NNTPResponse import NNTPResponse
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
@@ -39,6 +41,9 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 
 DEFAULT_NNTP_SUBJECT = 'unknown.file'
 DEFAULT_NNTP_POSTER = 'newsreaper <news@reap.er>'
+
+# Used when parsing groups from a header
+GROUP_DELIMITER_RE = re.compile('[ \t,]+')
 
 
 class NNTPArticle(object):
@@ -61,30 +66,33 @@ class NNTPArticle(object):
 
     """
 
-    def __init__(self, subject=DEFAULT_NNTP_SUBJECT,
+    def __init__(self, id=None, subject=DEFAULT_NNTP_SUBJECT,
                  poster=DEFAULT_NNTP_POSTER, groups=None, work_dir=None,
                  *args, **kwargs):
         """
         Initialize NNTP Article
 
         """
+
+        # TODO: Rename id to article_id (readability and id is a reserved
+        # keyword)
+        # The Article Message-ID
+        self.id = id if isinstance(id, basestring) else ''
+
+        # TODO: Rename no to index_no (readability)
+        # The NNTP Group Index #
+        self.no = 1000
+        try:
+            self.no = int(kwargs.get(u'no', self.no))
+        except:
+            # Just use the default
+            pass
+
         # The Subject
         self.subject = subject
 
         # The Poster
         self.poster = poster
-
-        # TODO: Rename id to article_id (readability and id is a reserved
-        # keyword)
-        # The Article Message-ID
-        self.id = kwargs.get(u'id', '')
-
-        # TODO: Rename no to index_no (readability)
-        # The NNTP Group Index #
-        try:
-            self.no = int(kwargs.get(u'no', 1000))
-        except:
-            self.no = int(kwargs.get(u'no', 1000))
 
         if work_dir is None:
             self.work_dir = DEFAULT_TMP_DIR
@@ -99,10 +107,11 @@ class NNTPArticle(object):
             self.groups = set()
 
         elif isinstance(self.groups, basestring):
-            self.groups = { self.groups, }
+            _groups = GROUP_DELIMITER_RE.split(self.groups)
+            self.groups = set([x.lower() for x in _groups if x])
 
         elif isinstance(self.groups, (list, tuple)):
-            self.groups = set([ x.lower() for x in self.groups])
+            self.groups = set([x.lower() for x in self.groups])
 
         elif not isinstance(self.groups, set):
             raise AttributeError("Invalid group set specified.")
@@ -119,26 +128,64 @@ class NNTPArticle(object):
         # Contains a list of decoded content
         self.decoded = sortedset(key=lambda x: x.key())
 
-    def load_response(self, response):
+    def load(self, response):
         """
-        Loads an article by it's NNTPResponse
+        Loads an article by it's NNTPResponse or from another NNTPArticle
+
         """
-        # Our body contains non-decoded content
-        self.body = response.body
+        if isinstance(response, NNTPResponse):
+            # Our body contains non-decoded content
+            self.body = response.body
 
-        # Store decoded content
-        self.decoded = response.decoded
+            # Store decoded content
+            self.decoded = response.decoded
 
-        # Store Header
-        self.header = next((d for d in self.decoded \
-                    if isinstance(d, NNTPHeader)), None)
+            # Store Header
+            self.header = next(
+                (d for d in self.decoded if isinstance(d, NNTPHeader)), None)
 
-        if self.header is not None:
-            # Remove Header from decoded list
-            self.decoded.remove(self.header)
+            if self.header is not None:
+                # Remove Header from decoded list
+                self.decoded.remove(self.header)
 
-            # TODO: Parse header information (if present) and populate
-            # some obvious fields (such as subject, groups, etc)
+                if u'Newsgroups' in self.header:
+                    # Parse our groups out of the header
+                    _groups = GROUP_DELIMITER_RE.split(
+                        self.header[u'Newsgroups'],
+                    )
+                    self.groups = set([x.lower() for x in _groups if x])
+
+        elif isinstance(response, NNTPArticle):
+            # We basically save everything except the work-dir since
+            # our new work dir could be a new location
+
+            # The NNTP Message-ID
+            self.id = response.id
+
+            # The NNTP Group Index
+            self.no = response.no
+
+            # Store the subject
+            self.subject = response.subject
+
+            # Store the poster
+            self.poster = response.poster
+
+            # The NNTP Groups
+            self.groups = response.groups
+
+            # Store the header from the other side
+            self.header = response.header
+
+            # Our body contains non-decoded content
+            self.body = response.body
+
+            # Store decoded content
+            self.decoded = response.decoded
+
+        else:
+            # Unsupported
+            return False
 
         return True
 
@@ -250,8 +297,8 @@ class NNTPArticle(object):
             # Nothing to split
             return None
 
-        content = next((c for c in self.decoded \
-                     if isinstance(c, NNTPContent)), None)
+        content = next(
+                (c for c in self.decoded if isinstance(c, NNTPContent)), None)
 
         if not content:
             # Well this isn't good; we have decoded entries that are not
@@ -354,8 +401,8 @@ class NNTPArticle(object):
             # No articles means no validity
             return False
 
-        return next((False for c in self.decoded \
-                     if c.is_valid() is False), True)
+        return next(
+                (False for c in self.decoded if c.is_valid() is False), True)
 
     def files(self):
         """

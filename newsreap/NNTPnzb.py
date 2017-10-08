@@ -53,6 +53,7 @@ class XMLDTDType(object):
     Public = u'PUBLIC'
     System = u'SYSTEM'
 
+
 NZB_XML_DTD_MAP = {
     XMLDTDType.Public: '"-//newzBin//DTD NZB %s//EN" "%s"' % (
             NZB_DTD_VERSION, NZB_XML_DTD,
@@ -90,8 +91,14 @@ NZB_SUBJECT_PARSE = (
     # the dictionary response of this subject parser objects response
     # The subject object response should return None if parsing was not
     # possible, otherwise it returns a dictionary of the indexed content.
-    re.compile(r"^[\"'\s]*(?P<desc>(\s*[^\"'\[(])+)([\"'\s-]+[\[(]?(?P<index>\d+)\/(?P<count>\d+)[)\]]?)?[\"'\s-]+(?P<fname>[^\"']+)[\"'\s-]+yEnc\s+[\[(]?(?P<yindex>\d+)?\/(?P<ycount>\d+)[\])]?([+\s]+?(?P<size>\s*\d+))?\s*$", re.IGNORECASE),
+    re.compile(
+        r"^[\"'\s]*(?P<desc>(\s*[^\"'\[(])+)"
+        r"([\"'\s-]+[\[(]?(?P<index>\d+)\/(?P<count>\d+)[)\]]?)?"
+        r"[\"'\s-]+(?P<fname>[^\"']+)[\"'\s-]+yEnc\s+[\[(]?(?P<yindex>\d+)?\/"
+        r"(?P<ycount>\d+)[\])]?([+\s]+?(?P<size>\s*\d+))?\s*$", re.IGNORECASE,
+    )
 )
+
 
 class NNTPnzb(NNTPContent):
     """
@@ -102,7 +109,8 @@ class NNTPnzb(NNTPContent):
 
     """
 
-    def __init__(self, nzbfile=None, encoding=XML_ENCODING, work_dir=None, *args, **kwargs):
+    def __init__(self, nzbfile=None, encoding=XML_ENCODING, work_dir=None,
+                 *args, **kwargs):
         """
         Initialize NNTP NZB object
 
@@ -111,8 +119,6 @@ class NNTPnzb(NNTPContent):
         one.
         """
 
-        # File lazy counter; it is only populated on demand
-        self._lazy_file_count = None
         self._lazy_is_valid = None
         self._lazy_gid = None
 
@@ -179,11 +185,10 @@ class NNTPnzb(NNTPContent):
             eol = '\n'
             indent = ''
 
-            self.write(
-                '<?xml version="%s" encoding="%s"?>%s' % (
-                    XML_VERSION,
-                    self.encoding,
-                    eol,
+            self.write('<?xml version="%s" encoding="%s"?>%s' % (
+                XML_VERSION,
+                self.encoding,
+                eol,
             ))
             self.write('<!DOCTYPE %s %s %s>%s' % (
                 XML_DOCTYPE,
@@ -207,7 +212,8 @@ class NNTPnzb(NNTPContent):
                 if pretty:
                     indent = ''.ljust(self.padding_multiplier, self.padding)
 
-                # Handle the meta information if there is anything at all to print
+                # Handle the meta information if there is anything at all to
+                # print
                 self.write('%s<head>%s' % (
                     indent,
                     eol,
@@ -229,7 +235,8 @@ class NNTPnzb(NNTPContent):
 
                 self.write('%s</head>%s%s' % (
                     indent,
-                    eol,eol,
+                    eol,
+                    eol,
                 ))
 
             for article in self.segments:
@@ -255,7 +262,8 @@ class NNTPnzb(NNTPContent):
                         return False
 
                     if pretty:
-                        indent = ''.ljust(self.padding_multiplier*2, self.padding)
+                        indent = ''.ljust(
+                            self.padding_multiplier*2, self.padding)
 
                     self.write('%s<groups>%s' % (
                         indent,
@@ -263,7 +271,8 @@ class NNTPnzb(NNTPContent):
                     ))
 
                     if pretty:
-                        indent = ''.ljust(self.padding_multiplier*3, self.padding)
+                        indent = ''.ljust(
+                            self.padding_multiplier*3, self.padding)
 
                     for group in content.groups:
                         self.write('%s<group>%s</group>%s' % (
@@ -273,7 +282,8 @@ class NNTPnzb(NNTPContent):
                         ))
 
                     if pretty:
-                        indent = ''.ljust(self.padding_multiplier*2, self.padding)
+                        indent = ''.ljust(
+                            self.padding_multiplier*2, self.padding)
                     self.write('%s</groups>%s' % (
                         indent,
                         eol,
@@ -285,7 +295,8 @@ class NNTPnzb(NNTPContent):
                     ))
 
                     if pretty:
-                        indent = ''.ljust(self.padding_multiplier*3, self.padding)
+                        indent = ''.ljust(
+                            self.padding_multiplier*3, self.padding)
 
                     for part, segment in enumerate(content):
                         # use enumerated content and not the part assigned.
@@ -294,13 +305,15 @@ class NNTPnzb(NNTPContent):
                         # only use the part numbers for their own personal
                         # ordering.
 
-                        self.write('%s<segment bytes="%d" number="%d">%s</segment>%s' % (
-                            indent,
-                            len(segment),
-                            part+1,
-                            self.escape_xml(content.id),
-                            eol,
-                        ))
+                        self.write(
+                            '%s<segment bytes="%d" number="%d">%s</segment>%s' % (
+                                indent,
+                                len(segment),
+                                part+1,
+                                self.escape_xml(content.id),
+                                eol,
+                            )
+                        )
 
                 if pretty:
                     indent = ''.ljust(self.padding_multiplier*2, self.padding)
@@ -321,8 +334,7 @@ class NNTPnzb(NNTPContent):
             if pretty:
                 indent = ''
 
-            self.write(
-                '%s<!-- Generated by %s v%s -->%s' % (
+            self.write('%s<!-- Generated by %s v%s -->%s' % (
                 indent, __title__, __version__, eol,
             ))
 
@@ -374,7 +386,7 @@ class NNTPnzb(NNTPContent):
 
             except IndexError:
                 logger.warning(
-                    'NZB-File is missing initial </segment> element: %s' % \
+                    'NZB-File is missing initial </segment> element: %s' %
                     self.filepath,
                 )
                 # Thrown if no segment elements were found in the first file
@@ -439,8 +451,6 @@ class NNTPnzb(NNTPContent):
         self.segments = sortedset(key=lambda x: x.key())
         if filepath is not None:
             # Reset our variables
-            self._lazy_is_valid = False
-            self._lazy_file_count = None
             self._lazy_is_valid = None
             self._lazy_gid = None
             self.close()
@@ -477,10 +487,14 @@ class NNTPnzb(NNTPContent):
                 except XMLSyntaxError as e:
                     if e[0] is not None:
                         # We have corruption
-                        logger.error("NZB-File '%s' is corrupt" % self.filepath)
-                        logger.debug('NZB-File XMLSyntaxError Exception %s' % str(e))
+                        logger.error(
+                            "NZB-File '%s' is corrupt" % self.filepath)
+                        logger.debug(
+                            'NZB-File XMLSyntaxError Exception %s' % str(e))
                         # Mark situation
                         self._lazy_is_valid = False
+                        # We failed
+                        return False
 
                 self._lazy_is_valid = dtd.validate(nzb)
 
@@ -514,9 +528,9 @@ class NNTPnzb(NNTPContent):
         _bcnt = len(self.segments)
         self.segments.add(obj)
 
-        self._lazy_file_count = len(self.segments)
+        file_count = len(self.segments)
 
-        return self._lazy_file_count > _bcnt
+        return file_count > _bcnt
 
     def unescape_xml(self, escaped_xml, encoding=None):
         """
@@ -547,9 +561,7 @@ class NNTPnzb(NNTPContent):
                 encoding = self.encoding
             subject = subject.encode(encoding)
 
-        matched = next((r.match(subject) for r in NZB_SUBJECT_PARSE \
-              if r.match(subject) is not None), None)
-
+        matched = NZB_SUBJECT_PARSE.match(subject)
         if matched is None:
             # subject is not parsable
             return None
@@ -568,6 +580,14 @@ class NNTPnzb(NNTPContent):
                 results[_attr] = int(matched.group(_attr))
 
         return results
+
+    def segcount(self):
+        """
+        Returns the total number of segments in the NZB File
+        """
+        seg_count = 0
+        seg_count += sum(len(c) for c in self)
+        return seg_count
 
     def next(self):
         """
@@ -640,11 +660,12 @@ class NNTPnzb(NNTPContent):
 
         # Acquire the Segments Groups
         groups = [
-            group.text.strip().decode(self.encoding) \
-                for group in self.xml_root.xpath(
+            group.text.strip().decode(self.encoding)
+            for group in self.xml_root.xpath(
                 'ns:groups/ns:group',
                 namespaces=NZB_LXML_NAMESPACES,
-        )]
+            )
+        ]
 
         _filename = self.meta.get('name', 'unknown').decode(self.encoding)
         _subject = self.unescape_xml(
@@ -663,7 +684,7 @@ class NNTPnzb(NNTPContent):
                 self.xml_root.attrib.get('poster', '')).decode(self.encoding),
             epoch=self.xml_root.attrib.get('date', '0'),
             subject=_subject,
-            groups = groups,
+            groups=groups,
             work_dir=self.work_dir,
         )
 
@@ -671,8 +692,8 @@ class NNTPnzb(NNTPContent):
         _last_index = 0
 
         # Now append our segments
-        for segment in self.xml_root.xpath('ns:segments/ns:segment',
-                                            namespaces=NZB_LXML_NAMESPACES):
+        for segment in self.xml_root.xpath(
+                'ns:segments/ns:segment', namespaces=NZB_LXML_NAMESPACES):
 
             _cur_index = int(segment.attrib.get('number', _last_index+1))
             try:
@@ -772,8 +793,7 @@ class NNTPnzb(NNTPContent):
         """
         Returns the number of files in the NZB File
         """
-        self._lazy_file_count = sum(1 for c in self)
-        return self._lazy_file_count
+        return sum(1 for c in self)
 
     def __getitem__(self, index):
         """
@@ -786,5 +806,5 @@ class NNTPnzb(NNTPContent):
         Return a printable version of the file being read
         """
         return '<NNTPnzb filename="%s" />' % (
-            self.filename,
+            self.filepath,
         )
