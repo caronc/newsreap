@@ -2,7 +2,7 @@
 #
 # Centralized Settings and Configuration
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -69,7 +69,7 @@
 #     - name: 'alt.binaries.multimedia'
 #
 #   database:
-#     engine: sqlite:////absolute/path/to/foo.db
+#     engine: sqlite:////absolute/path/to/mydatabase.db
 
 # Possible database engines taken from:
 #      - http://docs.sqlalchemy.org/en/rel_1_0/core/engines.html
@@ -77,48 +77,48 @@
 #
 #   ** PostgreSQL:
 #       Default
-#           postgresql://scott:tiger@localhost/mydatabase
+#           postgresql://user:pass@localhost/mydatabase
 #
 #       Psycopg2
-#           postgresql+psycopg2://scott:tiger@localhost/mydatabase
+#           postgresql+psycopg2://user:pass@localhost/mydatabase
 #
 #       pg8000
-#           postgresql+pg8000://scott:tiger@localhost/mydatabase
+#           postgresql+pg8000://user:pass@localhost/mydatabase
 #
 #   ** MySQL:
 #       Default
-#           mysql://scott:tiger@localhost/foo
+#           mysql://user:pass@localhost/mydatabase
 #
 #       MySQL-Python
-#           mysql+mysqldb://scott:tiger@localhost/foo
+#           mysql+mysqldb://user:pass@localhost/mydatabase
 #
 #       MySQL-connector-python
-#           mysql+mysqlconnector://scott:tiger@localhost/foo
+#           mysql+mysqlconnector://user:pass@localhost/mydatabase
 #
 #       OurSQL
-#           mysql+oursql://scott:tiger@localhost/foo
+#           mysql+oursql://user:pass@localhost/mydatabase
 #
 #   ** Oracle:
-#           oracle://scott:tiger@127.0.0.1:1521/sidname
+#           oracle://user:pass@127.0.0.1:1521/sidname
 #      (or):
-#           oracle+cx_oracle://scott:tiger@tnsname
+#           oracle+cx_oracle://user:pass@tnsname
 #
 #   ** Microsoft SQL Server:
 #        PyODBC
-#           mssql+pyodbc://scott:tiger@mydsn
+#           mssql+pyodbc://user:pass@mydsn
 #
 #        PymsSQL
-#           mssql+pymssql://scott:tiger@hostname:port/dbname
+#           mssql+pymssql://user:pass@hostname:port/dbname
 #
 #   ** SQLite:
 #        Unix/Mac - 4 initial slashes in total
-#           sqlite:////absolute/path/to/foo.db
+#           sqlite:////absolute/path/to/mydatabase.db
 #
 #        Windows
-#           sqlite:///C:\\path\\to\\foo.db
+#           sqlite:///C:\\path\\to\\mydatabase.db
 #
 #        Windows alternative using raw string
-#           sqlite:///C:\path\to\foo.db
+#           sqlite:///C:\path\to\mydatabase.db
 #
 #
 #   A ramdisk/tmpfs can greatly speed up newsprocessing; You'll want to set it
@@ -220,7 +220,7 @@ SQLITE_DATABASE_EXTENSION = '.db'
 
 # SQLite Database Details
 SQLITE_DATABASE_ENGINE = 'sqlite:///%s%s' % (
-    join(DEFAULT_BASE_DIR, 'core.db'),
+    join(DEFAULT_BASE_DIR, 'newsreap.db'),
     SQLITE_DATABASE_EXTENSION,
 )
 
@@ -236,13 +236,13 @@ DEFAULT_BLOCK_SIZE = 8192
 # if None is specified, then the field is mandatory or we'll abort
 DEFAULT_GLOBAL_VARIABLES = {
     # A base directory we can find everything in. It can be referenced
-    # elsewhere in the configuration file by using <base_dir>
+    # elsewhere in the configuration file by using %{base_dir}
     'base_dir': join('~', '.config', 'newsreap'),
 
     # work_dir is the location variable and temporary data will be
     # written and removed from. This is also the location all downloaded
     # data will be written too until it's processed.
-    'work_dir': join('<base_dir>', 'var', 'tmp'),
+    'work_dir': join('%{base_dir}', 'var', 'tmp'),
 }
 
 # Keyword used in configuration to host all of the defined NNTP Servers
@@ -353,7 +353,7 @@ class NNTPSettings(NNTPDatabase):
         # Store first matched configuration file found
         if not cfg_file:
             # Load the first configuration file found in default path list
-            cfg_file = next((path for path in DEFAULT_CONFIG_FILE_PATHS \
+            cfg_file = next((path for path in DEFAULT_CONFIG_FILE_PATHS
                              if isfile(path)), None)
 
         if isinstance(cfg_file, basestring) and isfile(cfg_file):
@@ -363,7 +363,6 @@ class NNTPSettings(NNTPDatabase):
         else:
             # No entry
             self.cfg_file = None
-
 
     def is_valid(self):
         """
@@ -380,6 +379,10 @@ class NNTPSettings(NNTPDatabase):
         and returns False if it doesn't (or is invalid).
 
         """
+
+        if hasattr(self, '__mask_re'):
+            # Destroy our cached mask
+            del self.__mask_re
 
         # Default Configuration Starting Point
         _cfg_data = deepcopy(VALID_SETTINGS_ENTRY)
@@ -440,8 +443,9 @@ class NNTPSettings(NNTPDatabase):
             if not isinstance(cfg_data[SERVER_LIST_KEY], dict):
                 logger.error(
                     'Failed to interpret YAML server configuration from %s' % (
-                    cfg_file,
-                ))
+                        cfg_file,
+                    )
+                )
 
             else:
                 # Treat as single server and convert to list attempting to be
@@ -548,15 +552,8 @@ class NNTPSettings(NNTPDatabase):
         if self.work_dir is None:
             self.work_dir = DEFAULT_TMP_DIR
 
-        # apply %basedir keyword support
-        self.work_dir = re.sub(
-            '<base_dir>',
-            self.base_dir,
-            self.work_dir,
-            re.IGNORECASE,
-        )
-
-        self.work_dir = abspath(expanduser(self.work_dir))
+        # Prepare our work_dir
+        self.work_dir = self.apply_mask(self.work_dir, is_dir=True)
 
         # Save configuration file path
         self.cfg_file = abspath(expanduser(cfg_file))
@@ -572,7 +569,7 @@ class NNTPSettings(NNTPDatabase):
             # v2.6 support
             dict((k, self.cfg_data[PROCESSING_KEY][k]) \
                  for k in DEFAULT_PROCESSING_VARIABLES.keys() \
-                    if k in self.cfg_data[PROCESSING_KEY]),
+                 if k in self.cfg_data[PROCESSING_KEY]),
         )
 
         # Strip out only the information we're not interested in
@@ -585,7 +582,7 @@ class NNTPSettings(NNTPDatabase):
             # v2.6 support
             dict((k, self.cfg_data[DATABASE_KEY][k]) \
                  for k in DEFAULT_DATABASE_VARIABLES.keys() \
-                    if k in self.cfg_data[DATABASE_KEY]),
+                 if k in self.cfg_data[DATABASE_KEY]),
         )
 
         # Parse our content
@@ -641,7 +638,7 @@ class NNTPSettings(NNTPDatabase):
                 # Bad entry
                 logger.error(
                     'An invalid server "host" entry #%d ' % (
-                        _priority) + '(bad `host=` identifier) ' +\
+                        _priority) + '(bad `host=` identifier) ' +
                     'was specified.',
                 )
                 return False
@@ -649,7 +646,7 @@ class NNTPSettings(NNTPDatabase):
             except KeyError:
                 # Bad entry
                 logger.error(
-                    'An invalid server entry #%d ' % _priority +\
+                    'An invalid server entry #%d ' % _priority +
                     '(missing `host=` keyword) was specified.',
                 )
                 return False
@@ -666,14 +663,15 @@ class NNTPSettings(NNTPDatabase):
                 _priority += 1
 
                 if results['priority']:
-                # Invalid Priority
+                    # Invalid Priority
                     logger.warning(
-                        'An invalid priority (%s)' % results['priority'] +\
+                        'An invalid priority (%s)' % results['priority'] +
                         ' was specified for host %s (using %d) in: %s' % (
-                        _key,
-                        _priority,
-                        self.cfg_file,
-                    ))
+                            _key,
+                            _priority,
+                            self.cfg_file,
+                        )
+                    )
 
             # Store our priority
             results['priority'] = _priority
@@ -683,12 +681,12 @@ class NNTPSettings(NNTPDatabase):
         # the enabled flag as being enabled. We also convert our _nntp_servers
         # dictionary back into a simple list
         self.nntp_servers = sorted(
-            [v for v in _nntp_servers.itervalues() \
+            [v for v in _nntp_servers.itervalues()
              if v.get('enabled', True)],
             key=itemgetter("priority"),
         )
 
-        logger.info("Loaded %d NNTP enabled server(s)" % \
+        logger.info("Loaded %d NNTP enabled server(s)" %
                     len(self.nntp_servers))
 
         # Is valid flag
@@ -699,7 +697,7 @@ class NNTPSettings(NNTPDatabase):
 
         # Open up our database connection if one exists
         if self.open(engine=self.nntp_database['engine'], reset=None):
-            session = self.session()
+            self.session()
 
         return self._is_valid
 
@@ -729,4 +727,90 @@ class NNTPSettings(NNTPDatabase):
         # Update central configuration
         self.cfg_file = cfg_file
 
+        if hasattr(self, '__mask_re'):
+            # Presumably something has changed if the user called save so we
+            # destroy our cached mask to be safe
+            del self.__mask_re
+
         return True
+
+    def apply_mask(self, content, mask_map=None, is_dir=False, lazy=True):
+        """
+        when provided content, all predefined masks such as %{base_dir} are
+        substituted with their actual represented value.
+
+        If you provide your own mask_map (must be a dictionary of key ->
+        value) then it will be added to the results
+
+        if is_dir is specified, then abspath and expanduser is also called
+        on the returned results.
+
+        If lazy is set to true, then we use our cached values (if they exist)
+        """
+
+        if not lazy or not hasattr(self, '_mask_re'):
+            # Define our translation map
+            self._mask_map = {
+                '%{base_dir}': self.base_dir,
+                '%{work_dir}': self.work_dir,
+                '%{ramdisk}': self.nntp_processing.get('ramdisk', ''),
+            }
+
+            # A checking script for handling entries not supported
+            self._mask_check_re = re.compile('(%{([^}]r+)?}?)+')
+
+            # we build our mask once for speed
+            self._mask_re = re.compile(
+                r'(' + '|'.join(self._mask_map.keys()) + r')',
+                re.IGNORECASE,
+            )
+
+        # extra mask is created if an additional mask was provided
+        extra_mask_re = None
+
+        if mask_map:
+            # a mask map was provided as input too
+            extra_mask_re = re.compile(
+                r'(' + '|'.join(mask_map.keys()) + r')',
+                re.IGNORECASE,
+            )
+
+        # Apply our lookups
+        content = self._mask_re.sub(
+            lambda x: self._mask_map[x.group()], content)
+
+        # We intentionally don't proces our extra matches yet until our
+        # standard entries have been applied at least twice. The reason is
+        # because we don't want someone over-riding the %{base_dir} path in
+        # the extras causing the work_dir to reference it instead of the
+        # one defined in our configuration
+
+        recursion = 0
+        _matches = self._mask_check_re.search(content)
+        while _matches:
+            # Apply our lookups
+            content = self._mask_re.sub(
+                lambda x: self._mask_map[x.group()], content)
+
+            # If we get here, we still have left over keys that have
+            # not been looked up
+            if mask_map:
+                content = extra_mask_re.sub(
+                    lambda x: mask_map[x.group()], content)
+
+            recursion += 1
+            if recursion > 5:
+                # Recursion Limit hit
+                raise AttributeError(
+                    "Configuration contains an infinit recursion loop.",
+                )
+
+            # Update our match search
+            _matches = self._mask_check_re.search(content)
+
+        if is_dir:
+            # convert it into an absolute path
+            return abspath(expanduser(content))
+
+        # Don't mangle the content any more
+        return content

@@ -22,6 +22,54 @@ Some under the hood stuff that developers should appreciate about NewsReap are:
 __Note:__ This is a work in progress; a lot of what is documented here is what the final solution will be.  But it is definitely not there yet!  The backend is in good shape, but the CLI tool is what needs to be worked on next.
 
 ## Installation
+Make sure you configure your __config.yaml__ file (sample included) and place it in anyone of the following directories:
+
+1. ~/.config/newsreap/config.yaml
+2. ~/newsreap/config.yaml
+3. ~/.newsreap/config.yaml
+4. /etc/newsreap/config.yaml
+5. /etc/config.yaml
+
+Assuming you configured the file correctly, you can now start interfacing with you're NNTP Provider.
+
+## Downloading
+If you know the article-id/Message-ID of the item in question, the following
+will retrieve it for you and save it based on your downloading configuration
+defined in your cofiguration file.
+
+You can use the 'search' mode to get a listing of content and their associated
+Message-ID (first column).
+
+```bash
+# Fetch Message-ID aajk2jb from alt.binaries.test
+nr get --group=alt.binaries.test aajk2jb
+
+# If your usenet server doesn't require the `join_group` option, then
+# you don't need to specify the group prior to the Message-ID. Hence this
+# would work on these servers.
+nr get aajk2jb
+
+# You can specify as many articles as you like too to fetch them all
+nr get aajk2jb aajkdb aak2jb
+```
+If you want to download an nzb file; the command doesn't change:
+```bash
+# Just specify it on the commandline
+nr get /path/to/nzbfile.nzb
+
+# You can specify more then one too (there is no limit)
+nr get /path/to/nzbfile.nzb /another/path/to/nzbfile.nzb
+```
+
+If you want to view a header of a particular post you can do the following:
+```bash
+# Fetch the Article header associated with the Message-ID abcd@1234
+nr get --headers abcd@1234
+
+```
+
+## Indexing
+Indexing allows you to scan headers from one or more groups and download them to a local cache.
 ```bash
 # Initialize the database
 nr db init
@@ -42,9 +90,9 @@ nr alias add alt.binaries.sounds sounds
 
 ```
 
-## Search Usage
-Once the database is set up and being populated, it looks after
-generating you're configuration
+### Search
+Once you've indexed certain content you can then begin searching it
+for content:
 ```bash
 # If you want to just scan/search the groups manually; you can now
 # cache these watched groups with the following command:
@@ -73,9 +121,9 @@ nr search sintel -porn +720p
 nr search \+\+\+
 ```
 
-## Index Usage
-Indexing will iterate over the watched groups (or the ones specified)
-and build NZBFiles from content that can be grouped together.
+### Continued Indexing Usage
+Indexing can be automated and keep up with what gets posted. You can set up watch lists and then
+automate there scanning as often as you want.
 
 ```bash
 # Index all of the groups being watched
@@ -92,35 +140,6 @@ cat << _EOF > /etc/cron.d/nzbindex
 # in your best interest to run this as a non-root user
 */20 * * * * root nr update index --watched
 _EOF
-```
-
-## Downloading Usage
-If you know the article-id/Message-ID of the item in question, the following
-will retrieve it for you and save it based on your downloading configuration
-defined in your cofiguration file.
-
-You can use the 'search' mode to get a listing of content and their associated
-Message-ID (first column).
-
-```bash
-# Fetch Message-ID aajk2jb from alt.binaries.test
-nr get --group=alt.binaries.test aajk2jb
-
-# If your usenet server doesn't require the `join_group` option, then
-# you don't need to specify the group prior to the Message-ID. Hence this
-# would work on these servers.
-nr get aajk2jb
-
-# You can specify as many articles as you like too to fetch them all
-nr get aajk2jb aajkdb aak2jb
-```
-If you want to download an nzb file; the command doesn't change:
-```bash
-# Just specify it on the commandline
-nr get /path/to/nzbfile.nzb
-
-# You can specify more then one too (there is no limit)
-nr get /path/to/nzbfile.nzb /another/path/to/nzbfile.nzb
 ```
 
 ## Developers

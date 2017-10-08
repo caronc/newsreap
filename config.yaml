@@ -1,26 +1,128 @@
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#               Sample Newsreap Configuration File
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# This is a sample Newsreap configuration file. When Newsreap is started up
+# it will check the following locations for configuration files (in order):
+#    ~/.config/newsreap/config.yaml
+#    ~/newsreap/config.yaml
+#    ~/.newsreap/config.yaml
+#    /etc/newsreap/config.yaml
+#    /etc/config.yaml
+#
+# So be sure to copy your configuration file in one of the paths identified
+# above and everything will 'just work' assuming your configuration is
+# correct! :)
+#
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Global Configuration
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 global:
-   base_dir: ~/.config/newsreap/
+   # All of newsreap cataloging gets placed here
+   base_dir: ~/.config/newsreap
+   # Defines a working directory to download temporary content into
    work_dir: %{base_dir}/var
 
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   NNTP Server Definitions
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#
+# You may define as many servers as you like; below identifies the default
+# values. If you're happy with the default entries, you can omit them for
+# simplicity if you like.
 servers:
-  - username: myusername
-    password: mypassword
-    host: myprovider
+    # The NNTP Providers hostname and/or IP
+  - host: myprovider
+    # The NNTP Providers port (associated with the hostname)
     port: 563
+
+    # Your login and password
+    username: myusername
+    password: mypassword
+
+    # Use TLS when establishing a connection. This is directly tied to the
+    # port you chose above.
     secure: True
+
+    # Verify the ownership of the provides NNTP Server's certificate (if using
+    # a secure connection) with the Certificate Authority. This is a good
+    # option to enable to avoid a man-in-the-middle attack.
     verify_cert: False
+
+    # Support compression if available;  if compression isn't available, we
+    # automatically safely fall back to rfc3977.  Unless you're certain your
+    # NNTP Provider doesn't support compression, there is no reason to change
+    # this option (to rfc3977)
     iostream: gzip.rfc3977
+
+    # Older NNTP Providers required you to select the Usenet group before
+    # retrieving content from it. This isn't really a thing anymore. To be
+    # backwards compatible, the option is here anyway.
     join_group: False
+
+    # you either download your messages using BODY, or you download your
+    # content using ARTICLE (this is all behind the scenes stuff). The option
+    # is here for those who like to tweak their settings.
     use_body: False
+
+    # You either use HEAD or you use STAT when fetching details about a post
+    # Similar to the use_body above, there is really no reason to change this
+    # value
     use_stat: True
 
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Processing (Before and After Downloading)
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# The processing section defines specifics to how you want to handle i/o
+# to and from the server.
 processing:
+   # Each thread you define here will spawn another connection to you're NNTP
+   # Service Provider.  The more servers you spin, the more work/downloads you
+   # can perform concurrently.  Make sure not to set this value higher then
+   # the maximum number of connections your provider allows.
    threads: 3
+
+   # This option is only used when indexing headers off of usenet for offline
+   # searching/filtering. This defines the number of headers you want to scan
+   # and process at a time. Setting this value between 25000 and 75000 seems
+   # to be the sweet spot. Set it higher if you have lots of cpu power and
+   # lower if you don't. Consider that each thread you defined above will
+   # be processing this many headers concurrently with the others.  Setting
+   # it to high doesn't allow you to distribute the load very well.
    header_batch_size: 25000
+
+   # This should be the absolute path to a directory you've mapped to a
+   # ramdisk. This is more of a Linux thing, but a ramdisk acts as a swapping
+   # location when handling indexed results. e.g:
+   #    mkdir /var/newsreap/swap
+   #
+   #    # Now use tmpfs to create a ramdisk.
+   #    sudo mount -t tmpfs -o size=4G tmpfs /var/newsreap/swap
+   #
+   #    # Older systems may not have tmpfs, so you can use ramfs instead
+   #    # ramfs does not have a physical limit and is specified as a starting
+   #    # size but requires you to specify a value anyway. In the below
+   #    # example, the 1G is not really referenced; you'll use all of your
+   #    # ram until you have no more to offer
+   #    sudo mount -t ramfs -o size=1G ramfs /var/newsreap/swap
+   #
+   #    If you used the examples identified above, you could set your
+   #    ramdisk to be /var/newsreap/swap
+   #
+   #    Note: indexing will behave slower if the you specify a path that
+   #          is not in memory.  In these cases, it's much better to leave
+   #          this set to None.
    ramdisk: None
 
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Posting to your NNTPServer
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# If you plan on posting an article, this field just provides some templated
+# information to make it easier to do so.
 posting:
+    # The author is stamped on all posts you make.
   - author: 'omg <putin@russia.ru>'
+    # If posting binary content, what is the largest size you want your
+    # article to be before it's broken up into segments
     max_article_size: 25M
 
 groups:
@@ -29,6 +131,14 @@ groups:
   - name: 'alt.binaries.series.tv.divx.french'
   - name: 'alt.binaries.multimedia'
 
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Database Configuration
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# The engine must be an SQLAlchemy URL.  They're pretty straight forward
+# and SQLAlchemy allows us to support all of the major databases out there
+# as well.
 database:
-   engine: 'sqlite:////tmp/test.db'
+   engine: 'sqlite://%{base_dir}/newsreap.db'
 #   engine: 'sqlite:///:memory:'
+#   engine: 'mysql+mysqldb://user:pass@hostname/newsreap'
+#   engine: 'postgresql+psycopg2://user:pass@localhost/newsreap'

@@ -2,7 +2,7 @@
 #
 # Test the NNTPSettings Object
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -146,8 +146,9 @@ class NNTPSettings_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
             for server in servers:
-                fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                                for (k, v) in server.items()])))
+                fp.write('  - %s' % ('    '.join(
+                    ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
+
         assert isfile(cfg_file) is True
 
         # Now We test it out
@@ -166,9 +167,9 @@ class NNTPSettings_Test(TestBase):
 
         # Test that our compression flags correctly set the iostream
         assert settings.nntp_servers[0]['iostream'] == \
-                NNTPIOStream.RFC3977
+            NNTPIOStream.RFC3977
         assert settings.nntp_servers[1]['iostream'] == \
-                NNTPIOStream.RFC3977_GZIP
+            NNTPIOStream.RFC3977_GZIP
 
         for i in range(0, len(servers)):
             assert len(settings.nntp_servers[i]) == \
@@ -232,8 +233,8 @@ class NNTPSettings_Test(TestBase):
         # Create a yaml configuration entry we can test with
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
-            fp.write('    %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in processing.items()])))
+            fp.write('    %s' % ('    '.join(
+                ['%s: %s\n' % (k, v) for (k, v) in processing.items()])))
 
         # Now We test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -244,7 +245,7 @@ class NNTPSettings_Test(TestBase):
 
         # However, we should have still been able to load our configuration
         assert len(settings.nntp_processing) == \
-                len(DEFAULT_PROCESSING_VARIABLES)
+            len(DEFAULT_PROCESSING_VARIABLES)
 
         # Confirm we don't worry about invalid entries allowing future
         # configuration files to be backwards compatible with the old
@@ -277,8 +278,8 @@ class NNTPSettings_Test(TestBase):
 
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
-            fp.write(' - %s' % ('  '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in server.items()])))
+            fp.write(' - %s' % ('  '.join(
+                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
 
         # Now we test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -317,12 +318,12 @@ class NNTPSettings_Test(TestBase):
         # The output is invalid (formatting)
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
-            fp.write('  %s' % ('  '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in processing.items()])))
+            fp.write('  %s' % ('  '.join(
+                ['%s: %s\n' % (k, v) for (k, v) in processing.items()])))
 
             fp.write('%s:\n' % SERVER_LIST_KEY)
-            fp.write(' - %s' % ('  '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in server.items()])))
+            fp.write(' - %s' % ('  '.join(
+                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
 
         # Now we test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -359,12 +360,12 @@ class NNTPSettings_Test(TestBase):
         # Create a yaml configuration entry we can test with
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
-            fp.write('    %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in processing.items()])))
+            fp.write('    %s' % ('    '.join(
+                ['%s: %s\n' % (k, v) for (k, v) in processing.items()])))
 
             fp.write('%s:\n' % SERVER_LIST_KEY)
-            fp.write('  - %s' % ('    '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in server.items()])))
+            fp.write('  - %s' % ('    '.join(
+                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
 
         # Now We test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -378,7 +379,7 @@ class NNTPSettings_Test(TestBase):
 
         # However, we should have still been able to load our configuration
         assert len(settings.nntp_processing) == \
-                len(DEFAULT_PROCESSING_VARIABLES)
+            len(DEFAULT_PROCESSING_VARIABLES)
 
         # Confirm we don't worry about invalid entries allowing future
         # configuration files to be backwards compatible with the old
@@ -446,8 +447,8 @@ class NNTPSettings_Test(TestBase):
         # we support this style too for people with just 1 server
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
-            fp.write('  %s' % ('  '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in server.items()])))
+            fp.write('  %s' % ('  '.join(
+                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
 
         # Now we test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -456,3 +457,47 @@ class NNTPSettings_Test(TestBase):
         assert settings.is_valid() is True
         # ... with 1 server identified
         assert len(settings.nntp_servers) == 1
+
+    def test_settings_masking(self):
+        """
+        Test our masking capabilities
+        """
+
+        # Create a settings object
+        settings = NNTPSettings()
+
+        # Define a base_dir
+        settings.base_dir = self.tmp_dir
+
+        # Define a work_dir
+        settings.work_dir = '%{base_dir}/blah'
+
+        # Perform some basic lookups
+        assert(settings.apply_mask('%{base_dir}', lazy=False) == self.tmp_dir)
+        assert(settings.apply_mask('%{work_dir}', lazy=True) ==
+               join(self.tmp_dir, 'blah'))
+
+        # Caching will cause the old directory to still be returned
+        settings.work_dir = '%{base_dir}/new_dir'
+        assert(settings.apply_mask('%{work_dir}', lazy=True) ==
+               join(self.tmp_dir, 'blah'))
+
+        # But toggling the lazy flag will fix this
+        assert(settings.apply_mask('%{work_dir}', lazy=False) ==
+               join(self.tmp_dir, 'new_dir'))
+
+        # We can do custom mapping too
+        assert(settings.apply_mask(
+                '%{work_dir}/%{custom0}-%{test}',
+                mask_map={'%{custom0}': 'boo', '%{test}': 'hoo'}) ==
+               join(self.tmp_dir, 'new_dir', '{0}-{1}'.format('boo', 'hoo')))
+
+        # Recursion loops occur if we define a variable we have no lookup for
+        try:
+            settings.apply_mask('%{work_dir}/%{invalid}/')
+            # We should never get here
+            assert(False)
+
+        except AttributeError:
+            # recursion error occured
+            assert(True)
