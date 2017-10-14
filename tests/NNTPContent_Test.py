@@ -649,3 +649,31 @@ class NNTPContent_Test(TestBase):
         assert isfile(obj_copy.path())
         assert isfile(obj.path())
         assert obj.path() != obj_copy.path()
+
+    def test_mime(self):
+        """
+        Tests mime types on different types of content
+        """
+        ac = NNTPAsciiContent()
+        bc = NNTPBinaryContent()
+
+        # Mime Types aren't detectable with new files
+        assert(ac.mime().type() == 'application/x-empty')
+        assert(bc.mime().type() == 'application/x-empty')
+
+        # Open up a jpeg
+        bc = NNTPBinaryContent(join(self.var_dir, 'joystick.jpg'))
+        assert(bc.mime().type() == 'image/jpeg')
+
+        # Make a copy of our image as a different name
+        assert(bc.save(join(self.tmp_dir, 'weird.name'), copy=True) is True)
+        # We still know it's an image
+        assert(bc.mime().type() == 'image/jpeg')
+
+        # Create ourselves a new file
+        tmp_file = join(self.tmp_dir, 'test.rar')
+        assert(self.touch(tmp_file, size='2KB') is True)
+        bc = NNTPBinaryContent(tmp_file)
+
+        # Now we can guess the name from it's file type
+        assert(bc.mime().type() == 'application/x-rar-compressed')

@@ -2,7 +2,7 @@
 #
 # A container for controlling content found within an article
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -35,12 +35,12 @@ from shutil import Error as ShutilError
 from zlib import crc32
 from blist import sortedset
 from types import MethodType
-
 from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
 from newsreap.Utils import mkdir
 from newsreap.Utils import rm
 from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import strsize_to_bytes
+from newsreap.Mime import Mime
 
 from newsreap.Utils import SEEK_SET
 from newsreap.Utils import SEEK_END
@@ -1105,6 +1105,28 @@ class NNTPContent(object):
             return format(_crc & BIN_MASK, '08x')
 
         return None
+
+    def mime(self):
+        """
+        Returns the mime of the object
+            Source: https://github.com/ahupp/python-magic
+        """
+
+        # Initialize our Mime object
+        m = Mime()
+
+        if self.open(mode=NNTPFileMode.BINARY_RO):
+            mr = m.from_content(self.stream.read(128))
+        else:
+            mr = None
+
+        if mr is None or mr.type() == 'application/octet-stream':
+            # Try one more time by the filename
+            mr = m.from_filename(
+                self.filename if self.filename else self.filepath)
+
+        # Return our type
+        return mr
 
     def md5(self):
         """
