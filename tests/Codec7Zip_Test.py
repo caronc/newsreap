@@ -65,11 +65,7 @@ class Codec7Zip_Test(TestBase):
 
         result = SEVEN_ZIP_PART_RE.match('/path/to/test.7z.001')
         assert result is not None
-        assert result.group('part') == '001'
-
-        result = SEVEN_ZIP_PART_RE.match('/path/to/test.200')
-        assert result is not None
-        assert result.group('part') == '200'
+        assert result.group('part0') == '001'
 
         result = SEVEN_ZIP_PART_RE.match('/path/to/test.part65.7z')
         assert result is not None

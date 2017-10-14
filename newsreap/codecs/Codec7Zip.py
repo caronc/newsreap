@@ -2,7 +2,7 @@
 #
 # A Codec for handling 7-Zip Files
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -42,10 +42,12 @@ DEFAULT_SPLIT_SIZE = strsize_to_bytes('25M')
 
 # Used to detect the 7z part #
 #  - supports .7z, 7za
-#  - supports .7z0, .7z1, .r02, etc
+#  - supports .7z0, .7z1, .7z2, etc
 #  - supports .part00.7z, .part01.7z, etc
+#  - supports .7z.000, .7z.001, etc
+#  - supports .7za.000, .7za.001, etc
 SEVEN_ZIP_PART_RE = re.compile(
-    '^.*?\.((part|7z|)(?P<part>[0-9]+)(\.7z)?|7z)$',
+    '^.*?\.(part(?P<part>[0-9]+)\.7z|7za?\.?(?P<part0>[0-9]+)?)$',
     re.IGNORECASE,
 )
 
@@ -219,6 +221,9 @@ class Codec7Zip(CodecFile):
                 if _re_results.group('part') is not None:
                     part = int(_re_results.group('part'))
 
+                elif _re_results.group('part0') is not None:
+                    part = int(_re_results.group('part0'))
+
                 else:
                     part += 1
 
@@ -337,7 +342,7 @@ class Codec7Zip(CodecFile):
 
                 if not len(found_set):
                     logger.warning(
-                        '7Z archive (%s) contained no content.' % \
+                        '7Z archive (%s) contained no content.' %
                         basename(_path),
                     )
 
