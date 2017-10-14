@@ -50,13 +50,13 @@ try:
     SECURE_PROTOCOL_PRIORITY = (
         # The first element is the default priority
         # the remainders are tried next
-         (ssl.PROTOCOL_TLSv1_2, u'TLS v1.2'),
-         (ssl.PROTOCOL_TLSv1_1, u'TLS v1.1'),
-         (ssl.PROTOCOL_TLSv1, u'TLS v1.0'),
+        (ssl.PROTOCOL_TLSv1_2, u'TLS v1.2'),
+        (ssl.PROTOCOL_TLSv1_1, u'TLS v1.1'),
+        (ssl.PROTOCOL_TLSv1, u'TLS v1.0'),
 
         # The following are not 100% secure but are sometimes
         # the only option
-         (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
+        (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
     )
 
 except AttributeError:
@@ -64,11 +64,11 @@ except AttributeError:
     SECURE_PROTOCOL_PRIORITY = (
         # The first element is the default priority
         # the remainders are tried next
-         (ssl.PROTOCOL_TLSv1, u'TLS v1.0'),
+        (ssl.PROTOCOL_TLSv1, u'TLS v1.0'),
 
         # The following are not 100% secure but are sometimes
         # the only option
-         (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
+        (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
     )
 
 
@@ -149,9 +149,9 @@ class SocketBase(object):
             # If self.secure identifies an actual protocol, we want to use it
             # The below simply looks for it's existance, and if it isn't
             # present then we return None
-            self.secure_protocol_idx = next((i for i, v in \
-                          enumerate(SECURE_PROTOCOL_PRIORITY) \
-                                             if v[0] == self.secure), None)
+            self.secure_protocol_idx = next(
+                (i for i, v in enumerate(SECURE_PROTOCOL_PRIORITY)
+                    if v[0] == self.secure), None)
 
             if self.secure_protocol_idx is None:
                 # Protocol specified was not found and/or supported; alert the
@@ -421,15 +421,16 @@ class SocketBase(object):
 
                 # Store local details of our socket
                 (self._local_addr, self._local_port) = \
-                        self.socket.getsockname()
+                    self.socket.getsockname()
                 (self._remote_addr, self._remote_port) = \
-                        self.socket.getpeername()
+                    self.socket.getpeername()
 
                 logger.info(
                     "Connection established to %s:%d" % (
-                    self._remote_addr,
-                    self._remote_port,
-                ))
+                        self._remote_addr,
+                        self._remote_port,
+                    )
+                )
 
                 if self.secure is False:
                     # A non secure connection; we're done
@@ -452,8 +453,7 @@ class SocketBase(object):
                 self.close()
                 logger.debug(
                     "Failed to secure connection using %s / errno=%d" % (
-                        SECURE_PROTOCOL_PRIORITY\
-                            [self.secure_protocol_idx][1],
+                        SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
                         e[0],
                     ),
                 )
@@ -473,7 +473,7 @@ class SocketBase(object):
                 raise SocketRetryLimit('There are no protocols left to try.')
 
             except socket.error, e:
-                logger.debug("Socket exception received: %s" % (e));
+                logger.debug("Socket exception received: %s" % (e))
                 if e[0] == errno.EINTR:
                     # Ensure socket is closed
                     self.close()
@@ -495,7 +495,8 @@ class SocketBase(object):
                 # difference defined by timeout
                 delta_time = datetime.now() - cur_time
                 delta_time = (delta_time.days * 86400) + delta_time.seconds \
-                             + (delta_time.microseconds/1e6)
+                    + (delta_time.microseconds/1e6)
+
                 if delta_time >= timeout:
                     # Connection timeout elapsed
                     self.close()
@@ -600,7 +601,8 @@ class SocketBase(object):
                 # difference defined by timeout
                 delta_time = datetime.now() - cur_time
                 delta_time = (delta_time.days * 86400) + delta_time.seconds \
-                             + (delta_time.microseconds/1e6)
+                    + (delta_time.microseconds/1e6)
+
                 if delta_time >= timeout:
                     # Connection timeout elapsed
                     self.close()
@@ -624,9 +626,10 @@ class SocketBase(object):
 
         logger.info(
             "Connection established to %s:%d" % (
-            self._remote_addr,
-            self._remote_port,
-        ))
+                self._remote_addr,
+                self._remote_port,
+            )
+        )
 
         if self.secure is False:
             # A non secure connection; we're done
@@ -652,8 +655,7 @@ class SocketBase(object):
             # Secure Connection Failed
             logger.debug(
                 "Failed to secure connection using %s / errno=%d" % (
-                    SECURE_PROTOCOL_PRIORITY\
-                        [self.secure_protocol_idx][1],
+                    SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
                     e[0],
                 ),
             )
@@ -691,7 +693,6 @@ class SocketBase(object):
         self.connected = True
 
         return True
-
 
     def read(self, max_bytes=32768, timeout=None, retry_wait=0.25):
         """read()
@@ -735,8 +736,7 @@ class SocketBase(object):
             # Update Elapsed Time
             elapsed_time = datetime.now() - cur_time
             elapsed_time = (elapsed_time.days * 86400) \
-                             + elapsed_time.seconds \
-                             + (elapsed_time.microseconds/1e6)
+                + elapsed_time.seconds + (elapsed_time.microseconds/1e6)
 
             if timeout and elapsed_time > timeout:
                 # Time is up; return what we have
@@ -1023,7 +1023,7 @@ class SocketBase(object):
             kwargs['ca_certs'] = self._ca_certs
             if not isfile(self._ca_certs):
                 raise ValueError(
-                    'Could not locate CA Certificates: %s' % \
+                    'Could not locate CA Certificates: %s' %
                     self._ca_certs,
                 )
 
@@ -1045,14 +1045,13 @@ class SocketBase(object):
                 self.socket.do_handshake()
 
                 logger.info("Secured connection using %s." % (
-                    SECURE_PROTOCOL_PRIORITY\
-                        [self.secure_protocol_idx][1],
+                    SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
                 ))
 
                 if not server_side:
                     # Store our peer certificate
                     try:
-                        #self.peer_certificate = \
+                        # self.peer_certificate = \
                         #    self.socket.getpeercert(binary_form=False)
                         # Returns None if there is no certificate for the peer
                         # on the other end; there is always a binary form, but
@@ -1095,38 +1094,44 @@ class SocketBase(object):
                         try:
                             cert_host = \
                                 self.peer_certificate.subject\
-                                    .get_attributes_for_oid(NameOID.COMMON_NAME)\
+                                    .get_attributes_for_oid(
+                                            NameOID.COMMON_NAME)\
                                     .pop().value
 
                             # Perform a reverse lookup on our remote IP Address
                             (host, alias, ips) = \
-                                    socket.gethostbyaddr(self._remote_addr)
+                                socket.gethostbyaddr(self._remote_addr)
 
                             # certificate syntax; a simple flick and we make it
                             # a regex supported expression
                             cert_host = cert_host\
-                                    .replace('.', '\\.')\
-                                    .replace('*\\.', '.*\\.')
+                                .replace('.', '\\.')\
+                                .replace('*\\.', '.*\\.')
 
                             # If we get here, we've got a hostname to work with
-                            host_match_re = re.compile(cert_host, re.IGNORECASE)
-                            matched_host = next((h for h in \
-                                          [ host ] + alias + ips
-                                          if host_match_re.match(h) \
-                                                 is not None), False)
+                            host_match_re = re.compile(
+                                cert_host,
+                                re.IGNORECASE,
+                            )
+
+                            matched_host = next(
+                                (h for h in [host] + alias + ips
+                                 if host_match_re.match(h) is not None), False)
 
                             if not matched_host:
                                 raise SocketRetryLimit(
                                     "Certificate for '%s' and does not match." % (
                                         cert_host,
-                                ))
+                                    )
+                                )
 
                         except socket.herror, e:
                             if e[0] == 2:
                                 raise SocketRetryLimit(
                                     "Certificate for '%s' could not be resolved." % (
                                         self._remote_addr,
-                                ))
+                                    )
+                                )
 
                             # raise anything else
                             raise
@@ -1168,8 +1173,7 @@ class SocketBase(object):
                 # Update Elapsed Time
                 elapsed_time = datetime.now() - cur_time
                 elapsed_time = (elapsed_time.days * 86400) \
-                                 + elapsed_time.seconds \
-                                 + (elapsed_time.microseconds/1e6)
+                    + elapsed_time.seconds + (elapsed_time.microseconds/1e6)
 
                 if elapsed_time > timeout:
                     # Times up
