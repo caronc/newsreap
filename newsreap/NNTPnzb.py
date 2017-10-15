@@ -2,7 +2,7 @@
 #
 # A wrapper to greatly simplify manipulation of NZB Files
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -135,6 +135,13 @@ class NNTPnzb(NNTPContent):
 
         # Track segmented files when added
         self.segments = sortedset(key=lambda x: x.key())
+
+        # Segments are loaded on our first iteration through the NZB-File
+        # Once these are loaded, most of the functions references come from the
+        # self.segments instead of re-parsing the XML file again and again
+        # We can use self.segments to rebuild a brand new XML file too
+        self._segments_loaded = False
+        self._segment_segment_iter = None
 
         # Initialize our parent
         super(NNTPnzb, self).__init__(work_dir=work_dir, *args, **kwargs)
@@ -530,6 +537,10 @@ class NNTPnzb(NNTPContent):
 
         file_count = len(self.segments)
 
+        # We're manually loading the segments so we can trust wherever
+        # we leave off
+        self._segments_loaded = True
+
         return file_count > _bcnt
 
     def unescape_xml(self, escaped_xml, encoding=None):
@@ -594,9 +605,13 @@ class NNTPnzb(NNTPContent):
         Python 2 support
         Support stream type functions and iterations
         """
+
         if self.xml_root is not None:
             # clear our unused memory
             self.xml_root.clear()
+
+        if self._segments_loaded is True:
+            return self._segment_segment_iter.next()
 
         # get the root element
         try:
@@ -646,6 +661,10 @@ class NNTPnzb(NNTPContent):
             self.xml_iter = None
             self.xml_root = None
             self.xml_itr_count = 0
+
+            # Toggle our segments loaded flag now that we've iterated through
+            # our NZB-File (reguardless if we were successful or not)
+            self._segments_loaded = True
             raise StopIteration()
 
         if self.meta is None:
@@ -728,6 +747,12 @@ class NNTPnzb(NNTPContent):
             # Track our index
             _last_index = _cur_index
 
+        # Add our segmented file to our map. It's important we add it to our
+        # sortedset directly and not do it through self.add() because self.add()
+        # will toggle a flag marking that our segmented list as being completed
+        # when it most certainly is not!
+        self.segments.add(_file)
+
         # Return our object
         return _file
 
@@ -745,6 +770,14 @@ class NNTPnzb(NNTPContent):
 
         # First get a ptr to the head of our data
         super(NNTPnzb, self).__iter__()
+
+        if self._segments_loaded is True:
+            self._segment_segment_iter = iter(self.segments)
+            return self
+
+        elif len(self.segments) > 0:
+            # make sure we don't have any segments lingering
+            self.segments.clear()
 
         if self.xml_root is not None:
             # clear our unused memory
@@ -793,7 +826,8 @@ class NNTPnzb(NNTPContent):
         """
         Returns the number of files in the NZB File
         """
-        return sum(1 for c in self)
+        return len(self.segments) if self._segments_loaded \
+            else sum(1 for c in self)
 
     def __getitem__(self, index):
         """
