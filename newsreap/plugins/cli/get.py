@@ -129,6 +129,9 @@ def get(ctx, group, workdir, headers, inspect, sources):
                             if response and len(response):
                                 # Display any binary content:
                                 print('****')
+                                print('Mime-Type: %s' % (
+                                    response.decoded[0].mime().type(),
+                                ))
                                 print(hexdump(response.decoded[0].getvalue()))
 
                 continue
@@ -180,6 +183,9 @@ def get(ctx, group, workdir, headers, inspect, sources):
                     if response and len(response):
                         # Display any binary content:
                         print('****')
+                        print('Mime-Type: %s' % (
+                            response.decoded[0].mime().type(),
+                        ))
                         print(hexdump(response.decoded[0].getvalue()))
 
                 # Move along
