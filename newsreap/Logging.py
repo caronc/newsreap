@@ -146,7 +146,7 @@ def init(verbose=2, sendto=True, backupCount=5):
     )
 
     if verbose:
-        set_verbosity(verbose)
+        set_verbosity(verbose=verbose)
 
 
 def set_verbosity(verbose):
@@ -157,26 +157,20 @@ def set_verbosity(verbose):
     # Handle Verbosity
     if verbose > 0:
         logging.getLogger(NEWSREAP_CLI).setLevel(logging.INFO)
+        logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.INFO)
 
     if verbose > 1:
         logging.getLogger(NEWSREAP_CLI).setLevel(logging.DEBUG)
-
-    if verbose > 2:
-        logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.INFO)
-
-    if verbose > 3:
-        logging.getLogger(NEWSREAP_CODEC).setLevel(logging.INFO)
-
-    if verbose > 4:
         logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.DEBUG)
 
-    if verbose > 5:
+    if verbose > 2:
         logging.getLogger(SQLALCHEMY_ENGINE).setLevel(logging.INFO)
+        logging.getLogger(NEWSREAP_CODEC).setLevel(logging.INFO)
 
-    if verbose > 6:
+    if verbose > 3:
         logging.getLogger(NEWSREAP_CODEC).setLevel(logging.DEBUG)
 
-    if verbose > 7:
+    if verbose > 4:
         logging.getLogger(SQLALCHEMY_ENGINE).setLevel(logging.DEBUG)
 
 # set initial level to WARN.
