@@ -16,6 +16,7 @@
 
 import errno
 import hashlib
+import weakref
 
 from os import unlink
 from os import fdopen
@@ -359,7 +360,7 @@ class NNTPContent(object):
                 else:
                     self.stream.seek(0L, SEEK_END)
 
-                return True
+                return weakref.ref(self.stream)
 
         if not filepath and self.filepath:
             # Update filepath
@@ -392,7 +393,7 @@ class NNTPContent(object):
                 )
                 return False
 
-            return True
+            return weakref.ref(self.stream)
 
         if isinstance(filepath, basestring):
 
@@ -455,7 +456,7 @@ class NNTPContent(object):
             # Ensure we're at the end of the file
             self.stream.seek(0L, SEEK_END)
 
-        return True
+        return weakref.ref(self.stream)
 
     def encode(self, encoder):
         """
@@ -914,7 +915,7 @@ class NNTPContent(object):
             # open the file if it's not already open
             self.open(mode=NNTPFileMode.BINARY_RW, eof=eof)
 
-        self.stream.write(data)
+        response = self.stream.write(data)
 
         if not self._dirty:
             # Set dirty flag
@@ -923,6 +924,8 @@ class NNTPContent(object):
             # We can't trust self._end anymore now because content was
             # written to the file.
             self._end = None
+
+        return response
 
     def read(self, n=-1):
         """
@@ -967,7 +970,7 @@ class NNTPContent(object):
         if isinstance(content, NNTPContent):
             content = [content]
 
-        if not self.open(mode=NNTPFileMode.BINARY_RW, eof=True):
+        if not self.open(mode=NNTPFileMode.BINARY_WO, eof=True):
             return False
 
         for entry in content:
@@ -1293,6 +1296,28 @@ class NNTPContent(object):
             return '%s.%.5d' % (self.filename, self.part)
 
         return self.filename
+
+    def __enter__(self):
+        """
+        supports use of the 'with' clause.  You can use the expression:
+
+        with myobj as fp:
+            # write and/or read content here
+
+        """
+        # Open our file and return a pointer to it
+        if self.open():
+            return self
+
+        # Throw an exception
+        raise IOError(errno.EIO, 'Could not open NNTPContent', self.path())
+
+    def __exit__(self, type, value, traceback):
+        """
+        our exit function executed from the 'with' clause
+        """
+        # Close our file (if open)
+        self.close()
 
     def __repr__(self):
         """
