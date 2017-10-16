@@ -2,7 +2,7 @@
 #
 # A base testing class/library to test the Utils functions
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -159,14 +159,11 @@ class Utils_Test(TestBase):
 
         # Filesize should actually match what we set it as
         assert bytes_to_strsize(stats['size']) == "1.00MB"
+
         # different OS's and variations of python can yield different
         # results.  We're trying to just make sure that we find the
         # rar keyword in the mime type
-        assert re.search(
-            'application/.*rar.*',
-            stats['mime'],
-            re.IGNORECASE,
-        ) is not None
+        assert(stats['mime'] == 'application/x-rar-compressed')
 
         # Create Temporary file 1MB in size
         tmp_file = join(self.tmp_dir, 'Utils_Test.stat', '2MB.zip')

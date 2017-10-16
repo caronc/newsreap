@@ -2,7 +2,7 @@
 #
 # A simple collection of general functions
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -67,10 +67,6 @@ from stat import S_ISDIR
 from os import W_OK
 from os import stat as os_stat
 
-# MIME Libraries
-from mimetypes import guess_type
-from urllib import pathname2url
-
 # Python 3 Support
 try:
     from importlib.machinery import SourceFileLoader
@@ -84,6 +80,8 @@ except ImportError:
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
+from newsreap.Mime import Mime
+from newsreap.Mime import DEFAULT_MIME_TYPE
 
 # delimiters used to separate values when content is passed in by string
 # This is useful when turning a string into a list
@@ -101,35 +99,27 @@ TIDY_WIN_PATH_RE = re.compile(
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
-))
+    ),
+)
 TIDY_WIN_TRIM_RE = re.compile(
     '^(.+[^:][^%s])[\s%s]*$' % (
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
-))
+    ),
+)
 
 TIDY_NUX_PATH_RE = re.compile(
     '([%s])([%s]+)' % (
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
-))
+    ),
+)
 
 TIDY_NUX_TRIM_RE = re.compile(
     '([^%s])[\s%s]+$' % (
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
-))
-
-
-# This table allows us to support MIMEs that may not have otherwise
-# been detected by our system.  It purely bases it's result on the
-# filename extension and is only referenced if the built in mime
-# applications didn't work.
-NEWSREAP_MIME_TABLE = (
-    (re.compile(r'\.r(ar|[0-9]{2})\s*$', re.IGNORECASE),
-     'application/x-rar-compressed'),
-    (re.compile(r'\.z(ip|[0-9]{2})\s*$', re.IGNORECASE),
-     'application/zip'),
+    ),
 )
 
 DEFAULT_PYLIB_IGNORE_LIST = (
@@ -171,15 +161,14 @@ def strsize_to_bytes(strsize):
         example: 4TB, 3GB, 10MB, 25KB, etc
 
     """
-    #strsize = re.sub('[^0-9BKMGT]+', '', strsize, re.IGNORECASE)
-
     if isinstance(strsize, int):
         # Nothing further to do
         return strsize
 
     try:
         strsize_re = re.match(
-            r'\s*(?P<size>(0|[1-9][0-9]*)(\.(0+|[1-9][0-9]*))?)\s*((?P<unit>.)(?P<type>[bB])?)?\s*',
+            r'\s*(?P<size>(0|[1-9][0-9]*)(\.(0+|[1-9][0-9]*))?)\s*'
+            r'((?P<unit>.)(?P<type>[bB])?)?\s*',
             strsize,
         )
     except TypeError:
@@ -339,15 +328,15 @@ def stat(path, fsinfo=True, mime=True):
         nfo['size'] = stat_obj[ST_SIZE]
 
     if mime:
-        url = pathname2url(_basename)
-        mime_type = guess_type(url)[0]
+        # Create ourselves a mime object
+        m = Mime()
+        mr = m.from_file(_abspath)
 
-        if mime_type is None:
-            # Default MIME Type if nothing found in our backup list
-            mime_type = next((m[1] for m in NEWSREAP_MIME_TABLE \
-                  if m[0].search(_basename)), 'application/octet-stream')
+        if mr is None or mr.type() == DEFAULT_MIME_TYPE:
+            mr = m.from_filename(_basename)
 
-        nfo['mime'] = mime_type
+        # Store our type
+        nfo['mime'] = mr.type()
 
     return nfo
 
@@ -392,7 +381,8 @@ def rm(path, *args, **kwargs):
 
     See http://stackoverflow.com/a/2656405 for a partial basis of
     why this rewrite exists.  The on_error refernced in this function didn't
-    really satisfy my needs, so a rewrite of the rmtree() function was required.
+    really satisfy my needs, so a rewrite of the rmtree() function was
+    required.
 
     """
     if not exists(path):
@@ -489,6 +479,7 @@ def rm(path, *args, **kwargs):
 
     return True
 
+
 def scan_pylib(paths, ignore_re=DEFAULT_PYLIB_IGNORE_LIST):
     """
     A simple function that scans specified paths for .pyc files
@@ -526,7 +517,7 @@ def scan_pylib(paths, ignore_re=DEFAULT_PYLIB_IGNORE_LIST):
                 # Not our type of file
                 continue
 
-            if next((True for r in ignore_re \
+            if next((True for r in ignore_re
                      if r.match(result.group('fname')) is not None), False):
                 # We already loaded an alike file
                 # we don't wnat to over-ride it or we matched an element
@@ -677,7 +668,7 @@ def parse_url(url, default_schema='http'):
     # Parse Query Arugments ?val=key&key=val
     # while ensureing that all keys are lowercase
     if qsdata:
-        result['qsd'] = dict([(k.lower().strip(), v.strip()) \
+        result['qsd'] = dict([(k.lower().strip(), v.strip())
                               for k, v in parse_qsl(
             qsdata,
             keep_blank_values=True,
@@ -801,9 +792,9 @@ def parse_list(*args):
 
 
 def find(search_dir, regex_filter=None, prefix_filter=None,
-                suffix_filter=None, fsinfo=False, mime=False,
-               followlinks=False, min_depth=None, max_depth=None,
-              case_sensitive=False, *args, **kwargs):
+         suffix_filter=None, fsinfo=False, mime=False, followlinks=False,
+         min_depth=None, max_depth=None, case_sensitive=False,
+         *args, **kwargs):
     """Returns a dict object of the files found in the download
        directory. You can additionally pass in filters as a list or
        string) to filter the results returned.
@@ -996,8 +987,8 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
         return {}
 
     # Get Directory entries
-    dirents = [d for d in listdir(search_dir) \
-              if d not in ('..', '.')]
+    dirents = [d for d in listdir(search_dir)
+               if d not in ('..', '.')]
 
     for dirent in dirents:
         # Store Path
@@ -1199,8 +1190,8 @@ def hexdump(src, length=16, sep='.'):
     """
     allowed = digits + ascii_letters + punctuation + ' '
 
-    print_map = ''.join(((x if x in allowed else '.') \
-        for x in map(chr, range(256))))
+    print_map = ''.join(((x if x in allowed else '.')
+                        for x in map(chr, range(256))))
     lines = []
 
     for c in xrange(0, len(src), length):
