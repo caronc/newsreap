@@ -49,6 +49,11 @@ import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
+# Default Mime Type
+DEFAULT_MIME_EMTPTY_FILE = 'application/x-empty'
+DEFAULT_MIME_TYPE = 'application/octet-stream'
+DEFAULT_MIME_ENCODING = 'binary'
+
 # Our libmagic flag
 _libmagic = ctypes.cdll.LoadLibrary(
     find_library('magic') or
@@ -100,21 +105,12 @@ else:
     _magic['load'].restype = c_int
     _magic['load'].argtypes = [magic_t, c_char_p]
 
-# Flag constants for open and setflags
-MAGIC_NONE = 0
-MAGIC_DEBUG = 1
-MAGIC_SYMLINK = 2
+# Flag constants for open and setflags; this is a condensed list since we only
+# identify what we're actually using in this module
 MAGIC_COMPRESS = 4
-MAGIC_DEVICES = 8
-MAGIC_MIME_TYPE = 16
 MAGIC_CONTINUE = 32
-MAGIC_CHECK = 64
-MAGIC_PRESERVE_ATIME = 128
-MAGIC_RAW = 256
-MAGIC_ERROR = 512
 MAGIC_MIME_ENCODING = 1024
 MAGIC_MIME = 1040
-MAGIC_APPLE = 2048
 
 # The delimiters we use to divy up our results
 MAGIC_LIST_RE = re.compile('\s*[;]+\s*')
@@ -128,6 +124,23 @@ TYPE_PARSE_RE = re.compile(
     re.I,
 )
 
+# An advanced regular expression that can be used to extract the extension
+# in filenames. This is an alternative to os.path.splittext().
+# Support all kinds of extension catching such as:
+#     test.txt => .txt
+#     test.part00.7z => .part00.7z
+#     test.part00.7z.par2 => .part00.7z.par2
+#     test.tar.gz => .tar.gz
+#     A.crazy.filename.with.lots.of.content.part00.7z.vol03+4.par2
+#                 => .part00.7z.vol03+4.par2
+#
+EXTENSION_SEARCH_RE = re.compile(
+    r'(?P<ext>(\.part[0-9]+)?'
+    r'\.[0-9a-z]{2,4}'
+    r'(\.(gz|bz2?|xz))?'
+    r'(\.vol[0-9]+(\+[0-9]+)?)?(\.par2?)?)\s*$',
+    re.I,
+)
 # servers. This table is used for matching based on filename in addition to
 # performing reverse lookups if we know the type. This list is intentionally
 # ordered from the most likely match from a usenet download to the least.
@@ -164,23 +177,31 @@ MIME_TYPES = (
     ('application/tar+bzip', re.compile(MT_PREFIX_RE +
      r'(?P<ext>\.t(ar\.bz|bz))\s*$', flags=re.I), 'binary', '.tar.bz'),
 
+    # LZMA2 Compression Tape Archive .xz
+    ('application/tar+xz', re.compile(MT_PREFIX_RE +
+     r'(?P<ext>\.t(ar\.xz|xz))\s*$', flags=re.I), 'binary', '.tar.xz'),
+
     # GZipped Tape Archive (TAR)
     ('application/tar+gzip', re.compile(MT_PREFIX_RE +
      r'(?P<ext>\.t(ar\.gz|gz))\s*$', flags=re.I), 'binary', '.tar.gz'),
 
-    # Tape Archive (TAR)
+    # Tape Archive (TAR) .tar
     ('application/x-tar', re.compile(MT_PREFIX_RE +
      r'(?P<ext>\.tar)\s*$', flags=re.I), 'binary', '.tar'),
 
-    # GZip
+    # GZip .gz
     ('application/x-gzip', re.compile(MT_PREFIX_RE +
      r'(?P<ext>\.gz)\s*$', flags=re.I), 'binary', '.gz'),
 
-    # B-Zip 2
+    # B-Zip 2 .bz2
     ('application/x-bzip2', re.compile(MT_PREFIX_RE +
      r'(?P<ext>\.bz2)\s*$', flags=re.I), 'binary', '.bz2'),
 
-    # B-Zip
+    # LZMA2 Compression .xz
+    ('application/x+xz', re.compile(MT_PREFIX_RE +
+     r'(?P<ext>\.xz)\s*$', flags=re.I), 'binary', '.xz'),
+
+    # B-Zip .bz
     ('application/x-bzip', re.compile(MT_PREFIX_RE +
      r'(?P<ext>\.bz)\s*$', flags=re.I), 'binary', '.bz'),
 
@@ -322,7 +343,8 @@ MIME_TYPES = (
 
     # Support PAR files (.par, .par2)
     ('application/x-par2', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.par2?)\s*$', flags=re.I), 'binary', '.par'),
+     r'(?P<ext>\.par2?(\.vol[0-9]+(\+[0-9]+)?)?)\s*$', flags=re.I),
+     'binary', '.par'),
 
     # text files
     ('text/plain', re.compile(MT_PREFIX_RE +
@@ -428,12 +450,12 @@ MIME_TYPES = (
     # ====================================================================== #
 
     # The second last entry must always catch all that has an extension
-    ('application/octet-stream', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.[^ \t]+)\s*$'), '', ''),
+    (DEFAULT_MIME_TYPE, re.compile(MT_PREFIX_RE +
+     r'(?P<ext>\.[^ \t]+)\s*$'), DEFAULT_MIME_ENCODING, ''),
 
     # The last entry must always be the empty - catch all
-    ('application/octet-stream', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>)\s+$'), '', ''),
+    (DEFAULT_MIME_TYPE, re.compile(MT_PREFIX_RE +
+     r'(?P<ext>)\s+$'), DEFAULT_MIME_ENCODING, ''),
 )
 
 
@@ -441,8 +463,8 @@ class MimeResponse(object):
     """
     Our mime result
     """
-    def __init__(self, mime_type='application/x-empty',
-                 mime_encoding='binary'):
+    def __init__(self, mime_type=DEFAULT_MIME_EMTPTY_FILE,
+                 mime_encoding=DEFAULT_MIME_ENCODING):
         """
         Initializes our MimeResponse object
         """
@@ -587,8 +609,8 @@ class Mime(object):
 
             # If we get here, we didn't even get an error
             return MimeResponse(
-                mime_type='application/octet-stream',
-                mime_encoding='binary',
+                mime_type=DEFAULT_MIME_TYPE,
+                mime_encoding=DEFAULT_MIME_ENCODING,
             )
 
         finally:
@@ -680,8 +702,8 @@ class Mime(object):
 
             # If we get here, we didn't even get an error
             return MimeResponse(
-                mime_type='application/octet-stream',
-                mime_encoding='binary',
+                mime_type=DEFAULT_MIME_TYPE,
+                mime_encoding=DEFAULT_MIME_ENCODING,
             )
 
         finally:
@@ -713,10 +735,13 @@ class Mime(object):
                 mime_encoding=mime_type[2],
             )
 
-        # No match
-        return None
+        # No match; default response
+        return MimeResponse(
+            mime_type=DEFAULT_MIME_TYPE,
+            mime_encoding=DEFAULT_MIME_ENCODING,
+        )
 
-    def get_extension(self, mime_type):
+    def extension_from_mime(self, mime_type):
         """
         takes a mime type and returns the file extension that bests matches
         it. This function returns an empty string if the mime type can't
@@ -729,6 +754,34 @@ class Mime(object):
 
         # iterate over our list and return on our first match
         return next((m[3] for m in MIME_TYPES if mime_type == m[0]), '')
+
+    def extension_from_filename(self, filename):
+        """
+        Takes a filename and extracts the extension from it (if possible).
+        This function is a little like the os.path.splittext() which can
+        take a file like:  test.jpg and return the .jpg. But it can not
+        however handle names like text.jpeg.gz (to which it would just
+        return .gz in this case.
+
+        This function (specifically written for newsreap/usenet parsing)
+        will attempt to extract a worthy extension (all of it) from the
+        filename. Hence:
+
+            extension_from_filename('myfile.pdf.vol03+4.par2')
+               will return '.pdf.vol03+4.par2'
+
+        """
+
+        if not filename:
+            # Invalid; but return an empty string
+            return ''
+
+        result = EXTENSION_SEARCH_RE.search(filename)
+        if result:
+            return result.group('ext')
+
+        # Nothing found if we reach here
+        return ''
 
     def _tostr(self, s, encoding='utf-8'):
         if s is None:

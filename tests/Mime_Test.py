@@ -151,6 +151,22 @@ class Mime_Test(TestBase):
         assert(response.type() == 'application/x-7z-compressed')
         assert(response.encoding() == 'binary')
 
+        # Support variations of par files
+        response = m.from_filename('test.par')
+        assert(isinstance(response, MimeResponse))
+        assert(response.type() == 'application/x-par2')
+        assert(response.encoding() == 'binary')
+
+        response = m.from_filename('test.par2')
+        assert(isinstance(response, MimeResponse))
+        assert(response.type() == 'application/x-par2')
+        assert(response.encoding() == 'binary')
+
+        response = m.from_filename('test.pdf.vol03+4.par2')
+        assert(isinstance(response, MimeResponse))
+        assert(response.type() == 'application/x-par2')
+        assert(response.encoding() == 'binary')
+
         for inc in range(0, 100):
             response = m.from_filename('test.part%.2d.7z' % inc)
             assert(isinstance(response, MimeResponse))
@@ -191,7 +207,7 @@ class Mime_Test(TestBase):
             assert(response.encoding() == x[2])
             assert(response.type() == x[0])
 
-    def test_get_extension(self):
+    def test_extension_from_mime(self):
         """
         Tests extension matching
         """
@@ -200,12 +216,69 @@ class Mime_Test(TestBase):
         m = Mime()
 
         # Empty content just gives us an empty response
-        assert(m.get_extension(None) == '')
-        assert(m.get_extension("") == '')
-        assert(m.get_extension(u"") == '')
+        assert(m.extension_from_mime(None) == '')
+        assert(m.extension_from_mime("") == '')
+        assert(m.extension_from_mime(u"") == '')
 
         # there is no lookkup either if the mime simply doesn't exist
-        assert(m.get_extension("invalid/mime") == '')
+        assert(m.extension_from_mime("invalid/mime") == '')
 
         # But if we know it, we'll pass it back
-        assert(m.get_extension('application/x-7z-compressed') == '.7z')
+        assert(m.extension_from_mime('application/x-7z-compressed') == '.7z')
+
+    def test_extension_from_filename(self):
+        """
+        Test extension lookups by their filename.
+
+        An advanced os.path.splittext() if you will.
+        """
+
+        # Initialize our mime object
+        m = Mime()
+
+        # Empty content just gives us an empty response
+        assert(m.extension_from_filename(None) == '')
+        assert(m.extension_from_filename("") == '')
+        assert(m.extension_from_filename(u"") == '')
+
+        # NZB File
+        assert(m.extension_from_filename("a.longer.name.test.nzb") == '.nzb')
+
+        # Has no extension:
+        assert(m.extension_from_filename("test") == '')
+
+        # tar.gz files:
+        assert(m.extension_from_filename("test.tar.gz") == '.tar.gz')
+        assert(m.extension_from_filename("test.tgz") == '.tgz')
+
+        # tar.bz files
+        assert(m.extension_from_filename("test.tar.bz") == '.tar.bz')
+        assert(m.extension_from_filename("test.tar.bz2") == '.tar.bz2')
+        assert(m.extension_from_filename("test.tbz2") == '.tbz2')
+        assert(m.extension_from_filename("test.tbz") == '.tbz')
+
+        # tar.xz files
+        assert(m.extension_from_filename("test.tar.xz") == '.tar.xz')
+        assert(m.extension_from_filename("test.txz") == '.txz')
+
+        # Par Files; we still grab the extension in front
+        assert(m.extension_from_filename("test.pdf.vol03+4.par2") ==
+               '.pdf.vol03+4.par2')
+
+        # Par Files; can look back at our extensions like tar.gz too!
+        assert(m.extension_from_filename("test.tar.gz.vol03+4.par2") ==
+               '.tar.gz.vol03+4.par2')
+
+        # pdf.par2 file
+        assert(m.extension_from_filename(
+            "A.Great.File-We.All.Want.2017.pdf.par2") == '.pdf.par2')
+
+        # handle parts
+        assert(m.extension_from_filename("test.part00.7z") == '.part00.7z')
+
+        # handle parts with par2 entries as well
+        assert(m.extension_from_filename("test.part00.7z.par2") ==
+               '.part00.7z.par2')
+
+        assert(m.extension_from_filename("test.part00.7z.vol03+4.par2") ==
+               '.part00.7z.vol03+4.par2')
