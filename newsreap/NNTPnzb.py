@@ -49,6 +49,23 @@ from newsreap import __version__
 from newsreap import __title__
 
 
+class NZBFileMode(object):
+    """
+    Parsing modes for our NZB-File
+    """
+    # Do nothing special, just act as a normal class when iterating it
+    Simple = 0
+
+    # Ignore NZBFile Entries that already point to downloaded content.
+    # Setting this flag allows you to iterate over the same NZB-File (while
+    # processing it) a second time and only get results that have not been
+    # handled.
+    IgnoreAttached = 1
+
+    # Ignore any entries in the NZB-File detected as being PAR files.
+    IgnorePars = 2
+
+
 class XMLDTDType(object):
     Public = u'PUBLIC'
     System = u'SYSTEM'
@@ -110,7 +127,7 @@ class NNTPnzb(NNTPContent):
     """
 
     def __init__(self, nzbfile=None, encoding=XML_ENCODING, work_dir=None,
-                 *args, **kwargs):
+                 mode=NZBFileMode.Simple, *args, **kwargs):
         """
         Initialize NNTP NZB object
 
@@ -140,8 +157,11 @@ class NNTPnzb(NNTPContent):
         # Once these are loaded, most of the functions references come from the
         # self.segments instead of re-parsing the XML file again and again
         # We can use self.segments to rebuild a brand new XML file too
-        self._segments_loaded = False
+        self._segments_loaded = None
         self._segment_segment_iter = None
+
+        # An NZB-File Mode which can control out it responds
+        self._nzb_mode = mode
 
         # Initialize our parent
         super(NNTPnzb, self).__init__(work_dir=work_dir, *args, **kwargs)
@@ -229,7 +249,7 @@ class NNTPnzb(NNTPContent):
                 if pretty:
                     indent = ''.ljust(self.padding_multiplier*2, self.padding)
 
-                for k, v in self.meta:
+                for k, v in self.meta.items():
                     self.write('%s<meta type="%s">%s</meta>%s' % (
                         indent,
                         self.escape_xml(k.encode(self.encoding)),
@@ -247,7 +267,6 @@ class NNTPnzb(NNTPContent):
                 ))
 
             for article in self.segments:
-
                 if not len(article):
                     self.remove()
                     return False
@@ -263,59 +282,60 @@ class NNTPnzb(NNTPContent):
                     eol,
                 ))
 
-                for content in article:
+                if pretty:
+                    indent = ''.ljust(
+                        self.padding_multiplier*2, self.padding)
+
+                self.write('%s<groups>%s' % (
+                    indent,
+                    eol,
+                ))
+
+                if pretty:
+                    indent = ''.ljust(
+                        self.padding_multiplier*3, self.padding)
+
+                for group in article.groups:
+                    self.write('%s<group>%s</group>%s' % (
+                        indent,
+                        self.escape_xml(group),
+                        eol,
+                    ))
+
+                if pretty:
+                    indent = ''.ljust(
+                        self.padding_multiplier*2, self.padding)
+                self.write('%s</groups>%s' % (
+                    indent,
+                    eol,
+                ))
+
+                self.write('%s<segments>%s' % (
+                    indent,
+                    eol,
+                ))
+
+                for part, content in enumerate(article):
                     if not len(content.groups):
                         self.remove()
                         return False
 
                     if pretty:
                         indent = ''.ljust(
-                            self.padding_multiplier*2, self.padding)
-
-                    self.write('%s<groups>%s' % (
-                        indent,
-                        eol,
-                    ))
-
-                    if pretty:
-                        indent = ''.ljust(
                             self.padding_multiplier*3, self.padding)
 
-                    for group in content.groups:
-                        self.write('%s<group>%s</group>%s' % (
-                            indent,
-                            self.escape_xml(group),
-                            eol,
-                        ))
-
-                    if pretty:
-                        indent = ''.ljust(
-                            self.padding_multiplier*2, self.padding)
-                    self.write('%s</groups>%s' % (
-                        indent,
-                        eol,
-                    ))
-
-                    self.write('%s<segments>%s' % (
-                        indent,
-                        eol,
-                    ))
-
-                    if pretty:
-                        indent = ''.ljust(
-                            self.padding_multiplier*3, self.padding)
-
-                    for part, segment in enumerate(content):
+                    for segment in content:
                         # use enumerated content and not the part assigned.
                         # this is by design because it gives developers the
                         # ability to add/remove items from the segments and
                         # only use the part numbers for their own personal
                         # ordering.
 
+                        _bytes = len(segment)
                         self.write(
-                            '%s<segment bytes="%d" number="%d">%s</segment>%s' % (
+                            '%s<segment %snumber="%d">%s</segment>%s' % (
                                 indent,
-                                len(segment),
+                                (('bytes="%d "' % _bytes) if _bytes else ''),
                                 part+1,
                                 self.escape_xml(content.id),
                                 eol,
@@ -365,6 +385,26 @@ class NNTPnzb(NNTPContent):
 
         """
         if self._lazy_gid is None:
+
+            if self._segments_loaded is True:
+                # Use our segments already loaded in memory
+                if len(self.segments) > 0:
+                    try:
+                        # Use the md5 hash of the first message-id of the
+                        # first segment
+                        _md5sum = hashlib.md5()
+                        _md5sum.update(self.segments[0][0].id)
+
+                        # Store our data
+                        self._lazy_gid = _md5sum.hexdigest()
+
+                    except (TypeError, AttributeError, IndexError):
+                        # Can't be done
+                        logger.warning(
+                            'Cannot calculate GID from NZB-Segments: %s' %
+                            self.filepath)
+
+                return self._lazy_gid
 
             if self.is_valid() is False:
                 # Save ourselves the time and cpu of parsing further
@@ -436,9 +476,11 @@ class NNTPnzb(NNTPContent):
                 return None
 
             try:
-                # We simply
+                # Use the md5 hash of the first message-id of the
+                # first segment
                 _md5sum = hashlib.md5()
                 _md5sum.update(segment.text.strip())
+
                 # Store our data
                 self._lazy_gid = _md5sum.hexdigest()
 
@@ -449,13 +491,17 @@ class NNTPnzb(NNTPContent):
 
         return self._lazy_gid
 
-    def load(self, filepath=None, detached=True):
+    def load(self, filepath=None, mode=NZBFileMode.Simple, detached=True):
         """
         Loads segments into memory (this object)
         """
 
         # Reset all entries
-        self.segments = sortedset(key=lambda x: x.key())
+        self.segments.clear()
+        self._segments_loaded = None
+        self._segment_segment_iter = None
+        self._nzb_mode = mode
+
         if filepath is not None:
             # Reset our variables
             self._lazy_is_valid = None
@@ -464,11 +510,15 @@ class NNTPnzb(NNTPContent):
 
             if not super(NNTPnzb, self)\
                .load(filepath=filepath, detached=detached):
+                self._segments_loaded = False
                 return False
 
         for sp in self:
             # Load our segmented post entries into memory
-            self.add(sp)
+            self.segments.add(sp)
+
+        # Toggle our segments loaded flag
+        self._segments_loaded = True
 
         return True
 
@@ -533,8 +583,11 @@ class NNTPnzb(NNTPContent):
         # and after so that we can properly return a True/False
         # value
         _bcnt = len(self.segments)
+
+        # Add our segment
         self.segments.add(obj)
 
+        # A reference value we can use to compare against
         file_count = len(self.segments)
 
         # We're manually loading the segments so we can trust wherever
@@ -610,7 +663,7 @@ class NNTPnzb(NNTPContent):
             # clear our unused memory
             self.xml_root.clear()
 
-        if self._segments_loaded is True:
+        if self._segment_segment_iter:
             return self._segment_segment_iter.next()
 
         # get the root element
@@ -662,9 +715,6 @@ class NNTPnzb(NNTPContent):
             self.xml_root = None
             self.xml_itr_count = 0
 
-            # Toggle our segments loaded flag now that we've iterated through
-            # our NZB-File (reguardless if we were successful or not)
-            self._segments_loaded = True
             raise StopIteration()
 
         if self.meta is None:
@@ -747,12 +797,6 @@ class NNTPnzb(NNTPContent):
             # Track our index
             _last_index = _cur_index
 
-        # Add our segmented file to our map. It's important we add it to our
-        # sortedset directly and not do it through self.add() because self.add()
-        # will toggle a flag marking that our segmented list as being completed
-        # when it most certainly is not!
-        self.segments.add(_file)
-
         # Return our object
         return _file
 
@@ -826,13 +870,17 @@ class NNTPnzb(NNTPContent):
         """
         Returns the number of files in the NZB File
         """
-        return len(self.segments) if self._segments_loaded \
+        return len(self.segments) if self._segments_loaded is True\
             else sum(1 for c in self)
 
     def __getitem__(self, index):
         """
         Support accessing NNTPSegmentedPost objects by index
         """
+        if self._segments_loaded is None:
+            # Attempt to preload our content
+            self.load()
+
         return self.segments[index]
 
     def __repr__(self):
