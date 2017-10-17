@@ -106,7 +106,8 @@ class NNTPnzb_Test(TestBase):
         assert result['ycount'] == 1
 
         # Test escaping
-        parse_str = 'Another (4/5) - &quot;the.awesome.file.ogg&quot; yEnc (3/9) 123456'
+        parse_str = 'Another (4/5) - &quot;the.awesome.file.ogg&quot; yEnc '\
+            '(3/9) 123456'
         result = nzbobj.parse_subject(parse_str, unescape=True)
         assert result is not None
         assert isinstance(result, dict)
@@ -260,10 +261,10 @@ class NNTPnzb_Test(TestBase):
         # Our GID remains the same even after the NZB-File is loaded
         # This is important because the GID is based on the file content
         # within the NZB-File.  The first entry should always be alphabetically
-        # placed first.  It's possible the XML-File version of the NZB-File does
-        # not sort content this way and therefore gid() parses the first entry
-        # However, loading the file forces the proper sorting and will always
-        # return the correct gid.
+        # placed first.  It's possible the XML-File version of the NZB-File
+        # does not sort content this way and therefore gid() parses the first
+        # entry However, loading the file forces the proper sorting and will
+        # always return the correct gid.
         assert(nzbobj.gid() == '8c6b3a3bc8d925cd63125f7bea31a5c9')
 
         # Test Length (this particular file we know has 55 entries
@@ -303,7 +304,6 @@ class NNTPnzb_Test(TestBase):
         # Our NZB-File File Count is the same
         assert(len(nzbobj) == len(new_nzbobj))
         assert(nzbobj.gid() == new_nzbobj.gid())
-
 
     def test_nzbfile_generation(self):
         """
@@ -354,7 +354,6 @@ class NNTPnzb_Test(TestBase):
 
         # Test Length
         assert len(nzbobj) == 0
-
 
     def test_parse_subject(self):
         """
