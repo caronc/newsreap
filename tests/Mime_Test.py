@@ -42,6 +42,7 @@ except ImportError:
 from newsreap.Mime import MIME_TYPES
 from newsreap.Mime import Mime
 from newsreap.Mime import MimeResponse
+from newsreap.NNTPContent import NNTPContent
 
 
 class Mime_Test(TestBase):
@@ -282,3 +283,31 @@ class Mime_Test(TestBase):
 
         assert(m.extension_from_filename("test.part00.7z.vol03+4.par2") ==
                '.part00.7z.vol03+4.par2')
+
+    def test_from_bestguess(self):
+        """
+        test from_bestguess()
+
+        bestguess() does the best of both worlds: from_file() and
+        from_filename().  It never returns None unless you give it
+        bad data.
+        """
+
+        # Initialize our mime object
+        m = Mime()
+
+        # Empty content just gives us an empty response
+        assert(m.from_bestguess(None) is None)
+        assert(m.from_bestguess("") is None)
+        assert(m.from_bestguess(u"") is None)
+
+        # First we take a binary file
+        image = join(self.var_dir, 'joystick.jpg')
+        c = NNTPContent(image, work_dir=self.tmp_dir)
+        copy = c.copy()
+
+        # since we have a filename, we can pick it up from that
+        assert(m.from_bestguess(copy.filename).type() == 'image/jpeg')
+        # We can also get it from_file() because even though our temporary
+        # file does not have an extension at all, we can still
+        assert(m.from_bestguess(copy.path()).type() == 'image/jpeg')

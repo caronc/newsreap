@@ -651,6 +651,9 @@ class Mime(object):
         if uncompress:
             flags |= MAGIC_COMPRESS
 
+        # Default Response
+        res = ""
+
         try:
             self.lock.acquire(blocking=True)
             # 'application/octet-stream; charset=binary'
@@ -663,14 +666,13 @@ class Mime(object):
             self.errno = _magic['errno'](ptr)
             if self.errno == 0:
 
-                # Achieve our results as a list
-                _typ, _enc = MAGIC_LIST_RE.split(self._tostr(_magic['file'](
-                    ptr,
-                    self._tobytes(path),
-                )))
+                res = self._tostr(_magic['file'](ptr, self._tobytes(path)))
 
                 # Acquire our errorstr (if one exists)
                 self.errstr = _magic['error'](ptr)
+
+                # Achieve our results as a list
+                _typ, _enc = MAGIC_LIST_RE.split(res)
 
                 _typs = []
                 for n, _typ_re in enumerate(TYPE_PARSE_RE.finditer(_typ)):
@@ -706,6 +708,16 @@ class Mime(object):
                 mime_encoding=DEFAULT_MIME_ENCODING,
             )
 
+        except ValueError:
+            # This occurs during our regular expression extraction which
+            # couldn't accomplish it's feat because an error string (such as
+            # no file exists) was returned as part of the response instead
+            # of our expected mime type. Store this error
+            self.errstr = res
+
+            # Now return None
+            return None
+
         finally:
             if ptr is not None:
                 # Release our pointer
@@ -740,6 +752,34 @@ class Mime(object):
             mime_type=DEFAULT_MIME_TYPE,
             mime_encoding=DEFAULT_MIME_ENCODING,
         )
+
+    def from_bestguess(self, path):
+        """
+        First attempts to look at the files contents (if it can), if not it
+        falls back to looking at the filename and always returns it's best
+        guess.
+        """
+        mr = self.from_file(path)
+        if mr is None or mr.type() in \
+                (DEFAULT_MIME_TYPE, DEFAULT_MIME_EMTPTY_FILE):
+
+            _mr = self.from_filename(path)
+            if _mr is None:
+                if mr is None:
+                    # Not parseable
+                    return None
+
+                # Otherwise return a stream and intentionally
+                # do not count the empty file (if detected)
+                return MimeResponse(
+                    mime_type=DEFAULT_MIME_TYPE,
+                    mime_encoding=DEFAULT_MIME_ENCODING,
+                )
+
+            elif mr is not None and _mr == DEFAULT_MIME_TYPE:
+                return mr
+            return _mr
+        return mr
 
     def extension_from_mime(self, mime_type):
         """
