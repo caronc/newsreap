@@ -59,7 +59,7 @@ class NNTPFileMode(object):
     we can compare what is set to a variable/object name
     """
     BINARY_RO = 'rb'
-    BINARY_WO = 'wb'
+    BINARY_WO = 'rb+'
     BINARY_WO_TRUNCATE = 'wb'
     BINARY_RW = 'r+b'
     BINARY_RW_TRUNCATE = 'w+b'
@@ -863,7 +863,7 @@ class NNTPContent(object):
                     )
 
                     # Create a pointer to the parent
-                    obj._parent = self
+                    obj._parent = weakref.ref(self)
 
                     # Open the new file
                     obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
@@ -885,6 +885,11 @@ class NNTPContent(object):
                             '(%d) occured while writing %s to disk.' %
                             (e[0], obj.filepath),
                         )
+
+                    # Tidy
+                    self.close()
+
+                    # Return None
                     return None
 
                 f_length += block_size
