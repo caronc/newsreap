@@ -24,6 +24,8 @@ from newsreap.NNTPContent import NNTPFileMode
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPEmptyContent import NNTPEmptyContent
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+from newsreap.Mime import Mime
+from newsreap.Mime import DEFAULT_MIME_TYPE
 from HTMLParser import HTMLParser
 from xml.sax.saxutils import escape as sax_escape
 
@@ -158,7 +160,7 @@ class NNTPnzb(NNTPContent):
         # self.segments instead of re-parsing the XML file again and again
         # We can use self.segments to rebuild a brand new XML file too
         self._segments_loaded = None
-        self._segment_segment_iter = None
+        self._segment_iter = None
 
         # An NZB-File Mode which can control out it responds
         self._nzb_mode = mode
@@ -499,7 +501,7 @@ class NNTPnzb(NNTPContent):
         # Reset all entries
         self.segments.clear()
         self._segments_loaded = None
-        self._segment_segment_iter = None
+        self._segment_iter = None
         self._nzb_mode = mode
 
         if filepath is not None:
@@ -659,12 +661,19 @@ class NNTPnzb(NNTPContent):
         Support stream type functions and iterations
         """
 
+        # We track our iterator since we move along if our mode tells us to do
+        # so.
+        _iter = None
+
         if self.xml_root is not None:
             # clear our unused memory
             self.xml_root.clear()
 
-        if self._segment_segment_iter:
-            return self._segment_segment_iter.next()
+        if self._segment_iter:
+            while 1:
+                _iter = self._segment_iter.next()
+                if self._valid_by_mode(_iter):
+                    return _iter
 
         # get the root element
         try:
@@ -800,6 +809,59 @@ class NNTPnzb(NNTPContent):
         # Return our object
         return _file
 
+    def _valid_by_mode(self, segmented):
+        """
+        Internally called function that takes a segmented object and matches
+        it against the mode defined by this class. We return True if the mode
+        would otherwise accept this entry, otherwise we return False.
+        """
+
+        if self._nzb_mode == NZBFileMode.Simple:
+            # We accept everything
+            return True
+
+        # Create our Mime object
+        m = Mime()
+
+        # Our Mime Response
+        mr = None
+
+        # Check our segmented content to see if it's a par-file
+        if segmented.filename:
+            # use filename
+            mr = m.from_filename(segmented.filename)
+
+        if mr is None or mr == DEFAULT_MIME_TYPE:
+            # Dig a little further into our articles to see if we can figure
+            # out our filename
+            matched = False
+            for article in segmented:
+                for content in article:
+                    if content.filename:
+                        mr = m.from_filename(content.filename)
+                    if mr is None or mr == DEFAULT_MIME_TYPE:
+                        mr = m.from_file(content.path())
+                    if not (mr is None or mr == DEFAULT_MIME_TYPE):
+                        matched = True
+                        break
+                if matched:
+                    break
+
+        if mr is None or mr == DEFAULT_MIME_TYPE:
+            # We don't know the type, so we can't do much here
+            return True
+
+        if (self._nzb_mode | NZBFileMode.IgnorePars):
+            if mr.type().endswith('par2'):
+                return False
+
+        if (self._nzb_mode | NZBFileMode.IgnoreAttached):
+            if segmented[0][0].is_attached():
+                return False
+
+        # If we get here, we can go ahead and process our file
+        return True
+
     def __next__(self):
         """
         Python 3 support
@@ -816,7 +878,7 @@ class NNTPnzb(NNTPContent):
         super(NNTPnzb, self).__iter__()
 
         if self._segments_loaded is True:
-            self._segment_segment_iter = iter(self.segments)
+            self._segment_iter = iter(self.segments)
             return self
 
         elif len(self.segments) > 0:
