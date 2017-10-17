@@ -33,6 +33,8 @@ from newsreap.NNTPSettings import NNTP_EOL
 from newsreap.NNTPSettings import NNTP_EOD
 from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 from newsreap.Utils import random_str
+from newsreap.Utils import bytes_to_strsize
+from NNTPContent import NNTPFileMode
 
 # Logging
 import logging
@@ -74,12 +76,9 @@ class NNTPArticle(object):
 
         """
 
-        # TODO: Rename id to article_id (readability and id is a reserved
-        # keyword)
         # The Article Message-ID
         self.id = id if isinstance(id, basestring) else ''
 
-        # TODO: Rename no to index_no (readability)
         # The NNTP Group Index #
         self.no = 1000
         try:
@@ -98,6 +97,10 @@ class NNTPArticle(object):
             self.work_dir = DEFAULT_TMP_DIR
         else:
             self.work_dir = abspath(expanduser(work_dir))
+
+        # Contains a list of decoded content; it's effectively the articles
+        # attachments
+        self.decoded = sortedset(key=lambda x: x.key())
 
         # Track the groups this article resides in.
         # This is populated for meta information when an article is
@@ -122,11 +125,6 @@ class NNTPArticle(object):
         # Our body contains non-decoded content
         self.body = NNTPAsciiContent(work_dir=self.work_dir)
 
-        # TODO: rename decoded to content because decoded implies this object
-        # is only used when retrieving articles when in fact it's used for
-        # posting them too.
-        # Contains a list of decoded content
-        self.decoded = sortedset(key=lambda x: x.key())
 
     def load(self, response):
         """
@@ -241,7 +239,7 @@ class NNTPArticle(object):
 
         # If we reach here we encoded our entire article
         # Create a copy of our article
-        article = deepcopy(self)
+        article = self.copy(include_attachments=False)
 
         # In our new copy; store our new encoded content
         article.decoded = objs
@@ -362,7 +360,57 @@ class NNTPArticle(object):
         # Return our articles
         return articles
 
-    def copy(self):
+    def append(self, articles):
+        """
+        Appends one article onto another. This is the reverse of split()
+        articles must be an NNTPArticle object, or a set-of NNTPArticle()
+        objects.
+
+        """
+        if isinstance(articles, NNTPArticle):
+            # Convert our entry into a list object
+            articles = [articles, ]
+
+        # Change to an iterator
+        articles = iter(articles)
+        if len(self) > 1:
+            # Ambiguous; we can't append content if we have
+            # more then one possible thing to append to
+            return False
+
+            # We don't have any content objects to append to; create it
+            if not self.add(article):
+                # We could not add our article
+                return False
+
+        for article in articles:
+            if len(article) == 0:
+                # No attachments; move along silently
+                continue
+
+            elif len(article) > 1:
+                # To many attachments in article
+                return False
+
+            if len(self.decoded) == 0:
+                # Store a copy of our decoded object
+                content = article[0].copy()
+                if content is None:
+                    # We failed to create a copy
+                    return False
+
+                # Add our content to our object
+                self.decoded.add(content)
+                continue
+
+            # If we reach here, we have 1 entry to append our content to
+            if not self.decoded[0].append(article[0]):
+                return False
+
+        # Return our success
+        return True
+
+    def copy(self, include_attachments=True):
         """
         Creates a copy of the article returning one
 
@@ -380,13 +428,14 @@ class NNTPArticle(object):
         article.header = self.header.copy()
         article.body = self.body.copy()
 
-        for content in self.decoded:
-            obj = content.copy()
-            if obj is None:
-                return None
+        if include_attachments:
+            for content in self.decoded:
+                obj = content.copy()
+                if obj is None:
+                    return None
 
-            # Otherwise add our article
-            article.decoded.add(obj)
+                # Add our copied NNTP object
+                article.decoded.add(obj)
 
         # Return our copy
         return article
@@ -443,7 +492,7 @@ class NNTPArticle(object):
         """
         if isinstance(content, basestring) and isfile(content):
             # Support strings
-            content = NNTPContent(content)
+            content = NNTPBinaryContent(content, work_dir=self.work_dir)
 
         if not isinstance(content, NNTPContent):
             return False
@@ -486,11 +535,17 @@ class NNTPArticle(object):
         """
         return sum(len(d) for d in self.decoded)
 
+    def strsize(self):
+        """
+        return the total size of our decoded content in a human readable
+        string.
+        """
+        return bytes_to_strsize(self.size())
+
     def __iter__(self):
         """
         Grants usage of the next()
         """
-
         # Ensure our stream is open with read
         return iter(self.decoded)
 
