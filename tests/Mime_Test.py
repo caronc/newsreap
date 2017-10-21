@@ -262,6 +262,15 @@ class Mime_Test(TestBase):
         assert(m.extension_from_filename("test.tar.xz") == '.tar.xz')
         assert(m.extension_from_filename("test.txz") == '.txz')
 
+        # par file without another extension in front
+        assert(m.extension_from_filename(
+            "b2d3075d94af88c6742b1fdfc34b225e.vol000+01.par2") ==
+            ".vol000+01.par2")
+
+        # Numeric Extension
+        assert(m.extension_from_filename(
+            "b2d3075d94af88c6742b1fdfc34b225e.32") == ".32")
+
         # Par Files; we still grab the extension in front
         assert(m.extension_from_filename("test.pdf.vol03+4.par2") ==
                '.pdf.vol03+4.par2')
