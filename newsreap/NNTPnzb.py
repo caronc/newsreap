@@ -51,7 +51,7 @@ from newsreap import __version__
 from newsreap import __title__
 
 
-class NZBFileMode(object):
+class NZBParseMode(object):
     """
     Parsing modes for our NZB-File
     """
@@ -140,7 +140,7 @@ class NNTPnzb(NNTPContent):
     """
 
     def __init__(self, nzbfile=None, encoding=XML_ENCODING, work_dir=None,
-                 mode=NZBFileMode.Simple, *args, **kwargs):
+                 mode=NZBParseMode.Simple, *args, **kwargs):
         """
         Initialize NNTP NZB object
 
@@ -507,7 +507,7 @@ class NNTPnzb(NNTPContent):
 
         return self._lazy_gid
 
-    def load(self, filepath=None, mode=NZBFileMode.Simple, detached=True):
+    def load(self, filepath=None, mode=NZBParseMode.Simple, detached=True):
         """
         Loads segments into memory (this object)
         """
@@ -792,8 +792,8 @@ class NNTPnzb(NNTPContent):
             # We succesfully got a filename from our subject line
             _filename = _parsed_subject.get('fname', '').strip()
             if _filename and _name:
-                # always allow the name to over-ride the detected filename if we
-                # actually have a real name we can assciated with it by
+                # always allow the name to over-ride the detected filename if
+                # we actually have a real name we can assciated with it by
                 _ext = self._mime.extension_from_filename(_filename)
                 if _ext:
                     _filename = '{0}{1}'.format(_name, _ext)
@@ -864,7 +864,7 @@ class NNTPnzb(NNTPContent):
         would otherwise accept this entry, otherwise we return False.
         """
 
-        if self._nzb_mode == NZBFileMode.Simple:
+        if self._nzb_mode == NZBParseMode.Simple:
             # We accept everything
             return True
 
@@ -897,7 +897,7 @@ class NNTPnzb(NNTPContent):
             # We don't know the type, so we can't do much here
             return True
 
-        if (self._nzb_mode & NZBFileMode.IgnorePars):
+        if (self._nzb_mode & NZBParseMode.IgnorePars):
             # our mime type is going to be one of the following
             #  - application/par2
             #  - application/x-par2
@@ -907,7 +907,7 @@ class NNTPnzb(NNTPContent):
             if mr.type().endswith('par2'):
                 return False
 
-        if (self._nzb_mode & NZBFileMode.IgnoreAttached):
+        if (self._nzb_mode & NZBParseMode.IgnoreAttached):
             if segmented[0][0].is_attached():
                 return False
 

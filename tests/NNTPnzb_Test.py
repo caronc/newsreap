@@ -37,7 +37,7 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPnzb import NNTPnzb
-from newsreap.NNTPnzb import NZBFileMode
+from newsreap.NNTPnzb import NZBParseMode
 
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPArticle import NNTPArticle
@@ -429,7 +429,7 @@ class NNTPnzb_Test(TestBase):
         assert(isfile(nzbfile) is True)
 
         # create an object containing our nzbfile but no mode set
-        nzbobj = NNTPnzb(nzbfile=nzbfile, mode=NZBFileMode.Simple)
+        nzbobj = NNTPnzb(nzbfile=nzbfile, mode=NZBParseMode.Simple)
 
         # A list of all of our expected (parsed) SegmentedFile entries:
         expected_results = (
@@ -507,7 +507,7 @@ class NNTPnzb_Test(TestBase):
             assert(True)
 
         # create an object containing our nzbfile but set to skip pars
-        nzbobj_sp = NNTPnzb(nzbfile=nzbfile, mode=NZBFileMode.IgnorePars)
+        nzbobj_sp = NNTPnzb(nzbfile=nzbfile, mode=NZBParseMode.IgnorePars)
 
         # Now our skip par list works a bit differently.  Because we know we
         # can successfully detect our par files from the others, this
