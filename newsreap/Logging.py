@@ -154,6 +154,14 @@ def set_verbosity(verbose):
     A simple function one can use to set the verbosity of
     the app.
     """
+    # Default
+    logging.getLogger(SQLALCHEMY_LOGGER).setLevel(logging.ERROR)
+    logging.getLogger(SQLALCHEMY_ENGINE).setLevel(logging.ERROR)
+    logging.getLogger(NEWSREAP_LOGGER).setLevel(logging.ERROR)
+    logging.getLogger(NEWSREAP_CLI).setLevel(logging.ERROR)
+    logging.getLogger(NEWSREAP_CODEC).setLevel(logging.ERROR)
+    logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.ERROR)
+
     # Handle Verbosity
     if verbose > 0:
         logging.getLogger(NEWSREAP_CLI).setLevel(logging.INFO)
@@ -176,7 +184,4 @@ def set_verbosity(verbose):
 # set initial level to WARN.
 rootlogger = logging.getLogger(NEWSREAP_LOGGER)
 if rootlogger.level == logging.NOTSET:
-    # Set our root logger to warn
-    rootlogger.setLevel(logging.WARN)
-    # By default configure SQLAlchemy to a WARN Level
-    logging.getLogger(SQLALCHEMY_LOGGER).setLevel(logging.WARN)
+    set_verbosity(-1)
