@@ -1,4 +1,4 @@
-# -*- encoding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # A base testing class/library to test the NNTP Cryptography class
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
