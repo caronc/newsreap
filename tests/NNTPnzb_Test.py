@@ -37,6 +37,7 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPnzb import NNTPnzb
+from newsreap.NNTPnzb import NZBFileMode
 
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPArticle import NNTPArticle
@@ -416,3 +417,113 @@ class NNTPnzb_Test(TestBase):
                 assert(key in results)
                 assert(results[key] == value)
                 assert(type(results[key]) == type(value))
+
+    def test_iter_skip_pars(self):
+        """
+        Test scanning NZB-Files and ignoring part entries
+
+        """
+
+        # No parameters should create a file
+        nzbfile = join(self.var_dir, 'Ubuntu-16.04.1-Server-i386.nzb')
+        assert(isfile(nzbfile) is True)
+
+        # create an object containing our nzbfile but no mode set
+        nzbobj = NNTPnzb(nzbfile=nzbfile, mode=NZBFileMode.Simple)
+
+        # A list of all of our expected (parsed) SegmentedFile entries:
+        expected_results = (
+            "Ubuntu-16.04.1-Server-i386.10",
+            "Ubuntu-16.04.1-Server-i386.11",
+            "Ubuntu-16.04.1-Server-i386.12",
+            "Ubuntu-16.04.1-Server-i386.13",
+            "Ubuntu-16.04.1-Server-i386.14",
+            "Ubuntu-16.04.1-Server-i386.15",
+            "Ubuntu-16.04.1-Server-i386.16",
+            "Ubuntu-16.04.1-Server-i386.17",
+            "Ubuntu-16.04.1-Server-i386.18",
+            "Ubuntu-16.04.1-Server-i386.19",
+            "Ubuntu-16.04.1-Server-i386.20",
+            "Ubuntu-16.04.1-Server-i386.21",
+            "Ubuntu-16.04.1-Server-i386.22",
+            "Ubuntu-16.04.1-Server-i386.23",
+            "Ubuntu-16.04.1-Server-i386.24",
+            "Ubuntu-16.04.1-Server-i386.25",
+            "Ubuntu-16.04.1-Server-i386.26",
+            "Ubuntu-16.04.1-Server-i386.27",
+            "Ubuntu-16.04.1-Server-i386.28",
+            "Ubuntu-16.04.1-Server-i386.29",
+            "Ubuntu-16.04.1-Server-i386.30",
+            "Ubuntu-16.04.1-Server-i386.31",
+            "Ubuntu-16.04.1-Server-i386.32",
+            "Ubuntu-16.04.1-Server-i386.33",
+            "Ubuntu-16.04.1-Server-i386.34",
+            "Ubuntu-16.04.1-Server-i386.35",
+            "Ubuntu-16.04.1-Server-i386.36",
+            "Ubuntu-16.04.1-Server-i386.37",
+            "Ubuntu-16.04.1-Server-i386.38",
+            "Ubuntu-16.04.1-Server-i386.39",
+            "Ubuntu-16.04.1-Server-i386.40",
+            "Ubuntu-16.04.1-Server-i386.41",
+            "Ubuntu-16.04.1-Server-i386.42",
+            "Ubuntu-16.04.1-Server-i386.43",
+            "Ubuntu-16.04.1-Server-i386.44",
+            "Ubuntu-16.04.1-Server-i386.45",
+            "Ubuntu-16.04.1-Server-i386.46",
+            "Ubuntu-16.04.1-Server-i386.47",
+            "Ubuntu-16.04.1-Server-i386.48",
+            "Ubuntu-16.04.1-Server-i386.49",
+            "Ubuntu-16.04.1-Server-i386.50",
+            "Ubuntu-16.04.1-Server-i386.51",
+            "Ubuntu-16.04.1-Server-i386.52",
+            "Ubuntu-16.04.1-Server-i386.53",
+            "Ubuntu-16.04.1-Server-i386.54",
+            "Ubuntu-16.04.1-Server-i386.55",
+
+            # Our Par Files (9 in total)
+            "Ubuntu-16.04.1-Server-i386.par2",
+            "Ubuntu-16.04.1-Server-i386.vol000+01.par2",
+            "Ubuntu-16.04.1-Server-i386.vol001+02.par2",
+            "Ubuntu-16.04.1-Server-i386.vol003+04.par2",
+            "Ubuntu-16.04.1-Server-i386.vol007+08.par2",
+            "Ubuntu-16.04.1-Server-i386.vol015+16.par2",
+            "Ubuntu-16.04.1-Server-i386.vol031+32.par2",
+            "Ubuntu-16.04.1-Server-i386.vol063+64.par2",
+            "Ubuntu-16.04.1-Server-i386.vol127+74.par2",
+        )
+
+        expected_iter = iter(expected_results)
+        for segment in nzbobj:
+            assert(segment.filename == expected_iter.next())
+
+        try:
+            # We should have gracefully passed through our entire list
+            expected_iter.next()
+            # We should never make it here
+            assert(False)
+
+        except StopIteration:
+            # We really did process our whole list - Excellent!
+            assert(True)
+
+        # create an object containing our nzbfile but set to skip pars
+        nzbobj_sp = NNTPnzb(nzbfile=nzbfile, mode=NZBFileMode.IgnorePars)
+
+        # Now our skip par list works a bit differently.  Because we know we
+        # can successfully detect our par files from the others, this
+        # iterator should intentionally skip over .par files
+        expected_iter = iter(expected_results)
+        results = []
+        for segment in nzbobj_sp:
+            assert(segment.filename == expected_iter.next())
+            results.append(segment.filename)
+
+        # We should still have 9 files left in our list we didn't process
+        assert(len(expected_results) - len(results) == 9)
+
+        # One of the big differences we'll notice is that we will have entries
+        # left over from our list since we'll be avoiding ParFiles this time
+        # around
+
+        # Our list count is different because we're ignoring pars in one list
+        assert(len(nzbobj_sp) < len(nzbobj))

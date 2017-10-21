@@ -103,6 +103,10 @@ NZB_SUBJECT_PARSE = (
     # "description" - fname yEnc (a/b)
     # "description" - fname yEnc (a/b) size
     # "description" - fname yEnc (/b)
+    # fname yEnc (/b)
+    # fname yEnc (a/b)
+    # "fname" yEnc (/b)
+    # "fname" yEnc (a/b)
 
     # TODO: Subject Parsing should be broken into it's own class that can allow
     # the loading of more content in addition to some hard-coded entries too.
@@ -111,12 +115,19 @@ NZB_SUBJECT_PARSE = (
     # The subject object response should return None if parsing was not
     # possible, otherwise it returns a dictionary of the indexed content.
     re.compile(
-        r"^[\"'\s]*(?P<desc>(\s*[^\"'\[(])+)"
-        r"([\"'\s-]+[\[(]?(?P<index>\d+)\/(?P<count>\d+)[)\]]?)?"
+        r"^([\"'\s]*(?P<desc>(\s*[^\"'\[(])+)"
+        r"([\"'\s-]+[\[(]?(?P<index>\d+)\/(?P<count>\d+)[)\]]?)?)?"
         r"[\"'\s-]+(?P<fname>[^\"']+)[\"'\s-]+yEnc\s+[\[(]?(?P<yindex>\d+)?\/"
         r"(?P<ycount>\d+)[\])]?([+\s]+?(?P<size>\s*\d+))?\s*$", re.IGNORECASE,
     )
 )
+
+# NZB-Filename
+NZB_EXTENSION_RE = re.compile(r'(?P<fname>).nzb$', re.IGNORECASE)
+
+# The default filename assigned when one can't be detected from the
+# NZB-File
+DEFAULT_UNDETECTED_FILENAME = 'unknown'
 
 
 class NNTPnzb(NNTPContent):
@@ -198,6 +209,9 @@ class NNTPnzb(NNTPContent):
         #     8|</root>
         #
         self.padding_multiplier = 2
+
+        # Create our Mime object since we'll be using it a lot
+        self._mime = Mime()
 
     def save(self, nzbfile=None, pretty=True, dtd_type=XMLDTDType.Public):
         """
@@ -745,25 +759,55 @@ class NNTPnzb(NNTPContent):
             )
         ]
 
-        _filename = self.meta.get('name', 'unknown').decode(self.encoding)
+        # The detected filename
+        _filename = DEFAULT_UNDETECTED_FILENAME
+
+        # The name from the meta tag
+        _name = self.meta.get('name', '').decode(self.encoding).strip()
+
+        if not _name and self.filepath is not None:
+            # Lets try to generate a name frome our NZB-File
+            tmpfname = basename(self.filepath)
+
+            # Strip our extension off the end (if present)
+            result = NZB_EXTENSION_RE(tmpfname)
+            if result and result.group('fname'):
+                # Store our new filename as our name
+                _name = result.group('fname')
+
+        # Subject
         _subject = self.unescape_xml(
                 self.xml_root.attrib.get('subject', '')).decode(self.encoding)
-        _parsed_subject = self.parse_subject(_subject)
+
+        # Attempt to parse our subject if we can
+        _parsed_subject = self.parse_subject(
+            _subject,
+            unescape=True,
+            encoding=self.encoding,
+        )
 
         # Parse the subject if possible for a filename, otherwise we just use
         # the one we already figured out.
         if _parsed_subject is not None:
-            _filename = _parsed_subject.get('fname', _filename)
+            # We succesfully got a filename from our subject line
+            _filename = _parsed_subject.get('fname', '').strip()
+            if _filename and _name:
+                # always allow the name to over-ride the detected filename if we
+                # actually have a real name we can assciated with it by
+                _ext = self._mime.extension_from_filename(_filename)
+                if _ext:
+                    _filename = '{0}{1}'.format(_name, _ext)
 
         # Initialize a NNTPSegmented File Object using the data we read
         _file = NNTPSegmentedPost(
-            u'%s.%.3d' % (_filename, self.xml_itr_count),
+            _filename,
             poster=self.unescape_xml(
                 self.xml_root.attrib.get('poster', '')).decode(self.encoding),
             epoch=self.xml_root.attrib.get('date', '0'),
             subject=_subject,
             groups=groups,
             work_dir=self.work_dir,
+            sort_no=self.xml_itr_count,
         )
 
         # index tracker
@@ -806,6 +850,10 @@ class NNTPnzb(NNTPContent):
             # Track our index
             _last_index = _cur_index
 
+        if not self._valid_by_mode(_file):
+            # Not used; recursively move along
+            return self.next()
+
         # Return our object
         return _file
 
@@ -820,42 +868,46 @@ class NNTPnzb(NNTPContent):
             # We accept everything
             return True
 
-        # Create our Mime object
-        m = Mime()
-
         # Our Mime Response
         mr = None
 
         # Check our segmented content to see if it's a par-file
         if segmented.filename:
             # use filename
-            mr = m.from_filename(segmented.filename)
+            mr = self._mime.from_filename(segmented.filename)
 
         if mr is None or mr == DEFAULT_MIME_TYPE:
-            # Dig a little further into our articles to see if we can figure
-            # out our filename
-            matched = False
-            for article in segmented:
-                for content in article:
-                    if content.filename:
-                        mr = m.from_filename(content.filename)
-                    if mr is None or mr == DEFAULT_MIME_TYPE:
-                        mr = m.from_file(content.path())
-                    if not (mr is None or mr == DEFAULT_MIME_TYPE):
-                        matched = True
-                        break
-                if matched:
-                    break
+            try:
+                for article in segmented:
+                    for content in article:
+                        if content.filename:
+                            mr = self._mime.from_filename(content.filename)
+
+                        if mr is None or mr == DEFAULT_MIME_TYPE:
+                            mr = self._mime.from_file(content.path())
+
+                        if not (mr is None or mr == DEFAULT_MIME_TYPE):
+                            raise StopIteration()
+
+            except StopIteration:
+                # we're done
+                pass
 
         if mr is None or mr == DEFAULT_MIME_TYPE:
             # We don't know the type, so we can't do much here
             return True
 
-        if (self._nzb_mode | NZBFileMode.IgnorePars):
+        if (self._nzb_mode & NZBFileMode.IgnorePars):
+            # our mime type is going to be one of the following
+            #  - application/par2
+            #  - application/x-par2
+            #
+            # it wil always be in lower case, so the following should
+            # get our match for us:
             if mr.type().endswith('par2'):
                 return False
 
-        if (self._nzb_mode | NZBFileMode.IgnoreAttached):
+        if (self._nzb_mode & NZBFileMode.IgnoreAttached):
             if segmented[0][0].is_attached():
                 return False
 
