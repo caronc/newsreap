@@ -2,7 +2,7 @@
 #
 # Simplifies communication to and from an NNTP Server
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -295,26 +295,26 @@ class NNTPConnection(SocketBase):
                 if self._iostream not in NNTP_SUPPORTED_IO_STREAMS:
                     # Default
                     self._iostream = NNTPIOStream.RFC3977_GZIP
-                    logger.warning('An unknown iostream was specified; ' +
+                    logger.warning('An unknown iostream was specified; '
                                    "using default: '%s'." % self._iostream)
 
             except (TypeError, ValueError):
                 # Default
                 self._iostream = NNTPIOStream.RFC3977_GZIP
-                logger.warning('A malformed iostream was specified; ' +
-                                   "using default: '%s'." % self._iostream)
+                logger.warning('A malformed iostream was specified; '
+                               "using default: '%s'." % self._iostream)
 
         elif iostream:
             # Default
-            logger.warning('An invalid iostream was specified; ' +
-                "using default: '%s'." % self._iostream)
+            logger.warning('An invalid iostream was specified; '
+                           "using default: '%s'." % self._iostream)
             self._iostream = NNTPIOStream.RFC3977_GZIP
 
         else:
             # iostream is None (0, or False)
             # used RFC3977 Standards but without Compresssion
-            logger.info('An invalid iostream was specified; ' +
-                "using default: '%s'." % self._iostream)
+            logger.info('An invalid iostream was specified; '
+                        "using default: '%s'." % self._iostream)
             self._iostream = NNTPIOStream.RFC3977
 
         # can_post is a flag that gets set after authenticating
@@ -443,7 +443,6 @@ class NNTPConnection(SocketBase):
             return False
 
         return result
-
 
     def _connect(self, *args, **kwargs):
         """
@@ -645,25 +644,25 @@ class NNTPConnection(SocketBase):
 
         # Iterate over each item in the list and compile it now
         _filters = []
-        for filter in filters:
-            if isinstance(filter, re._pattern_type):
-                _filters.append(filter)
+        for _filter in filters:
+            if isinstance(_filter, re._pattern_type):
+                _filters.append(_filter)
 
-            elif isinstance(filter, basestring):
+            elif isinstance(_filter, basestring):
                 try:
-                    filter = r'^.*%s.*$' % re.escape(filter)
+                    _filter = r'^.*%s.*$' % re.escape(_filter)
                     _filters.append(
-                        re.compile(filter, flags=re.IGNORECASE),
+                        re.compile(_filter, flags=re.IGNORECASE),
                     )
-                    logger.debug('Compiled group regex "%s"' % filter)
+                    logger.debug('Compiled group regex "%s"' % _filter)
 
                 except:
                     logger.error(
-                        'Invalid group regular expression: "%s"' % filter,
+                        'Invalid group regular expression: "%s"' % _filter,
                     )
             else:
                 logger.error(
-                    'Ignored group expression: "%s"' % filter,
+                    'Ignored group expression: "%s"' % _filter,
                 )
 
         if self._grouplist is None or not lazy:
@@ -691,8 +690,8 @@ class NNTPConnection(SocketBase):
             cleaned = []
             for x in self._grouplist:
                 # Apply filter if nessisary
-                if not next((True for f in _filters \
-                                 if f.search(x['group']) is not None), False):
+                if not next((True for f in _filters
+                             if f.search(x['group']) is not None), False):
                     # Filters were specified and the matched
                     # group did not match what was specified so
                     # we can move onto the next entry
@@ -771,7 +770,8 @@ class NNTPConnection(SocketBase):
                 'No entries found at (or after) date(%s) in group %s' % (
                     refdate.strftime('%Y.%m.%d %H:%M:%S'),
                     group,
-            ))
+                ),
+            )
             self.group_index = self.group_head
             return self.group_head
 
@@ -1134,7 +1134,10 @@ class NNTPConnection(SocketBase):
             response = self.send(
                 'HEAD <%s>' % id,
                 decoders=[
-                    CodecHeader(encoding=self.encoding, work_dir=self.work_dir),
+                    CodecHeader(
+                        encoding=self.encoding,
+                        work_dir=self.work_dir,
+                    ),
                 ],
             )
 
@@ -1149,7 +1152,8 @@ class NNTPConnection(SocketBase):
                 logger.warning(
                     'ARTICLE <%s> not found; checking backups.' % id,
                 )
-                return next((b.article for b in self._backups \
+                return next(
+                    (b.article for b in self._backups
                         if b.stat(id, group) not in (None, False)), None)
 
             logger.warning('ARTICLE <%s> not found.' % id)
@@ -1162,7 +1166,8 @@ class NNTPConnection(SocketBase):
             if self._backups:
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
-                return next((b.article for b in self._backups \
+                return next(
+                    (b.article for b in self._backups
                         if b.stat(id, group) not in (None, False)), None)
             return False
 
@@ -1226,9 +1231,6 @@ class NNTPConnection(SocketBase):
         elif isinstance(id, NNTPSegmentedPost):
             # Support NNTPSegmentedPost() Objects
 
-            # Get segment count
-            total_parts = len(id)
-
             for part_no, _article in enumerate(id):
                 # We need to download each article define
                 if self.join_group:
@@ -1248,8 +1250,10 @@ class NNTPConnection(SocketBase):
                     # If we reach here we failed to fetch the item, so
                     # we'll try the next group
                     logger.warning(
-                        'Failed to fetch segment #%.2d (%s)' % \
-                        (_article.no, _article.filename),
+                        'Failed to fetch segment #%.2d (%s)' % (
+                            _article.no,
+                            _article.filename,
+                        ),
                     )
 
                     # mark our article invalid as part of it's response
@@ -1267,8 +1271,9 @@ class NNTPConnection(SocketBase):
 
                     if len(article) == 0:
                         logger.warning(
-                            'No content found in segment #%.2d (%s)' % \
-                            (_article.no, _article.filename),
+                            'No content found in segment #%.2d (%s)' % (
+                                _article.no, _article.filename,
+                            ),
                         )
 
                 else:
@@ -1276,8 +1281,9 @@ class NNTPConnection(SocketBase):
                     # our current article generated from the nzb file.
                     # Mark the object invalid and re-add it
                     logger.warning(
-                        'Failed to retrieve segment (%s)' % \
-                        id.filename,
+                        'Failed to retrieve segment (%s)' % (
+                            id.filename,
+                        ),
                     )
 
                     # mark our article invalid as part of it's response
@@ -1378,7 +1384,8 @@ class NNTPConnection(SocketBase):
             if self._backups:
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
-                return next((b.article for b in self._backups \
+                return next(
+                    (b.article for b in self._backups
                         if b.get(id, work_dir, group) is not None), None)
             return None
 
@@ -1391,7 +1398,8 @@ class NNTPConnection(SocketBase):
             if self._backups:
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
-                return next((b.article for b in self._backups \
+                return next(
+                    (b.article for b in self._backups
                         if b.get(id, work_dir, group) is not None), None)
             return None
 
@@ -1458,10 +1466,10 @@ class NNTPConnection(SocketBase):
                 # We have a retry left; depending on the severity of our return
                 # code, we may try again
                 if response.code in (
-                    NNTPResponseCode.FETCH_ERROR,
-                    NNTPResponseCode.BAD_RESPONSE,
-                    NNTPResponseCode.NO_CONNECTION,
-                    NNTPResponseCode.CONNECTION_LOST):
+                        NNTPResponseCode.FETCH_ERROR,
+                        NNTPResponseCode.BAD_RESPONSE,
+                        NNTPResponseCode.NO_CONNECTION,
+                        NNTPResponseCode.CONNECTION_LOST):
                     # If we reach here; our return code is considered
                     # recoverable;
 
@@ -1544,15 +1552,17 @@ class NNTPConnection(SocketBase):
             # is set from get() and _get() calls.
 
             # If we determine the end user has specified a max_bytes value,
-            # then we adjust the total buffer read size.  This allows us to force
-            # an earlier processing.  The minimum buffer size can never be less
-            # than 2048
-            max_bytes = max([ d.max_bytes() for d in decoders])
+            # then we adjust the total buffer read size.  This allows us to
+            # force an earlier processing.  The minimum buffer size can never
+            # be less than 2048
+            max_bytes = max([d.max_bytes() for d in decoders])
             if max_bytes > 0:
                 if max_bytes < NNTP_MIN_READ_BUFFER_SIZE:
                     self.MAX_BUFFER_SIZE = NNTP_MIN_READ_BUFFER_SIZE
                 else:
-                    self.MAX_BUFFER_SIZE = min([max_bytes, self.MAX_BUFFER_SIZE])
+                    self.MAX_BUFFER_SIZE = min(
+                        [max_bytes, self.MAX_BUFFER_SIZE])
+
         logger.debug('Read Buffer set to %d bytes' % self.MAX_BUFFER_SIZE)
 
         #  We track the last codec activated using the codec_active
@@ -1635,9 +1645,8 @@ class NNTPConnection(SocketBase):
                     else:
                         self.last_resp_code = NNTPResponseCode.CONNECTION_LOST
                         if len(data):
-                            self.last_resp_str = 'Connection Lost: (len=%d)' \
-                                % (len(data),
-                            )
+                            self.last_resp_str = \
+                                'Connection Lost: (len=%d)' % (len(data))
                         else:
                             self.last_resp_str = 'Connection Lost: <nothing>'
 
@@ -1846,8 +1855,8 @@ class NNTPConnection(SocketBase):
                         break
 
             if not self.payload_gzipped and (tail_ptr-head_ptr) > 0 \
-                and total_bytes < self.MAX_BUFFER_SIZE \
-                and tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
+                    and total_bytes < self.MAX_BUFFER_SIZE \
+                    and tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
                 # Astraweb is absolutely terrible for sending a little
                 # bit more data a few seconds later. This is a final
                 # call to try to handle these stalls just before the last
@@ -1873,7 +1882,7 @@ class NNTPConnection(SocketBase):
                         # when retrieving server-side listings; it's best to
                         # just alert the end user and move along
                         logger.error(
-                            '_recv() %d byte(s) ZLIB decompression failure.' \
+                            '_recv() %d byte(s) ZLIB decompression failure.'
                             % (_bytes),
                         )
 
@@ -1918,8 +1927,9 @@ class NNTPConnection(SocketBase):
                     # This line scans the line of data we read and determines
                     # what kind of data it is (yEnc, Headers, etc) based on the
                     # decoders passed into _recv()
-                    codec_active = next((d for d in decoders
-                              if d.detect(data) is not None), None)
+                    codec_active = next(
+                        (d for d in decoders
+                            if d.detect(data) is not None), None)
                     if codec_active:
                         logger.debug('Decoding using %s' % type(codec_active))
 
@@ -1947,7 +1957,8 @@ class NNTPConnection(SocketBase):
                 # Adjust our pointer
                 d_head = self._data.tell()
 
-                # If we're at the end of our buffer; we can go ahead and clear it
+                # If we're at the end of our buffer; we can go ahead and clear
+                # it
                 if d_head >= self._data_len:
                     # Reset our data object once we're done parsing
                     self._data.truncate(0)
@@ -2029,11 +2040,10 @@ class NNTPConnection(SocketBase):
                     response.body.write(repr(decoded) + EOL)
 
                     if max_bytes > 0:
-                        # We're instructed to only retrieve 'some' content and abort
-                        # for peaking purposes; so we're done now.
+                        # We're instructed to only retrieve 'some' content and
+                        # abort for peaking purposes; so we're done now.
                         self.close()
                         return response
-
 
         # Track lines processed
         self.line_count += len(self.lines)
