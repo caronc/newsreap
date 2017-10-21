@@ -130,13 +130,14 @@ TYPE_PARSE_RE = re.compile(
 #     test.txt => .txt
 #     test.part00.7z => .part00.7z
 #     test.part00.7z.par2 => .part00.7z.par2
+#     test.vol000+01.par2 => .vol000+01.par2
 #     test.tar.gz => .tar.gz
 #     A.crazy.filename.with.lots.of.content.part00.7z.vol03+4.par2
 #                 => .part00.7z.vol03+4.par2
 #
 EXTENSION_SEARCH_RE = re.compile(
     r'(?P<ext>(\.part[0-9]+)?'
-    r'\.[0-9a-z]{2,4}'
+    r'(\.[0-9a-z]{2,4})?'
     r'(\.(gz|bz2?|xz))?'
     r'(\.vol[0-9]+(\+[0-9]+)?)?(\.par2?)?)\s*$',
     re.I,
@@ -818,7 +819,9 @@ class Mime(object):
 
         result = EXTENSION_SEARCH_RE.search(filename)
         if result:
-            return result.group('ext')
+            ext = result.group('ext')
+            if ext is not None:
+                return ext
 
         # Nothing found if we reach here
         return ''
