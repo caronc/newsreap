@@ -50,7 +50,7 @@ class NNTPSegmentedPost(object):
 
     def __init__(self, filename, subject=DEFAULT_NNTP_SUBJECT,
                  poster=DEFAULT_NNTP_POSTER, groups=None,
-                 utc=None, work_dir=None, *args, **kwargs):
+                 utc=None, work_dir=None, sort_no=None, *args, **kwargs):
         """Initialize NNTP Segmented File
 
         Args:
@@ -95,6 +95,11 @@ class NNTPSegmentedPost(object):
         self.poster = poster
         self.utc = utc
         self.subject = subject
+
+        # The sort order which helps with file ordering, if set to None
+        # or a common value, then it has no bearing on anything.  Its
+        # main goal is to provide a method of sorting multiple SegmentedPosts
+        self.sort_no = sort_no
 
         # When writing files, this is the memory buffer to fill when
         # dealing with very large files. If this is set to None, then
@@ -207,7 +212,7 @@ class NNTPSegmentedPost(object):
             # No articles means no validity
             return False
 
-        return next((False for c in self.articles \
+        return next((False for c in self.articles
                      if c.is_valid() is False), True)
 
     def split(self, size=81920, mem_buf=1048576):
@@ -217,8 +222,9 @@ class NNTPSegmentedPost(object):
         the contents of the file into several pieces.
 
         This function returns True if this action was successful, otherwise
-        this function returns False.  Newly split content is 'not' in a detached
-        form meaning content is removed if the object goes out of scope
+        this function returns False.  Newly split content is 'not' in a
+        detached form meaning content is removed if the object goes out of
+        scope
         """
         if len(self.articles) > 1:
             # Not possible to split a post that is already split
@@ -239,8 +245,9 @@ class NNTPSegmentedPost(object):
         Article() object.
 
         This function returns True if this action was successful, otherwise
-        this function returns False.  Newly joined content is 'not' in a detached
-        form meaning content is removed if the object goes out of scope
+        this function returns False.  Newly joined content is 'not' in a
+        detached form meaning content is removed if the object goes out of
+        scope
         """
 
         if len(self.articles) == 1:
@@ -251,26 +258,29 @@ class NNTPSegmentedPost(object):
             # Not possible to join less than 1 article
             return False
 
-        # acquire the first article
-        head_article = None
+        # acquire the first entry; this will be what we build from
+        articles = iter(self.articles)
 
-        for content in self.articles:
-            if head_article is None:
-                # First entry; create a copy of our head article.  This
-                # article is attached by default we want to leave it this way
-                head_article = content.copy()
-                continue
+        # Create a copy of our first object
+        head_article = articles.next().copy()
+
+        # Iterate over all our remaining article entries and stack their
+        # content onto our head_article
+        for content in articles:
 
             # Append our content
             if not head_article.append(content):
+
+                # Clean up our copy
                 del head_article
+
                 # We failed
                 return False
 
         # Reset with a new sorted set of articles
-        self.articles = sortedset(key=lambda x: x.key())
+        self.articles.clear()
 
-        # Add our new entry (leave it attached)
+        # Add our single head_article entry as our primary entry
         self.articles.add(head_article)
 
         # We're done!
@@ -280,7 +290,7 @@ class NNTPSegmentedPost(object):
         """
         Returns a list of the files within article
         """
-        return [ x.path() for x in self.articles ]
+        return [x.path() for x in self.articles]
 
     def size(self):
         """
@@ -312,6 +322,27 @@ class NNTPSegmentedPost(object):
         """
         Handles less than for storing in btrees
         """
+        if self.sort_no is not None:
+            # Compare based on a sort number, undefined sorting always
+            # trumps those with sorting defined.
+            if other.sort_no is not None:
+                if self.sort_no == other.sort_no:
+                    return str(self.filename) < str(other.filename)
+
+                # Compare our sorting values
+                return str(self.sort_no) < str(other.sort_no)
+
+            # If no other sort_no then we are not less than it; those without
+            # a sort_no should always trump those with one
+            return False
+
+        elif other.sort_no is not None:
+            # We don't have a sort_no, and the other does; we're less than it
+            # based on our set rules.
+            return True
+
+        # If we reach here, neither comparison objects have a sort_no defined.
+        # as a result, we just base our match on the filename specified
         return str(self.filename) < str(other.filename)
 
     def __eq__(self, other):
@@ -319,6 +350,20 @@ class NNTPSegmentedPost(object):
         Handles equality
 
         """
+        if self.sort_no:
+            # Compare based on a sort number, undefined sorting always
+            # trumps those with sorting defined.
+            if other.sort_no:
+                if self.sort_no == other.sort_no:
+                    return self.__dict__ == other.__dict__
+
+            # Any other posibility is False
+            return False
+
+        elif other.sort_no:
+            # they have a sort and we don't. there is no equality in that
+            return False
+
         return self.__dict__ == other.__dict__
 
     def __getitem__(self, index):
@@ -343,7 +388,14 @@ class NNTPSegmentedPost(object):
         """
         Return an unambigious version of the object
         """
-        return '<NNTPSegmentedPost filename="%s" articles=%d />' % (
+        if not self.sort_no:
+            return '<NNTPSegmentedPost filename="%s" articles=%d />' % (
+                self.filename,
+                len(self.articles),
+            )
+
+        return '<NNTPSegmentedPost sort="%d" filename="%s" articles=%d />' % (
+            self.sort_no,
             self.filename,
             len(self.articles),
         )
