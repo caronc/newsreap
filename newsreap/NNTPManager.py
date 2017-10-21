@@ -31,6 +31,7 @@ from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPConnection import XoverGrouping
 from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+from newsreap.NNTPSettings import NNTPSettings
 
 # Logging
 import logging
@@ -200,7 +201,7 @@ class NNTPManager(object):
 
     """
 
-    def __init__(self, settings, *args, **kwargs):
+    def __init__(self, settings=None, *args, **kwargs):
         """
         Initialize the NNTPManager() based on the provided settings.
         it is presumed settings is a loaded NNTPSettings() object.
@@ -222,6 +223,10 @@ class NNTPManager(object):
 
         # Map signal
         gevent.signal(signal.SIGQUIT, gevent.kill)
+
+        if settings is None:
+            # Use defaults
+            settings = NNTPSettings()
 
         if not len(settings.nntp_servers):
             logger.warning("There were no NNTP Servers defined to load.")
