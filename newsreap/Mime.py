@@ -529,8 +529,11 @@ class MimeResponse(object):
         Handles equality
 
         """
-        return self.type() == other.type() and \
-            self.encoding() == other.encoding()
+        if isinstance(other, MimeResponse):
+            return self.type() == other.type() and \
+                self.encoding() == other.encoding()
+
+        return False
 
     def __repr__(self):
         """
