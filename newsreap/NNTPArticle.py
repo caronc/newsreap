@@ -19,11 +19,13 @@ import re
 from blist import sortedset
 from copy import deepcopy
 from itertools import chain
-from os.path import isfile
 from datetime import datetime
+
+from os.path import isfile
 from os.path import abspath
 from os.path import basename
 from os.path import expanduser
+from os.path import isdir
 
 from newsreap.NNTPResponse import NNTPResponse
 from newsreap.NNTPContent import NNTPContent
@@ -37,6 +39,7 @@ from newsreap.NNTPSettings import NNTP_EOD
 from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 from newsreap.Utils import random_str
 from newsreap.Utils import bytes_to_strsize
+from newsreap.Utils import mkdir
 from newsreap.Mime import Mime
 from newsreap.Mime import DEFAULT_MIME_TYPE
 
@@ -530,12 +533,31 @@ class NNTPArticle(object):
             partno = self.decoded[0].part
         else:
             partno = 1
+
         # If we reach here an ID hasn't been generated yet; generate one
         self.id = '%s%d@%s' % (
             datetime.utcnow().strftime('%Y%m%d%H%M%S%f'),
             partno,
             host
         )
+
+    def save(self, filepath=None, copy=False):
+        """
+        Saves all of the NNTPContent into the directory specified by
+        the filepath; if no filepath is specified, then content is written
+        into it's work_dir
+        """
+
+        if filepath:
+            if not isdir(filepath) and not mkdir(filepath):
+                # We failed
+                return False
+
+        for attachment in self.decoded:
+            if not attachment.save(filepath=filepath, copy=copy):
+                return False
+
+        return True
 
     def deobsfucate(self, filebase='', codecs=None):
         """
