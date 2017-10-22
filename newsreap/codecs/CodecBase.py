@@ -16,7 +16,6 @@
 
 import errno
 from binascii import crc32
-from os.path import join
 from os.path import isdir
 from os.path import abspath
 from os.path import expanduser
@@ -112,7 +111,7 @@ class CodecBase(object):
         # TODO: Generate some statistics here too based on lines processed
 
         self.throttle_iter += 1
-        if ((self.throttle_cycles%self.throttle_iter) == 0):
+        if ((self.throttle_cycles % self.throttle_iter) == 0):
             sleep(self.throttle_time)
         return True
 
@@ -130,6 +129,37 @@ class CodecBase(object):
 
         """
         return self._max_bytes
+
+    def parse_article(self, subject, *args, **kwargs):
+        """
+        Decode a article subject line if possible and return a dictionary
+        of key -> value pair.
+
+        The following arguments are allowed (these are the same results
+        returned from the NNTPConnection.get() call.
+
+            id: u'the unique identifier',
+            article_no: 12345678,
+            poster: u'the poster's information',
+            date: datetime() object,
+            subject: u'a subject line in unicode',
+            size: 2135  // the message size in bytes
+            lines: 53   // the number of lines
+            group: u'alt.group.one'
+            xgroups : {
+                // references the Message-ID (id) per cross post
+                 u'alt.group.two': 987654321,
+                 u'alt.group.three': 12341234,
+            }
+
+        Always return None if you can't resolve the keys. Valid keys are:
+
+        'fname' : Tranlates to the parsed filename (required!)
+        'desc'  : Should always translate to the description (if there is one)
+
+        """
+        # Unless this object is overridden, nothing magical happens here
+        return None
 
     def detect(self, line, relative=True):
         """

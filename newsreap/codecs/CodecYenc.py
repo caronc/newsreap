@@ -2,7 +2,7 @@
 #
 # A Codec for handling yEnc encoded NNTP Articles
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -76,6 +76,27 @@ YENC_KEY_MAP = {
 # The larger this value, the faster the decoding process however
 # it stacks with other threads (if any) also using this.
 DEFAULT_BUFFER_SIZE = 1048576
+
+# Used to parse subject lines of NZB File entries
+NZB_SUBJECT_PARSE = (
+    # description [x/y] - "fname" yEnc (a/b)
+    # description - "fname" yEnc (a/b)
+    # description - fname yEnc (a/b)
+    # "description" - fname yEnc (a/b)
+    # "description" - fname yEnc (a/b) size
+    # "description" - fname yEnc (/b)
+    # fname yEnc (/b)
+    # fname yEnc (a/b)
+    # "fname" yEnc (/b)
+    # "fname" yEnc (a/b)
+    re.compile(
+        r"^(([\"'\s]*(?P<desc>(\s*[^\"'\[(])+)"
+        r"([\"'\s-]+[\[(]?(?P<index>\d+)\/(?P<count>\d+)[)\]]?)?)?"
+        r"[\"'\s-]+)?(?P<fname>[^\"']+)[\"'\s-]+yEnc\s+[\[(]?"
+        r"(?P<yindex>\d+)?\/"
+        r"(?P<ycount>\d+)[\])]?([+\s]+?(?P<size>\s*\d+))?\s*$", re.IGNORECASE,
+    )
+)
 
 
 class YencError(Exception):
@@ -160,6 +181,32 @@ class CodecYenc(CodecBase):
         # Used for encoding; This defines the maximum number of (encoded)
         # characters to display per line.
         self.linelen = linelen
+
+    def parse_article(self, subject, *args, **kwargs):
+        """
+        Takes a an article header and returns it's parsed content if it's
+        successful. Otherwise it returns None.
+        """
+
+        matched = NZB_SUBJECT_PARSE.match(subject)
+        if matched is None:
+            # subject is not parsable
+            return None
+
+        results = {}
+
+        # Trim results
+        if matched.group('desc') is not None:
+            results['desc'] = re.sub('[\s-]+$', '', matched.group('desc'))
+        if matched.group('fname') is not None:
+            results['fname'] = matched.group('fname').strip()
+
+        # Support conversion of integers
+        for _attr in ['index', 'count', 'yindex', 'ycount', 'size']:
+            if matched.group(_attr) is not None:
+                results[_attr] = int(matched.group(_attr))
+
+        return results
 
     def encode(self, content, mem_buf=DEFAULT_BUFFER_SIZE):
         """

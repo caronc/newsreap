@@ -50,7 +50,7 @@ class CodecYENC_Test(TestBase):
 
     def test_yenc_v1_1_headers(self):
         """
-        Test that we can pick up the yenc headers correctly
+        Test that we can pick up the yEnc v1.1 headers correctly
 
         yenc Style v1.1
         """
@@ -71,7 +71,7 @@ class CodecYENC_Test(TestBase):
 
     def test_yenc_v1_2_headers(self):
         """
-        Test that we can pick up the yenc headers correctly
+        Test that we can pick up the yEnc v1.2 headers correctly
 
         yenc Style v1.2
         """
@@ -187,6 +187,8 @@ class CodecYENC_Test(TestBase):
 
     def test_decoding_yenc_single_part(self):
         """
+        Test decoding of a yEnc single part
+
         This test was generated after visiting http://www.yenc.org and finding
         the examples they provide on their site.
 
@@ -235,7 +237,7 @@ class CodecYENC_Test(TestBase):
         # our content should be valid
         assert isinstance(content_py, NNTPBinaryContent)
 
-        # Force to operate with the C extension yenc
+        # Force to operate with the C extension yEnc
         # This require the extensions to be installed
         # on the system
         CodecYenc.FAST_YENC_SUPPORT = True
@@ -263,6 +265,8 @@ class CodecYENC_Test(TestBase):
 
     def test_decoding_yenc_multi_part(self):
         """
+        Test decoding of a yEnc multi-part
+
         This test was generated after visiting http://www.yenc.org and finding
         the examples they provide on their site.
 
@@ -271,11 +275,11 @@ class CodecYENC_Test(TestBase):
 
             Then extracting it revealed 3 files:
                 - 00000020.ntx
-                    This is the yenc file as it would have been seen after
+                    This is the yEnc file as it would have been seen after
                     being downloaded from the NNTP server (part 1 of 2)
 
                 - 00000021.ntx
-                    This is the yenc file as it would have been seen after
+                    This is the yEnc file as it would have been seen after
                     being downloaded from the NNTP server (part 2 of 2)
 
                 - joystick.jpg
@@ -284,7 +288,7 @@ class CodecYENC_Test(TestBase):
                     to test the file against.
         """
 
-        # A simple test for ensuring that the yenc
+        # A simple test for ensuring that the yEnc
         # library exists; otherwise we want this test
         # to fail; the below line will handle this for
         # us; we'll let the test fail on an import error
@@ -326,7 +330,7 @@ class CodecYENC_Test(TestBase):
             # Verify our data is good
             assert x.is_valid() is True
 
-        # Force to operate with the C extension yenc
+        # Force to operate with the C extension yEnc
         # This require the extensions to be installed
         # on the system
         CodecYenc.FAST_YENC_SUPPORT = True
@@ -340,7 +344,7 @@ class CodecYENC_Test(TestBase):
             assert x.is_valid() is True
 
         # Confirm that our output from our python implimentation
-        # matches that of our yenc C version.
+        # matches that of our yEnc C version.
         assert fd1_py.tell() == fd1_c.tell()
         assert fd2_py.tell() == fd2_c.tell()
 
@@ -374,10 +378,12 @@ class CodecYENC_Test(TestBase):
 
     def test_yenc_v1_3_encoding(self):
         """
+        Test the yEnc (v1.3) encoding of data (via codec)
+
         Test the encoding of data; this is nessisary prior to a post
         """
 
-        # A simple test for ensuring that the yenc
+        # A simple test for ensuring that the yEnc
         # library exists; otherwise we want this test
         # to fail; the below line will handle this for
         # us; we'll let the test fail on an import error
@@ -418,10 +424,12 @@ class CodecYENC_Test(TestBase):
 
     def test_yenc_v1_3_NNTPContent_encode(self):
         """
-        Test the encoding of data; this is nessisary prior to a post
+        Test the yEnc (v1.3) encoding of data (via NNTPContent)
+
+        this is nessisary prior to a post
         """
 
-        # A simple test for ensuring that the yenc
+        # A simple test for ensuring that the yEnc
         # library exists; otherwise we want this test
         # to fail; the below line will handle this for
         # us; we'll let the test fail on an import error
@@ -475,7 +483,7 @@ class CodecYENC_Test(TestBase):
         Test the encoding of data; this is nessisary prior to a post
         """
 
-        # A simple test for ensuring that the yenc
+        # A simple test for ensuring that the yEnc
         # library exists; otherwise we want this test
         # to fail; the below line will handle this for
         # us; we'll let the test fail on an import error
@@ -531,7 +539,7 @@ class CodecYENC_Test(TestBase):
         Test the encoding of fresh new data
         """
 
-        # A simple test for ensuring that the yenc
+        # A simple test for ensuring that the yEnc
         # library exists; otherwise we want this test
         # to fail; the below line will handle this for
         # us; we'll let the test fail on an import error
@@ -575,7 +583,7 @@ class CodecYENC_Test(TestBase):
         This test is identicle to test_decoding_yenc_single_part defined in
         this same test file with the exception of testing the early abort.
         """
-        # A simple test for ensuring that the yenc
+        # A simple test for ensuring that the yEnc
         # library exists; otherwise we want this test
         # to fail; the below line will handle this for
         # us; we'll let the test fail on an import error
@@ -606,7 +614,7 @@ class CodecYENC_Test(TestBase):
         # our content should be valid
         assert isinstance(content_py, NNTPBinaryContent)
 
-        # Force to operate with the C extension yenc
+        # Force to operate with the C extension yEnc
         # This require the extensions to be installed
         # on the system
         CodecYenc.FAST_YENC_SUPPORT = True
@@ -622,7 +630,7 @@ class CodecYENC_Test(TestBase):
         assert content_c.is_valid() is False
 
         # Confirm that our output from our python implimentation
-        # matches that of our yenc C version.
+        # matches that of our yEnc C version.
         assert fd_py.tell() == fd_c.tell()
 
         with open(decoded_filepath, 'r') as fd_in:
@@ -635,3 +643,145 @@ class CodecYENC_Test(TestBase):
         # Compare our processed content with the expected results
         assert decoded[0:length_py] == content_py.getvalue()
         assert decoded[0:length_c] == content_c.getvalue()
+
+    def test_parse_article(self):
+        """
+        Test parse_article()
+
+        """
+        # Initialize Codec
+        yd = CodecYenc(work_dir=self.test_dir)
+
+        # filename wrapped in quotes and no quotes on description,
+        # use of index/count values
+        matches = yd.parse_article('description [1/2] - "filename" yEnc (3/4)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' in matches)
+        assert(matches['desc'] == 'description')
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' in matches)
+        assert(matches['index'] == 1)
+        assert('count' in matches)
+        assert(matches['count'] == 2)
+        assert('yindex' in matches)
+        assert(matches['yindex'] == 3)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 4)
+        assert('size' not in matches)
+
+        # Filename wrapped in quotes and no quotes on description
+        matches = yd.parse_article('description - "filename" yEnc (1/2)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' in matches)
+        assert(matches['desc'] == 'description')
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' in matches)
+        assert(matches['yindex'] == 1)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 2)
+        assert('size' not in matches)
+
+        # no quotes on filename and no quotes on description
+        matches = yd.parse_article('description - filename yEnc (3/4)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' in matches)
+        assert(matches['desc'] == 'description')
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' in matches)
+        assert(matches['yindex'] == 3)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 4)
+        assert('size' not in matches)
+
+        # not quotes around filename and quotes on description,
+        # use of size object
+        matches = yd.parse_article('"description" - filename yEnc (5/6) 13450')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' in matches)
+        assert(matches['desc'] == 'description')
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' in matches)
+        assert(matches['yindex'] == 5)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 6)
+        assert('size' in matches)
+        assert(matches['size'] == 13450)
+
+        # filename not in quotes and nquotes around description
+        # no yindex value
+        matches = yd.parse_article('"description" - filename yEnc (/1)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' in matches)
+        assert(matches['desc'] == 'description')
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' not in matches)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 1)
+        assert('size' not in matches)
+
+        # just a filename in quotes and yindex and ycount
+        matches = yd.parse_article('"filename" yEnc (1/2)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' not in matches)
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' in matches)
+        assert(matches['yindex'] == 1)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 2)
+        assert('size' not in matches)
+
+        # just a filename in quotes and ycount
+        matches = yd.parse_article('"filename" yEnc (/2)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' not in matches)
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' not in matches)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 2)
+        assert('size' not in matches)
+
+        # just a filename (no quotes) and yindex and ycount
+        matches = yd.parse_article('filename yEnc (1/2)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' not in matches)
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' in matches)
+        assert(matches['yindex'] == 1)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 2)
+        assert('size' not in matches)
+
+        # just a filename (no quotes) and ycount
+        matches = yd.parse_article('filename yEnc (/2)')
+        assert(isinstance(matches, dict) is True)
+        assert('desc' not in matches)
+        assert('fname' in matches)
+        assert(matches['fname'] == 'filename')
+        assert('index' not in matches)
+        assert('count' not in matches)
+        assert('yindex' not in matches)
+        assert('ycount' in matches)
+        assert(matches['ycount'] == 2)
+        assert('size' not in matches)
