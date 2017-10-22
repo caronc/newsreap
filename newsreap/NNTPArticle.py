@@ -22,19 +22,23 @@ from itertools import chain
 from os.path import isfile
 from datetime import datetime
 from os.path import abspath
+from os.path import basename
 from os.path import expanduser
 
 from newsreap.NNTPResponse import NNTPResponse
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
+from newsreap.codecs.CodecYenc import CodecYenc
+from newsreap.codecs.CodecBase import CodecBase
 from newsreap.NNTPHeader import NNTPHeader
 from newsreap.NNTPSettings import NNTP_EOL
 from newsreap.NNTPSettings import NNTP_EOD
 from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 from newsreap.Utils import random_str
 from newsreap.Utils import bytes_to_strsize
-from NNTPContent import NNTPFileMode
+from newsreap.Mime import Mime
+from newsreap.Mime import DEFAULT_MIME_TYPE
 
 # Logging
 import logging
@@ -70,7 +74,7 @@ class NNTPArticle(object):
 
     def __init__(self, id=None, subject=DEFAULT_NNTP_SUBJECT,
                  poster=DEFAULT_NNTP_POSTER, groups=None, work_dir=None,
-                 *args, **kwargs):
+                 codecs=None, *args, **kwargs):
         """
         Initialize NNTP Article
 
@@ -125,6 +129,15 @@ class NNTPArticle(object):
         # Our body contains non-decoded content
         self.body = NNTPAsciiContent(work_dir=self.work_dir)
 
+        # Load our Codecs
+        self._codecs = codecs
+
+        # Provide default codecs if required
+        if not self._codecs:
+            self._codecs = [CodecYenc(), ]
+
+        elif isinstance(self._codecs, CodecBase):
+            self._codecs = [self._codecs, ]
 
     def load(self, response):
         """
@@ -378,11 +391,6 @@ class NNTPArticle(object):
             # more then one possible thing to append to
             return False
 
-            # We don't have any content objects to append to; create it
-            if not self.add(article):
-                # We could not add our article
-                return False
-
         for article in articles:
             if len(article) == 0:
                 # No attachments; move along silently
@@ -528,6 +536,143 @@ class NNTPArticle(object):
             partno,
             host
         )
+
+    def deobsfucate(self, filebase='', codecs=None):
+        """
+        Using the information we have in the article generate a filename to
+        the best of our ability.
+
+        filebase: provide a fallback filename base (the part of the file
+                  before the extension) to build on if we can't detect
+                  the file on our own.
+
+        codecs:   The codec(s) you wish to use to assist in the deobsfucation
+        """
+
+        if len(self.decoded) != 1:
+            # There is ambiguity if there is not one attachment
+            return None
+
+        if filebase is None:
+            # Safety
+            filebase = ''
+
+        # The detected article filename and extension
+        a_name = ''
+        a_fext = ''
+        a_mime = None
+
+        # The detected attachment filename and extension
+        d_name = ''
+        d_fext = ''
+        d_mime = None
+
+        # Create our Mime object since we'll be using it a lot
+        m = Mime()
+
+        if codecs is None:
+            codecs = self._codecs
+
+        elif isinstance(codecs, CodecBase):
+            codecs = [codecs, ]
+
+        # Use our Codec(s) to extract our Yenc Subject
+        matched = None
+        for c in codecs:
+            # Use our Defined Codec(s) to extract content from our subject
+            matched = c.parse_article(
+                id=self.id,
+                article_no=self.no,
+                subject=self.subject,
+                poster=self.poster,
+            )
+
+            if matched:
+                # We succesfully got a filename from our subject line
+                a_fname = matched.get('fname', '').strip()
+                if a_fname:
+                    # always allow the name to over-ride the detected filename
+                    # if we actually have a real name we can assciated with it
+                    # by
+                    a_fext = m.extension_from_filename(a_fname)
+                    a_name = a_fname[:-len(a_fext)]
+                    a_mime = m.from_filename(a_fname)
+                    if a_mime and a_mime.type() == DEFAULT_MIME_TYPE:
+                        a_mime = None
+
+                # We can break out
+                break
+
+        ####################################
+        # Now we want to scan our attachment
+        ####################################
+
+        # Our mime object for our attachment
+        d_mime = self.decoded[0].mime()
+        d_fname = self.decoded[0].filename if self.decoded[0].filename \
+            else basename(self.decoded[0].path())
+        d_mime = m.from_bestguess(d_fname)
+        if d_mime and d_mime.type() == DEFAULT_MIME_TYPE:
+            d_mime = None
+
+        d_fext = m.extension_from_filename(d_fname)
+        d_name = d_fname[:-len(d_fext)]
+
+        # At this point we have to make a decision to go with the filename
+        # pulled from our content object, or go with the filename detected
+        # from the article.
+
+        _name = filebase
+        _fext = None
+
+        # Using the mime types, we decide which one is more likely the name
+        if a_mime is None:
+            # Attachment was not parsable
+            if d_mime is not None:
+                # However we did detect a file through this method
+                _fext = d_fext
+                _name = filebase if filebase else d_name
+
+        elif d_mime is not None:
+            # Attachment is parsable and so is our attachment
+            if d_mime == a_mime:
+                # Same type
+                _fext = d_fext if d_fext else a_fext
+                _name = _name if _name else d_name
+
+            else:
+                # We need to choose one over the other
+                if len(d_fext):
+                    # we have a filesize associated with our content which
+                    # means there is a good chance we parsed our mime typefrom
+                    # here
+                    _fext = d_fext if d_fext else d_mime.extension()
+                else:
+                    # Use whatever we parsed
+                    _fext = a_fext if a_fext else a_mime.extension()
+
+                _name = _name if _name else d_name
+
+        else:
+            # Attachment is parsable and our Article isn't, easy-peasy
+            # just use the content
+            _fext = a_fext if a_fext else a_mime.extension()
+            _name = filebase if filebase else a_name
+
+        if not _fext:
+            # Last resort
+            _fext = d_fext if d_fext else a_fext
+            if not _fext:
+                return None
+
+        if not _name:
+            # Last resort
+            _name = d_name if d_name else a_name
+            if not _name:
+                return None
+
+        # Return our assembled identifier
+        return "{0}{1}".format(_name, _fext)
 
     def size(self):
         """

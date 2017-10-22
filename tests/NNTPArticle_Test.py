@@ -460,3 +460,131 @@ class NNTPArticle_Test(TestBase):
         # the same location in memory
         article.header['Yet-Another-Entry'] = 'test3'
         assert(len(article_copy.header)+1 == len(article.header))
+
+    def test_deobsfucation(self):
+        """
+        Tests deobsfucation functionality
+        """
+
+        tmp_dir = join(self.tmp_dir, 'NNTPArticle_Test.deobsfucation')
+
+        # First we create a 512K file
+        tmp_file = join(tmp_dir, 'file.tmp')
+        rar_file = join(tmp_dir, 'file.rar')
+
+        # Allow our files to exist
+        assert(self.touch(tmp_file, size='512K', random=True) is True)
+        assert(self.touch(rar_file, size='512K', random=True) is True)
+
+        # Create an article that we'll store our rar file into; but we
+        # intentionally want to give our rarfile a different name then what
+        # is defined above
+        article = NNTPArticle(
+            subject='"my test file" - testfile.rar yEnc (1/1)',
+            poster='<noreply@newsreap.com>',
+            id='random-id',
+            groups='alt.binaries.l2g',
+            work_dir=self.tmp_dir,
+        )
+
+        # Add our Rar File
+        article.add(rar_file)
+
+        # the attachment name takes priority over the detected article name
+        assert(article.deobsfucate() == 'file.rar')
+
+        # filebase allows us to enforce what the filename will be once we
+        # figure out the extension
+        assert(article.deobsfucate(filebase="mytest") == 'mytest.rar')
+
+        # Adding a second file adds ambiguity, this will fail
+        article.add(tmp_file)
+        assert(article.deobsfucate() is None)
+
+        # Create another article; but this time we'll associate our temporary
+        # file to it. Since our temporary file has a useless extension
+        # we will test that the article parsing takes over a bigger role in
+        # the detection process.
+        article = NNTPArticle(
+            subject='"my test file" - testfile.jpeg yEnc (1/1)',
+            poster='<noreply@newsreap.com>',
+            id='random-id',
+            groups='alt.binaries.l2g',
+            work_dir=self.tmp_dir,
+        )
+
+        # Add our temporary file with a bad extension (.tmp is useless to us)
+        article.add(tmp_file)
+
+        # the article takes priority over the detected attachment
+        assert(article.deobsfucate() == 'testfile.jpeg')
+
+        # None is a perfectly accepted argument and won't cause any issues
+        assert(article.deobsfucate(filebase=None) == 'testfile.jpeg')
+
+        # If codecs are set to None, then the default codecs are used
+        assert(article.deobsfucate(codecs=None) == 'testfile.jpeg')
+
+        # If codecs are set to to an empty list, then you're effectively
+        # telling the tool to 'not' parse the article at all so our
+        # attachment is used instead
+        assert(article.deobsfucate(codecs=[]) == 'file.tmp')
+
+        # a file base with codecs disabled still alows our base to prevail
+        assert(article.deobsfucate(filebase="abcd", codecs=[]) == 'abcd.tmp')
+
+        # filebase allows us to enforce what the filename will be once we
+        # figure out the extension. Our article extension takes over
+        assert(article.deobsfucate(filebase="mytest") == 'mytest.jpeg')
+
+        # Now another thing that can happen is that our Article is not
+        # parseable but our decoded file is:
+        # Create an article that we'll store our rar file into; but we
+        # intentionally want to give our rarfile a different name then what
+        # is defined above
+        article = NNTPArticle(
+            subject='"a garbage unparseable subject',
+            poster='<noreply@newsreap.com>',
+            id='random-id',
+            groups='alt.binaries.l2g',
+            work_dir=self.tmp_dir,
+        )
+
+        # Add our Rar File
+        article.add(rar_file)
+
+        # the attachment name takes priority
+        assert(article.deobsfucate() == 'file.rar')
+
+        # Another thing that can happen is that neither the attachment or the
+        # article is parseable
+        article = NNTPArticle(
+            subject='"a garbage unparseable subject',
+            poster='<noreply@newsreap.com>',
+            id='random-id',
+            groups='alt.binaries.l2g',
+            work_dir=self.tmp_dir,
+        )
+
+        # Add our garbage .tmp file
+        article.add(tmp_file)
+
+        # unparseable everything just returns out attachment filename
+        assert(article.deobsfucate() == 'file.tmp')
+
+        # Another thing that can happen is that the subject identifies one
+        # type of file, however our attachment identifies another.
+        article = NNTPArticle(
+            subject='"my greatest picture" - l2g.png yEnc (1/1)',
+            poster='<noreply@newsreap.com>',
+            id='random-id',
+            groups='alt.binaries.l2g',
+            work_dir=self.tmp_dir,
+        )
+
+        # Add our Rar File (even though we're looking for a picture)
+        article.add(rar_file)
+
+        # the attachment name takes priority over the detected article name
+        # when 2 mime types collide
+        assert(article.deobsfucate() == 'file.rar')
