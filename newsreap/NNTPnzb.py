@@ -18,7 +18,10 @@ from blist import sortedset
 from os.path import join
 from os.path import dirname
 from os.path import basename
+from os.path import splitext
 
+from newsreap.codecs.CodecBase import CodecBase
+from newsreap.codecs.CodecYenc import CodecYenc
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPContent import NNTPFileMode
 from newsreap.NNTPArticle import NNTPArticle
@@ -95,39 +98,8 @@ NZB_XML_STANDALONE = True
 # Defined globally for namespace lookups with lxml calls
 NZB_LXML_NAMESPACES = {'ns': NZB_XML_NAMESPACE}
 
-# Used to parse subject lines of NZB File entries
-NZB_SUBJECT_PARSE = (
-    # description [x/y] - "fname" yEnc (a/b)
-    # description - "fname" yEnc (a/b)
-    # description - fname yEnc (a/b)
-    # "description" - fname yEnc (a/b)
-    # "description" - fname yEnc (a/b) size
-    # "description" - fname yEnc (/b)
-    # fname yEnc (/b)
-    # fname yEnc (a/b)
-    # "fname" yEnc (/b)
-    # "fname" yEnc (a/b)
-
-    # TODO: Subject Parsing should be broken into it's own class that can allow
-    # the loading of more content in addition to some hard-coded entries too.
-    # desc, index, count, fname, etc should be constant defines that index into
-    # the dictionary response of this subject parser objects response
-    # The subject object response should return None if parsing was not
-    # possible, otherwise it returns a dictionary of the indexed content.
-    re.compile(
-        r"^([\"'\s]*(?P<desc>(\s*[^\"'\[(])+)"
-        r"([\"'\s-]+[\[(]?(?P<index>\d+)\/(?P<count>\d+)[)\]]?)?)?"
-        r"[\"'\s-]+(?P<fname>[^\"']+)[\"'\s-]+yEnc\s+[\[(]?(?P<yindex>\d+)?\/"
-        r"(?P<ycount>\d+)[\])]?([+\s]+?(?P<size>\s*\d+))?\s*$", re.IGNORECASE,
-    )
-)
-
 # NZB-Filename
 NZB_EXTENSION_RE = re.compile(r'(?P<fname>).nzb$', re.IGNORECASE)
-
-# The default filename assigned when one can't be detected from the
-# NZB-File
-DEFAULT_UNDETECTED_FILENAME = 'unknown'
 
 
 class NNTPnzb(NNTPContent):
@@ -140,13 +112,16 @@ class NNTPnzb(NNTPContent):
     """
 
     def __init__(self, nzbfile=None, encoding=XML_ENCODING, work_dir=None,
-                 mode=NZBParseMode.Simple, *args, **kwargs):
+                 mode=NZBParseMode.Simple, codecs=None, *args, **kwargs):
         """
         Initialize NNTP NZB object
 
         A nzbfile can optionally be specified identifying the location of the
         nzb file to open/read or even eventually write to if you're generating
         one.
+
+        codecs: define the codecs you want to use to parse the articles
+                contents
         """
 
         self._lazy_is_valid = None
@@ -212,6 +187,16 @@ class NNTPnzb(NNTPContent):
 
         # Create our Mime object since we'll be using it a lot
         self._mime = Mime()
+
+        # Load our Codecs
+        self._codecs = codecs
+
+        # Provide default codecs if required
+        if not self._codecs:
+            self._codecs = [CodecYenc(), ]
+
+        elif isinstance(self._codecs, CodecBase):
+            self._codecs = [self._codecs, ]
 
     def save(self, nzbfile=None, pretty=True, dtd_type=XMLDTDType.Public):
         """
@@ -282,19 +267,29 @@ class NNTPnzb(NNTPContent):
                     eol,
                 ))
 
-            for article in self.segments:
-                if not len(article):
+            for segno, segment in enumerate(self.segments):
+                if not len(segment):
+                    logger.error(
+                        "NZB-File '%s' has no defined articles." % self.path())
                     self.remove()
                     return False
+
+                if not len(segment.groups):
+                    logger.warning(
+                        "NZB-File '%s' (segno %d) has no defined groups." % (
+                            self.path(),
+                            segno,
+                        ),
+                    )
 
                 if pretty:
                     indent = ''.ljust(self.padding_multiplier, self.padding)
 
                 self.write('%s<file poster="%s" date="%s" subject="%s">%s' % (
                     indent,
-                    self.escape_xml(article.poster),
-                    article.utc.strftime('%s'),
-                    self.escape_xml(article.subject),
+                    self.escape_xml(segment.poster),
+                    segment.utc.strftime('%s'),
+                    self.escape_xml(segment.subject),
                     eol,
                 ))
 
@@ -311,7 +306,7 @@ class NNTPnzb(NNTPContent):
                     indent = ''.ljust(
                         self.padding_multiplier*3, self.padding)
 
-                for group in article.groups:
+                for group in segment.groups:
                     self.write('%s<group>%s</group>%s' % (
                         indent,
                         self.escape_xml(group),
@@ -331,29 +326,25 @@ class NNTPnzb(NNTPContent):
                     eol,
                 ))
 
-                for part, content in enumerate(article):
-                    if not len(content.groups):
-                        self.remove()
-                        return False
-
+                for part, article in enumerate(segment):
                     if pretty:
                         indent = ''.ljust(
                             self.padding_multiplier*3, self.padding)
 
-                    for segment in content:
+                    for attachment in article:
                         # use enumerated content and not the part assigned.
                         # this is by design because it gives developers the
-                        # ability to add/remove items from the segments and
+                        # ability to add/remove items from the attachment and
                         # only use the part numbers for their own personal
                         # ordering.
 
-                        _bytes = len(segment)
+                        _bytes = len(attachment)
                         self.write(
                             '%s<segment %snumber="%d">%s</segment>%s' % (
                                 indent,
                                 (('bytes="%d "' % _bytes) if _bytes else ''),
                                 part+1,
-                                self.escape_xml(content.id),
+                                self.escape_xml(article.id),
                                 eol,
                             )
                         )
@@ -389,6 +380,7 @@ class NNTPnzb(NNTPContent):
             self.close()
             return True
 
+        logger.error("NZB-File '%s' could not be accessed." % self.path())
         return False
 
     def gid(self):
@@ -524,8 +516,7 @@ class NNTPnzb(NNTPContent):
             self._lazy_gid = None
             self.close()
 
-            if not super(NNTPnzb, self)\
-               .load(filepath=filepath, detached=detached):
+            if not super(NNTPnzb, self).load(filepath=filepath):
                 self._segments_loaded = False
                 return False
 
@@ -626,41 +617,6 @@ class NNTPnzb(NNTPContent):
 
         return self._htmlparser.unescape(escaped_xml).decode(encoding)
 
-    def parse_subject(self, subject, unescape=False, encoding=None):
-        """
-        Takes a subject string and returns a dictionary of it's parsed results
-
-        If the content can't be parsed, then None is returned.
-        """
-        if unescape:
-            subject = self.unescape_xml(subject, encoding=encoding)
-
-        elif isinstance(subject, unicode):
-            # Encode content as per defined in our XML
-            if encoding is None:
-                encoding = self.encoding
-            subject = subject.encode(encoding)
-
-        matched = NZB_SUBJECT_PARSE.match(subject)
-        if matched is None:
-            # subject is not parsable
-            return None
-
-        results = {}
-
-        # Trim results
-        if matched.group('desc') is not None:
-            results['desc'] = re.sub('[\s-]+$', '', matched.group('desc'))
-        if matched.group('fname') is not None:
-            results['fname'] = matched.group('fname').strip()
-
-        # Support conversion of integers
-        for _attr in ['index', 'count', 'yindex', 'ycount', 'size']:
-            if matched.group(_attr) is not None:
-                results[_attr] = int(matched.group(_attr))
-
-        return results
-
     def segcount(self):
         """
         Returns the total number of segments in the NZB File
@@ -668,6 +624,35 @@ class NNTPnzb(NNTPContent):
         seg_count = 0
         seg_count += sum(len(c) for c in self)
         return seg_count
+
+    def deobsfucate(self, filebase=None):
+        """
+        Scans through the segments, articles and content associated with an
+        NZB-File and sets up the filenames defined in the segments to it's
+        best effort
+
+        filebase: provide a fallback filename base (the part of the file
+                  before the extension) to build on if we can't detect
+                  the file on our own.
+
+        """
+        # The name from the meta tag
+        _name = self.meta.get('name', '').decode(self.encoding).strip()
+        if not _name:
+            if filebase:
+                # Use base provided as a base
+                _name = filebase
+
+            else:
+                # If we can't get a name from the meta tag to start with, then
+                # we use the NZB-Filename itself as a backup
+                _name = splitext(basename(self.path()))[0]
+
+        for segment in self.segments:
+            filename = segment.deobsfucate(_name)
+            if filename:
+                # Update
+                segment.filename = filename
 
     def next(self):
         """
@@ -760,7 +745,7 @@ class NNTPnzb(NNTPContent):
         ]
 
         # The detected filename
-        _filename = DEFAULT_UNDETECTED_FILENAME
+        _filename = ''
 
         # The name from the meta tag
         _name = self.meta.get('name', '').decode(self.encoding).strip()
@@ -779,18 +764,25 @@ class NNTPnzb(NNTPContent):
         _subject = self.unescape_xml(
                 self.xml_root.attrib.get('subject', '')).decode(self.encoding)
 
-        # Attempt to parse our subject if we can
-        _parsed_subject = self.parse_subject(
-            _subject,
-            unescape=True,
-            encoding=self.encoding,
-        )
+        # Poster
+        _poster = self.unescape_xml(
+                self.xml_root.attrib.get('poster', '')).decode(self.encoding)
 
-        # Parse the subject if possible for a filename, otherwise we just use
-        # the one we already figured out.
-        if _parsed_subject is not None:
+        # Use our Codec(s) to extract our Yenc Subject
+        matched = None
+        for c in self._codecs:
+            # for each entry, parse our article
+            matched = c.parse_article(
+                subject=_subject,
+                poster=_poster,
+            )
+            if matched:
+                # We matched
+                break
+
+        if matched:
             # We succesfully got a filename from our subject line
-            _filename = _parsed_subject.get('fname', '').strip()
+            _filename = matched.get('fname', '').strip()
             if _filename and _name:
                 # always allow the name to over-ride the detected filename if
                 # we actually have a real name we can assciated with it by
@@ -801,8 +793,7 @@ class NNTPnzb(NNTPContent):
         # Initialize a NNTPSegmented File Object using the data we read
         _file = NNTPSegmentedPost(
             _filename,
-            poster=self.unescape_xml(
-                self.xml_root.attrib.get('poster', '')).decode(self.encoding),
+            poster=_poster,
             epoch=self.xml_root.attrib.get('date', '0'),
             subject=_subject,
             groups=groups,
@@ -832,6 +823,7 @@ class NNTPnzb(NNTPContent):
                 id=self.unescape_xml(segment.text),
                 no=_cur_index,
                 work_dir=self.work_dir,
+                codecs=self._codecs,
             )
 
             # Store our empty content Placeholder

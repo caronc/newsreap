@@ -51,75 +51,6 @@ class NNTPnzb_Test(TestBase):
 
     """
 
-    def test_file_parsing(self):
-        """
-        Test the filename parsing
-        """
-        # Prepare an NZB Object
-        nzbobj = NNTPnzb()
-
-        parse_str = 'Just awesome! [1/3] - "the.awesome.file.ogg" yEnc (1/1)'
-        result = nzbobj.parse_subject(parse_str)
-        assert result is not None
-        assert isinstance(result, dict)
-        assert result['desc'] == 'Just awesome!'
-        assert result['index'] == 1
-        assert result['count'] == 3
-        assert 'size' not in result
-        assert result['fname'] == 'the.awesome.file.ogg'
-        assert result['yindex'] == 1
-        assert result['ycount'] == 1
-
-        parse_str = '"Quotes on Desc" - the.awesome.file.ogg yEnc (1/2)'
-        result = nzbobj.parse_subject(parse_str)
-        assert result is not None
-        assert isinstance(result, dict)
-        assert result['desc'] == 'Quotes on Desc'
-        assert 'index' not in result
-        assert 'count' not in result
-        assert 'size' not in result
-        assert result['fname'] == 'the.awesome.file.ogg'
-        assert result['yindex'] == 1
-        assert result['ycount'] == 2
-
-        parse_str = 'A great description - the.awesome.file.ogg yEnc (/1)'
-        result = nzbobj.parse_subject(parse_str)
-        assert result is not None
-        assert isinstance(result, dict)
-        assert result['desc'] == 'A great description'
-        assert 'index' not in result
-        assert 'count' not in result
-        assert 'size' not in result
-        assert result['fname'] == 'the.awesome.file.ogg'
-        assert 'yindex' not in result
-        assert result['ycount'] == 1
-
-        parse_str = 'Another [1/1] - "the.awesome.file.ogg" yEnc (1/1) 343575'
-        result = nzbobj.parse_subject(parse_str)
-        assert result is not None
-        assert isinstance(result, dict)
-        assert result['desc'] == 'Another'
-        assert result['index'] == 1
-        assert result['count'] == 1
-        assert result['size'] == 343575
-        assert result['fname'] == 'the.awesome.file.ogg'
-        assert result['yindex'] == 1
-        assert result['ycount'] == 1
-
-        # Test escaping
-        parse_str = 'Another (4/5) - &quot;the.awesome.file.ogg&quot; yEnc '\
-            '(3/9) 123456'
-        result = nzbobj.parse_subject(parse_str, unescape=True)
-        assert result is not None
-        assert isinstance(result, dict)
-        assert result['desc'] == 'Another'
-        assert result['index'] == 4
-        assert result['count'] == 5
-        assert result['size'] == 123456
-        assert result['fname'] == 'the.awesome.file.ogg'
-        assert result['yindex'] == 3
-        assert result['ycount'] == 9
-
     def test_general_features(self):
         """
         Open a valid nzb file and make sure we can parse it
@@ -250,6 +181,9 @@ class NNTPnzb_Test(TestBase):
         # load our segments
         assert(nzbobj._segments_loaded is None)
 
+        # Confirm nothing is loaded
+        assert(len(nzbobj) == 55)
+
         # Test that we correctly store all Size 0
         # Test iterations
         for article in nzbobj:
@@ -283,6 +217,9 @@ class NNTPnzb_Test(TestBase):
 
         # NZB-File exists now
         assert(isfile(new_nzbfile) is True)
+
+        # Verify we actually did load our segments
+        assert(nzbobj._segments_loaded is True)
 
         # Now we'll open up our newly Saved nzbfile
         new_nzbobj = NNTPnzb(nzbfile=new_nzbfile)
@@ -355,68 +292,6 @@ class NNTPnzb_Test(TestBase):
 
         # Test Length
         assert len(nzbobj) == 0
-
-    def test_parse_subject(self):
-        """
-        Tests the parse_subject function
-        """
-
-        scanset = {
-            # index and count included
-            'description [2/3] - "fname" yEnc (0/1)': {
-                'desc': 'description',
-                'fname': 'fname',
-                'index': 2,
-                'count': 3,
-                'yindex': 0,
-                'ycount': 1,
-            },
-            # quotes around fname
-            'description - "fname" yEnc (0/1)': {
-                'desc': 'description',
-                'fname': 'fname',
-                'yindex': 0,
-                'ycount': 1,
-            },
-            # No quotes around anything
-            'description - fname yEnc (0/1)': {
-                'desc': 'description',
-                'fname': 'fname',
-                'yindex': 0,
-                'ycount': 1,
-            },
-            # quotes around description
-            '"description" - fname yEnc (0/1)': {
-                'desc': 'description',
-                'fname': 'fname',
-                'yindex': 0,
-                'ycount': 1,
-            },
-            # keyword yEnc and size included
-            '"description" - fname yEnc (0/1) 300': {
-                'desc': 'description',
-                'fname': 'fname',
-                'yindex': 0,
-                'ycount': 1,
-                'size': 300,
-            },
-            '"description" - fname yEnc (/1)': {
-                'desc': 'description',
-                'fname': 'fname',
-                'ycount': 1,
-            },
-        }
-
-        # Create our NZB Object
-        nzbobj = NNTPnzb()
-
-        for subject, meta in scanset.items():
-            results = nzbobj.parse_subject(subject)
-            assert(results is not None)
-            for key, value in meta.items():
-                assert(key in results)
-                assert(results[key] == value)
-                assert(type(results[key]) == type(value))
 
     def test_iter_skip_pars(self):
         """

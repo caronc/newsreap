@@ -43,6 +43,7 @@ logger = logging.getLogger(NEWSREAP_CLI)
 
 from newsreap.NNTPnzb import NNTPnzb
 from newsreap.Utils import hexdump
+from newsreap.Mime import Mime
 
 # Define our function
 NEWSREAP_CLI_PLUGINS = 'get'
@@ -81,12 +82,28 @@ def get(ctx, group, workdir, headers, inspect, sources):
         if isfile(source):
             logger.debug("Scanning NZB-File '%s'." % (source))
 
-            # Open up our NZB-File
-            nzb = NNTPnzb(source)
+            # If we reach here, we need to download the contents
+            # associated with the NZB-File
+            if not workdir:
+                workdir = join(
+                    abspath(dirname(source)),
+                    splitext(basename(source))[0],
+                )
+
+            # Open up our NZB-File and Ignore any detected par files for now
+            nzb = NNTPnzb(
+                source,
+                work_dir=workdir,
+            )
 
             if not nzb.is_valid():
                 # Check that the file is valid
                 logger.warning("Skipping invalid NZB-File '%s'." % (source))
+                continue
+
+            # Load our NZB-File into memory
+            if not nzb.load():
+                logger.warning("Failed to load NZB-File '%s'." % (source))
                 continue
 
             if headers or inspect:
@@ -136,18 +153,62 @@ def get(ctx, group, workdir, headers, inspect, sources):
 
                 continue
 
-            # If we reach here, we need to download the contents
-            # associated with the NZB-File
-            if not workdir:
-                workdir = join(
-                    abspath(dirname(source)),
-                    splitext(basename(source))[0],
-                )
+            # If the code reaches here, then we're downloading content
 
             response = mgr.get(nzb, work_dir=workdir)
             # TODO: Call a post-process-download hooks here
-            # TODO: Assemble content and save it
 
+            # Deobsfucate re-scans the existing NZB-Content and attempts to pair
+            # up filenames to their records (if they exist).  A refresh does
+            # nothing unless it has downloaded content to compare against, but
+            # in this case... we do
+            nzb.deobsfucate()
+
+            for segment in nzb:
+                # Now for each segment entry in our nzb file, we need to
+                # combine it as one; but we need to get our filename's
+                # straight. We will try to build the best name we can from
+                # each entry we find.
+
+                # Track our segment count
+                seg_count = len(segment)
+
+                if not segment.join():
+                    # We failed to join
+                    if segment.filename:
+                        logger.warning(
+                            "Failed to assemble segment '%s' (%s)." % (
+                                segment.filename,
+                                segment.strsize(),
+                            ),
+                        )
+                        continue
+
+                    else:
+                        logger.warning(
+                            "Failed to assemble segment (%s)." % (
+                                segment.strsize(),
+                            ),
+                        )
+                else:
+                    # We failed to join
+                    logger.debug("Assembled '%s' len=%s (parts=%d)." % (
+                        segment.filename, segment.strsize(), seg_count))
+
+                if segment.save():
+                    logger.info(
+                        "Successfully saved %s (%s)" % (
+                            segment.filename,
+                            segment.strsize(),
+                        ),
+                    )
+                else:
+                    logger.error(
+                        "Failed to save %s (%s)" % (
+                            segment.filename,
+                            segment.strsize(),
+                        ),
+                    )
         else:
             logger.debug("Handling Message-ID '%s'." % (source))
             # Download content by its Message-ID

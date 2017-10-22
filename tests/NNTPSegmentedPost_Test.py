@@ -2,7 +2,7 @@
 #
 # Test the NNTPSegmentedPost Object
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -14,6 +14,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import re
 import sys
 if 'threading' in sys.modules:
     #  gevent patching since pytests import
@@ -62,26 +63,25 @@ class NNTPSegmentedPost_Test(TestBase):
         assert segobj.is_valid() is False
         article = NNTPArticle()
 
-        assert segobj.add(article) is True
-        assert len(segobj) == 1
+        assert(segobj.add(article) is True)
+        assert(len(segobj) == 1)
 
         # Not valid because the entry added is not loaded or retrieved
-        assert segobj.is_valid() is False
+        assert(segobj.is_valid() is False)
 
         # Duplicates are ignored (we can't add the same file twice)
-        assert segobj.add(article) is False
-        assert len(segobj) == 1
+        assert(segobj.add(article) is False)
+        assert(len(segobj) == 1)
 
         # We can't add other types
-        assert segobj.add(None) is False
-        assert segobj.add("bad bad") is False
-        assert segobj.add(1) is False
-        assert len(segobj) == 1
+        assert(segobj.add(None) is False)
+        assert(segobj.add("bad bad") is False)
+        assert(segobj.add(1) is False)
+        assert(len(segobj) == 1)
 
         # Test iterations
         for a in segobj:
             assert isinstance(a, NNTPArticle)
-
 
     def test_split_and_join(self):
         """
@@ -93,9 +93,9 @@ class NNTPSegmentedPost_Test(TestBase):
             'NNTPSegmentedPost_Test.test_split_and_join',
         )
 
-        assert(isdir(tmp_dir) == False)
-        assert(mkdir(tmp_dir))
-        assert(isdir(tmp_dir) == True)
+        assert(isdir(tmp_dir) is False)
+        assert(mkdir(tmp_dir) is True)
+        assert(isdir(tmp_dir) is True)
 
         segobj = NNTPSegmentedPost(
             'mytestfile',
@@ -111,8 +111,101 @@ class NNTPSegmentedPost_Test(TestBase):
             segobj.add(tmp_file)
             _files.append(tmp_file)
 
-        assert(segobj.is_valid())
+        assert(segobj.is_valid() is True)
         assert(len(segobj.files()) == len(_files))
         for f in segobj.files():
             assert(f in _files)
 
+    def test_templating(self):
+        """
+        Test templating
+        """
+
+        tmp_dir = join(
+            self.tmp_dir,
+            'NNTPSegmentedPost_Test.test_templating',
+        )
+
+        assert(isdir(tmp_dir) is False)
+        assert(mkdir(tmp_dir) is True)
+        assert(isdir(tmp_dir) is True)
+
+        # our templated subject line
+        subject = '"My Test {{custom}} %Y%d%m" - {{garbageitem}}' \
+            '"{{filename}}" yEnc ({{index}}/{{count}}){{garbage}}'
+
+        segobj = NNTPSegmentedPost(
+            'file.rar',
+            subject=subject,
+            poster='<noreply@{{domain}}>',
+            groups='alt.binaries.l2g',
+        )
+
+        for i in range(5):
+            tmp_file = join(tmp_dir, 'file.r%.2d' % i)
+            assert self.touch(tmp_file, size='1K', random=True) is True
+            segobj.add(tmp_file)
+
+        # Test our templating with our custom field
+        assert(segobj.apply_template({
+            '{{custom}}': '-newsreap',
+            '{{domain}}': 'newsreap.com',
+            }) is True)
+
+        for no, article in enumerate(segobj):
+            # eg "My Test -newsreap 20172210" - "file.r00" yEnc (0/5)
+            subject_re = re.match(
+                r'^"My Test \-newsreap [0-9]{8}" - '
+                r'"(?P<fname>file\.r[0-9]{2})" yEnc '
+                r'\((?P<index>[0-9])/(?P<count>[0-9])\)$',
+                article.subject,
+            )
+
+            poster_re = re.match(
+                re.escape('<noreply@newsreap.com>'),
+                article.poster,
+            )
+
+            # We should have translated our content properly
+            assert(subject_re is not None)
+            assert(poster_re is not None)
+
+            # Check that we translated content okay
+            assert(subject_re.group('count') == str(len(segobj)))
+            assert(subject_re.group('index') == str(no+1))
+            assert(subject_re.group('fname') == article[0].filename)
+
+    def test_deobsfucation(self):
+        """
+        Test deobsfucation
+        """
+
+        tmp_dir = join(
+            self.tmp_dir,
+            'NNTPSegmentedPost_Test.test_deobsfucation',
+        )
+
+        assert(isdir(tmp_dir) is False)
+        assert(mkdir(tmp_dir) is True)
+        assert(isdir(tmp_dir) is True)
+
+        subject = '"My Test Obsfucation" - ' \
+            '"aj3jabk.af" yEnc ({{index}}/{{count}}) {{totalsize}}'
+
+        segobj = NNTPSegmentedPost(
+            'file.rar',
+            subject=subject,
+            poster='<noreply@newsreap.com>',
+            groups='alt.binaries.l2g',
+        )
+
+        # We'll build a segmented post
+        for i in range(5):
+            tmp_file = join(tmp_dir, 'file.r%.2d' % i)
+            assert self.touch(tmp_file, size='1K', random=True) is True
+            segobj.add(tmp_file)
+
+        # Apply templating
+        assert(segobj.apply_template() is True)
+
+        segobj.deobsfucate()
