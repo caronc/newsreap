@@ -72,6 +72,8 @@ class Mime_Test(TestBase):
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'image/jpeg')
         assert(response.encoding() == 'binary')
+        # A reverse lookup is done here
+        assert(response.extension() == '.jpeg')
 
     def test_from_file(self):
         """
@@ -95,11 +97,13 @@ class Mime_Test(TestBase):
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'image/jpeg')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.jpg')
 
         response = m.from_file(binary_filepath, fullscan=True)
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'image/jpeg')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.jpg')
 
     def test_from_filename_01(self):
         """
@@ -120,6 +124,7 @@ class Mime_Test(TestBase):
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'application/x-rar-compressed')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.rar')
 
         # Support other rar types (r00, r01, ..., r99):
         for inc in range(0, 100):
@@ -127,12 +132,14 @@ class Mime_Test(TestBase):
             assert(isinstance(response, MimeResponse))
             assert(response.type() == 'application/x-rar-compressed')
             assert(response.encoding() == 'binary')
+        assert(response.extension() == '.r%.2d' % inc)
 
         # Find Zip Files
         response = m.from_filename('test.zip')
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'application/zip')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.zip')
 
         # Support other zip types (z00, z01, ..., z99):
         for inc in range(0, 100):
@@ -140,56 +147,66 @@ class Mime_Test(TestBase):
             assert(isinstance(response, MimeResponse))
             assert(response.type() == 'application/zip')
             assert(response.encoding() == 'binary')
+            assert(response.extension() == '.z%.2d' % inc)
 
         # Find 7-zip Files
         response = m.from_filename('test.7z')
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'application/x-7z-compressed')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.7z')
 
         response = m.from_filename('test.7za')
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'application/x-7z-compressed')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.7za')
 
         # Support variations of par files
         response = m.from_filename('test.par')
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'application/x-par2')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.par')
 
         response = m.from_filename('test.par2')
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'application/x-par2')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.par2')
 
         response = m.from_filename('test.pdf.vol03+4.par2')
         assert(isinstance(response, MimeResponse))
         assert(response.type() == 'application/x-par2')
         assert(response.encoding() == 'binary')
+        assert(response.extension() == '.pdf.vol03+4.par2')
 
         for inc in range(0, 100):
             response = m.from_filename('test.part%.2d.7z' % inc)
             assert(isinstance(response, MimeResponse))
             assert(response.type() == 'application/x-7z-compressed')
             assert(response.encoding() == 'binary')
+            assert(response.extension() == '.part%.2d.7z' % inc)
 
         for inc in range(0, 1000):
             response = m.from_filename('test.7z.%.3d' % inc)
             assert(isinstance(response, MimeResponse))
             assert(response.type() == 'application/x-7z-compressed')
             assert(response.encoding() == 'binary')
+            assert(response.extension() == '.7z.%.3d' % inc)
 
             response = m.from_filename('test.7za.%.3d' % inc)
             assert(isinstance(response, MimeResponse))
             assert(response.type() == 'application/x-7z-compressed')
             assert(response.encoding() == 'binary')
+            assert(response.extension() == '.7za.%.3d' % inc)
 
         for inc in range(0, 10):
             response = m.from_filename('test.7z%d' % inc)
             assert(isinstance(response, MimeResponse))
             assert(response.type() == 'application/x-7z-compressed')
             assert(response.encoding() == 'binary')
+            assert(response.extension() == '.7z%d' % inc)
 
     def test_from_filename_02(self):
         """
@@ -207,6 +224,7 @@ class Mime_Test(TestBase):
             assert(isinstance(response, MimeResponse))
             assert(response.encoding() == x[2])
             assert(response.type() == x[0])
+            assert(response.extension() == x[3])
 
     def test_extension_from_mime(self):
         """

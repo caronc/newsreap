@@ -125,7 +125,7 @@ TYPE_PARSE_RE = re.compile(
 )
 
 # An advanced regular expression that can be used to extract the extension
-# in filenames. This is an alternative to os.path.splittext().
+# in filenames. This is an alternative to os.path.splitext().
 # Support all kinds of extension catching such as:
 #     test.txt => .txt
 #     test.part00.7z => .part00.7z
@@ -139,7 +139,9 @@ EXTENSION_SEARCH_RE = re.compile(
     r'(?P<ext>(\.part[0-9]+)?'
     r'(\.[0-9a-z]{2,4})?'
     r'(\.(gz|bz2?|xz))?'
-    r'(\.vol[0-9]+(\+[0-9]+)?)?(\.par2?)?)\s*$',
+    r'(\.vol[0-9]+(\+[0-9]+)?)?(\.par2?)?'
+    r'(\.[0-9]{2,3})?'
+    r')\s*$',
     re.I,
 )
 # servers. This table is used for matching based on filename in addition to
@@ -465,7 +467,7 @@ class MimeResponse(object):
     Our mime result
     """
     def __init__(self, mime_type=DEFAULT_MIME_EMTPTY_FILE,
-                 mime_encoding=DEFAULT_MIME_ENCODING):
+                 mime_encoding=DEFAULT_MIME_ENCODING, extension=None):
         """
         Initializes our MimeResponse object
         """
@@ -483,6 +485,10 @@ class MimeResponse(object):
         # e.g. binary, us-ascii
         self._mime_encoding = mime_encoding
 
+        # Store our extension if we were provided one, otherwise we'll
+        # detect it later on if we have to
+        self._extension = extension
+
     def type(self):
         """
         Always return the first element in our array, and just return
@@ -497,8 +503,44 @@ class MimeResponse(object):
         return self._mime_encoding
 
     def extension(self):
-        # TODO: using type, return the extension using our map above
+        """
+        Returns the file extension if we have it, otherwise it is
+        reverse looked up from our table and returned.
+        """
+        if self._extension:
+            return self._extension
+
+        entry = next(
+            (m for m in MIME_TYPES if m[0] == self._mime_type[0][1]
+                and m[2] == self._mime_encoding), None)
+
+        if entry:
+            # Cache our response
+            self._extension = entry[3]
+
+            # Then return it
+            return self._extension
+
+        # not found
         return ''
+
+    def __eq__(self, other):
+        """
+        Handles equality
+
+        """
+        return self.type() == other.type() and \
+            self.encoding() == other.encoding()
+
+    def __repr__(self):
+        """
+        Return a printable version of the file being read
+        """
+        return '<Mime type="%s" encoding="%s" extension="%s" />' % (
+            self.type(),
+            self.encoding(),
+            self.extension(),
+        )
 
     def __str__(self):
         return self.type()
@@ -690,7 +732,11 @@ class Mime(object):
                 if _enc_re:
                     _enc = _enc_re.group('encoding')
 
-                mr = MimeResponse(mime_type=_typs, mime_encoding=_enc)
+                mr = MimeResponse(
+                    mime_type=_typs,
+                    mime_encoding=_enc,
+                    extension=self.extension_from_filename(path),
+                )
 
                 # return our object
                 return mr
@@ -707,6 +753,7 @@ class Mime(object):
             return MimeResponse(
                 mime_type=DEFAULT_MIME_TYPE,
                 mime_encoding=DEFAULT_MIME_ENCODING,
+                extension=self.extension_from_filename(path),
             )
 
         except ValueError:
@@ -746,12 +793,14 @@ class Mime(object):
             return MimeResponse(
                 mime_type=mime_type[0],
                 mime_encoding=mime_type[2],
+                extension=self.extension_from_filename(filename),
             )
 
         # No match; default response
         return MimeResponse(
             mime_type=DEFAULT_MIME_TYPE,
             mime_encoding=DEFAULT_MIME_ENCODING,
+            extension=self.extension_from_filename(filename),
         )
 
     def from_bestguess(self, path):
@@ -775,6 +824,7 @@ class Mime(object):
                 return MimeResponse(
                     mime_type=DEFAULT_MIME_TYPE,
                     mime_encoding=DEFAULT_MIME_ENCODING,
+                    extension=self.extension_from_filename(path),
                 )
 
             elif mr is not None and _mr == DEFAULT_MIME_TYPE:
@@ -799,7 +849,7 @@ class Mime(object):
     def extension_from_filename(self, filename):
         """
         Takes a filename and extracts the extension from it (if possible).
-        This function is a little like the os.path.splittext() which can
+        This function is a little like the os.path.splitext() which can
         take a file like:  test.jpg and return the .jpg. But it can not
         however handle names like text.jpeg.gz (to which it would just
         return .gz in this case.
