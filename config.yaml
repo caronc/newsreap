@@ -120,16 +120,15 @@ processing:
 # information to make it easier to do so.
 posting:
     # The author is stamped on all posts you make.
-  - author: 'omg <putin@russia.ru>'
+    author: 'omg <putin@russia.ru>'
+
     # If posting binary content, what is the largest size you want your
     # article to be before it's broken up into segments
-    max_article_size: 25M
+    max_article_size: 5M
 
-groups:
-  - name: 'alt.binaries.test'
-  - name: 'alt.binaries.mp3'
-  - name: 'alt.binaries.series.tv.divx.french'
-  - name: 'alt.binaries.multimedia'
+    # Some archivers (such as rar, zip, 7z) can break up a large archive
+    # into several smaller archived files
+    max_archive_size: 25M
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Database Configuration

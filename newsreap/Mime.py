@@ -524,6 +524,12 @@ class MimeResponse(object):
         # not found
         return ''
 
+    def is_binary(self):
+        """
+        Returns true if the encoding is of a binary type
+        """
+        return self._mime_encoding == 'binary'
+
     def __eq__(self, other):
         """
         Handles equality

@@ -31,7 +31,9 @@ from newsreap.NNTPArticle import DEFAULT_NNTP_SUBJECT
 from newsreap.NNTPArticle import DEFAULT_NNTP_POSTER
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
+from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.Utils import bytes_to_strsize
+from newsreap.Utils import pushd
 from newsreap.Mime import Mime
 from newsreap.Mime import DEFAULT_MIME_TYPE
 
@@ -164,6 +166,10 @@ class NNTPSegmentedPost(object):
         elif not isinstance(self.groups, set):
             raise AttributeError("Invalid group set specified.")
 
+        if self.filename:
+            # attempt to add our filename
+            self.add(filename)
+
     def pop(self, index=0):
         """
         Pops an Article at the specified index out of the segment table
@@ -175,17 +181,55 @@ class NNTPSegmentedPost(object):
         Add an NNTPArticle()
         """
 
-        if isinstance(content, basestring) and isfile(content):
-            # Create a content object from the data
-            # This isn't always the best route because no part #'s
-            # are assigned this way; but if it's only a single file
-            # the user is working with; this way is much easier.
-            content = NNTPBinaryContent(
-                filepath=content,
-                work_dir=self.work_dir,
-            )
-            # At this point we fall through and the next set of
-            # if checks will catch our new content object we created
+        if isinstance(content, basestring):
+            # A mime object we can use to detect the type of file
+            m = Mime()
+
+            if isfile(content):
+                # file relative to current path; get our mime response
+                mr = m.from_bestguess(content)
+
+                # Our NNTPContent object will depend on whether or not we're
+                # dealing with an ascii file or binary
+                instance = NNTPBinaryContent \
+                    if mr.is_binary() else NNTPAsciiContent
+
+                content = instance(
+                    filepath=content,
+                    work_dir=self.work_dir,
+                )
+
+            else:
+                with pushd(self.work_dir, create_if_missing=True):
+                    # Not relative; is the file relative to the work_dir?
+                    if isfile(content):
+                        # Create a content object from the data
+                        # This isn't always the best route because no part #'s
+                        # are assigned this way; but if it's only a single file
+                        # the user is working with; this way is much easier.
+
+                        # file relative to current path; get our mime response
+                        mr = m.from_bestguess(content)
+
+                        # Our NNTPContent object will depend on whether or not
+                        # we're dealing with an ascii file or binary
+                        instance = NNTPBinaryContent \
+                            if mr.is_binary() else NNTPAsciiContent
+
+                        content = instance(
+                            filepath=content,
+                            work_dir=self.work_dir,
+                        )
+
+                    else:
+                        # we're dealing with a new file; just save what we have
+                        content = NNTPBinaryContent(
+                            filepath=content,
+                            work_dir=self.work_dir,
+                        )
+
+                    # At this point we fall through and the next set of
+                    # if checks will catch our new content object we created
 
         # duplicates are ignored in a blist and therefore
         # we just capture the length of our list before
@@ -368,10 +412,12 @@ class NNTPSegmentedPost(object):
         for index, article in enumerate(self.articles):
 
             # Make a copy of our subject
-            subject = self.subject
+            subject = self.subject \
+                if isinstance(self.subject, basestring) else ''
 
             # Make a copy of our poster
-            poster = self.poster
+            poster = self.poster \
+                if isinstance(self.poster, basestring) else ''
 
             if custom:
                 # Apply our custom object if one is defined; first escape
@@ -481,7 +527,7 @@ class NNTPSegmentedPost(object):
         detached form meaning content is removed if the object goes out of
         scope
         """
-        if len(self.articles) > 1:
+        if len(self.articles) != 1:
             # Not possible to split a post that is already split
             return False
 
@@ -491,6 +537,26 @@ class NNTPSegmentedPost(object):
 
         # Otherwise store our goods
         self.articles = articles
+        return True
+
+    def encode(self, encoders):
+        """
+        Iterates over all articles and encodes them based on the specified
+        encoders.
+        """
+
+        # Prepare a new article set
+        articles = sortedset(key=lambda x: x.key())
+        for article in self.articles:
+            result = article.encode(encoders)
+            if not result:
+                return False
+
+            articles.add(result)
+
+        # Store our new article set
+        self.articles = articles
+
         return True
 
     def join(self):

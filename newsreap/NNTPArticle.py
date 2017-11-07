@@ -40,6 +40,7 @@ from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 from newsreap.Utils import random_str
 from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import mkdir
+from newsreap.Utils import pushd
 from newsreap.Mime import Mime
 from newsreap.Mime import DEFAULT_MIME_TYPE
 
@@ -501,9 +502,49 @@ class NNTPArticle(object):
         """
         Used for adding content to the self.decoded class
         """
-        if isinstance(content, basestring) and isfile(content):
-            # Support strings
-            content = NNTPBinaryContent(content, work_dir=self.work_dir)
+        if isinstance(content, basestring):
+            # A mime object we can use to detect the type of file
+            m = Mime()
+
+            if isfile(content):
+                # file relative to current path; get our mime response
+                mr = m.from_bestguess(content)
+
+                # Our NNTPContent object will depend on whether or not we're
+                # dealing with an ascii file or binary
+                instance = NNTPBinaryContent \
+                    if mr.is_binary() else NNTPAsciiContent
+
+                content = instance(
+                    filepath=content,
+                    work_dir=self.work_dir,
+                )
+
+            else:
+                # Not relative; is the file relative to the work_dir?
+                with pushd(self.work_dir, create_if_missing=True):
+                    if isfile(content):
+
+                        # file relative to current path; get our mime response
+                        mr = m.from_bestguess(content)
+
+                        # Our NNTPContent object will depend on whether or not
+                        # we're dealing with an ascii file or binary
+                        instance = NNTPBinaryContent \
+                            if mr.is_binary() else NNTPAsciiContent
+
+                        # load our file
+                        content = instance(
+                            filepath=content,
+                            work_dir=self.work_dir,
+                        )
+
+                    else:
+                        # we're dealing with a new file; just save what we have
+                        content = NNTPBinaryContent(
+                            filepath=content,
+                            work_dir=self.work_dir,
+                        )
 
         if not isinstance(content, NNTPContent):
             return False

@@ -62,12 +62,6 @@
 #     - header_batch_size: 5000
 #     - ramdisk: /media/ramdisk
 #
-#   groups:
-#     - name: 'alt.binaries.test'
-#     - name: 'alt.binaries.mp3'
-#     - name: 'alt.binaries.series.tv.divx.french'
-#     - name: 'alt.binaries.multimedia'
-#
 #   database:
 #     engine: sqlite:////absolute/path/to/mydatabase.db
 
@@ -294,12 +288,25 @@ DEFAULT_PROCESSING_VARIABLES = {
 # Keyword used in configuration to host all of the defined NNTP Servers
 PROCESSING_KEY = 'processing'
 
+# Processing Variables mapped to their defaults if not found.
+# if None is specified, then the field is mandatory or we'll abort
+DEFAULT_POSTING_VARIABLES = {
+    # The maximum article size before we split the content
+    'max_article_size': '25MB',
+
+    # The default poster
+    'poster': None,
+}
+
+POSTING_KEY = 'posting'
+
 # A Parsed Configuration Shell
 VALID_SETTINGS_ENTRY = {
     GLOBAL_KEY: DEFAULT_GLOBAL_VARIABLES,
     DATABASE_KEY: DEFAULT_DATABASE_VARIABLES,
     SERVER_LIST_KEY: [],
     PROCESSING_KEY: DEFAULT_PROCESSING_VARIABLES,
+    POSTING_KEY: DEFAULT_POSTING_VARIABLES,
 }
 
 
@@ -346,6 +353,9 @@ class NNTPSettings(NNTPDatabase):
 
         # Initializing Database Config
         self.nntp_database = DEFAULT_DATABASE_VARIABLES.copy()
+
+        # Initializing Posting
+        self.nntp_posting = DEFAULT_POSTING_VARIABLES.copy()
 
         # Is valid flag
         self._is_valid = False
@@ -463,6 +473,9 @@ class NNTPSettings(NNTPDatabase):
         if PROCESSING_KEY in cfg_data:
             _cfg_data[PROCESSING_KEY].update(cfg_data[PROCESSING_KEY])
 
+        if POSTING_KEY in cfg_data:
+            _cfg_data[POSTING_KEY].update(cfg_data[POSTING_KEY])
+
         if SERVER_LIST_KEY in cfg_data:
             for server in cfg_data[SERVER_LIST_KEY]:
                 defaults = DEFAULT_SERVER_VARIABLES.copy()
@@ -501,6 +514,9 @@ class NNTPSettings(NNTPDatabase):
 
         # reset database dictionary
         self.nntp_database = {}
+
+        # reset posting dictionary
+        self.nntp_posting = {}
 
         # is_valid flag reset
         self._is_valid = False
@@ -560,30 +576,20 @@ class NNTPSettings(NNTPDatabase):
         logger.info('Loaded configuration file %s' % (self.cfg_file))
 
         # Strip out only the information we're not interested in
-        self.nntp_processing.update(
-            # dict comprehension (v2.7+)
-            #   self.nntp_processing\
-            #            .update(k: self.cfg_data[PROCESSING_KEY][k] \
-            #                   for k in PROCESSING_VARIABLES.keys()\
-            #                     if k in self.cfg_data[PROCESSING_KEY]})
-            # v2.6 support
-            dict((k, self.cfg_data[PROCESSING_KEY][k]) \
-                 for k in DEFAULT_PROCESSING_VARIABLES.keys() \
-                 if k in self.cfg_data[PROCESSING_KEY]),
-        )
+        self.nntp_processing.update({
+            k: self.cfg_data[PROCESSING_KEY][k]
+            for k in DEFAULT_PROCESSING_VARIABLES.keys()
+            if k in self.cfg_data[PROCESSING_KEY]})
 
-        # Strip out only the information we're not interested in
-        self.nntp_database.update(
-            # dict comprehension (v2.7+)
-            #   self.nntp_database\
-            #            .update(k: self.cfg_data[DATABASE_KEY][k] \
-            #                   for k in DATABASE_VARIABLES.keys()\
-            #                     if k in self.cfg_data[DATABASE_KEY]})
-            # v2.6 support
-            dict((k, self.cfg_data[DATABASE_KEY][k]) \
-                 for k in DEFAULT_DATABASE_VARIABLES.keys() \
-                 if k in self.cfg_data[DATABASE_KEY]),
-        )
+        self.nntp_database.update({
+            k: self.cfg_data[DATABASE_KEY][k]
+            for k in DEFAULT_DATABASE_VARIABLES.keys()
+            if k in self.cfg_data[DATABASE_KEY]})
+
+        self.nntp_posting.update({
+            k: self.cfg_data[POSTING_KEY][k]
+            for k in DEFAULT_POSTING_VARIABLES.keys()
+            if k in self.cfg_data[POSTING_KEY]})
 
         # Parse our content
         _priority = 0
@@ -602,22 +608,11 @@ class NNTPSettings(NNTPDatabase):
                     s['iostream'] = NNTPIOStream.RFC3977
 
             # First we strip out only the inforation we're interested in
-            results.update(
-                # dict comprehension (v2.7+)
-                #   results.update(k: s[k] for k in SERVER_VARIABLES.keys()\
-                #                     if k in s})
-                # v2.6 support
-                dict((k, s[k]) for k in DEFAULT_SERVER_VARIABLES.keys() \
-                     if k in s),
-            )
+            results.update({
+                k: s[k] for k in DEFAULT_SERVER_VARIABLES.keys() if k in s})
 
             # Purge any entries from our list that are set to 'None'
-            results = dict(
-                # dict comprehension (v2.7+)
-                # {k: v for k, v in results.iteritems() if v is None}
-                # v2.6 support
-                (k, v) for k, v in results.iteritems() if v is not None,
-            )
+            results = {k: v for k, v in results.iteritems() if v is not None}
 
             # our database (server) key is always the hostname
             try:

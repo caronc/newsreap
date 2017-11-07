@@ -38,6 +38,7 @@ from blist import sortedset
 from types import MethodType
 from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
 from newsreap.Utils import mkdir
+from newsreap.Utils import pushd
 from newsreap.Utils import rm
 from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import strsize_to_bytes
@@ -49,8 +50,8 @@ from newsreap.NNTPSettings import DEFAULT_BLOCK_SIZE as BLOCK_SIZE
 
 # Logging
 import logging
-from newsreap.Logging import NEWSREAP_LOGGER
-logger = logging.getLogger(NEWSREAP_LOGGER)
+from newsreap.Logging import NEWSREAP_ENGINE
+logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
 class NNTPFileMode(object):
@@ -386,11 +387,14 @@ class NNTPContent(object):
                     (self.filepath, mode),
                 )
 
-            except OSError:
+            except (IOError, OSError) as e:
                 logger.error(
                     'Could not open %s (mode=%s)' %
                     (self.filepath, mode),
                 )
+                logger.debug(
+                    'fdopen({0}, {1}, wd={2}) exception ({3})'.format(
+                        fileno, mode, self.work_dir, str(e)))
                 return False
 
             return weakref.ref(self.stream)
@@ -417,11 +421,14 @@ class NNTPContent(object):
                     (self.filepath, mode),
                 )
 
-            except (IOError, OSError):
+            except (IOError, OSError) as e:
                 logger.error(
                     'Could not open %s (mode=%s) (flag=D)' %
                     (self.filepath, mode),
                 )
+                logger.debug(
+                    'open({0}, {1}, wd={2}) exception ({3})'.format(
+                        filepath, mode, self.work_dir, str(e)))
                 return False
 
         elif hasattr(filepath, 'seek'):
@@ -667,14 +674,21 @@ class NNTPContent(object):
         detached from the Object.
         """
         if filepath:
-            # Ensure we've expanded the file path
-            filepath = abspath(expanduser(filepath))
+            if not isfile(filepath):
+                # If the file wasn't found relative to where we are, we'll try
+                # again but relative to the work dir
+                with pushd(self.work_dir, create_if_missing=True):
+                    if isfile(filepath):
+                        # Ensure we've expanded the file path
+                        filepath = abspath(filepath)
+                    else:
+                        # Attempt to expand path
+                        filepath = abspath(expanduser(filepath))
+            else:
+                # Ensure we've expanded the file path
+                filepath = abspath(filepath)
 
         if filepath is None:
-            if not isdir(self.work_dir):
-                # create directory
-                mkdir(self.work_dir)
-
             if self.filename:
                 filepath = join(self.work_dir, self.filename)
             else:
@@ -684,10 +698,6 @@ class NNTPContent(object):
             if self.filename:
                 filepath = join(filepath, basename(self.filename))
             else:
-                if not isdir(self.work_dir):
-                    # create directory
-                    mkdir(self.work_dir)
-
                 filepath = join(self.work_dir, basename(self.filepath))
 
         if isfile(filepath):
@@ -866,7 +876,7 @@ class NNTPContent(object):
                     obj._parent = weakref.ref(self)
 
                     # Open the new file
-                    obj.open(NNTPFileMode.BINARY_WO_TRUNCATE)
+                    obj.open(mode=NNTPFileMode.BINARY_WO_TRUNCATE)
 
                 try:
                     obj.write(data.read(block_size))
@@ -1147,7 +1157,7 @@ class NNTPContent(object):
             for chunk in \
                     iter(lambda: self.stream.read(128*md5.block_size), b''):
                 md5.update(chunk)
-            return md5.digest()
+            return md5.hexdigest()
         return None
 
     def sha1(self):
@@ -1161,7 +1171,7 @@ class NNTPContent(object):
             for chunk in \
                     iter(lambda: self.stream.read(128*sha1.block_size), b''):
                 sha1.update(chunk)
-            return sha1.digest()
+            return sha1.hexdigest()
         return None
 
     def sha256(self):
@@ -1175,7 +1185,7 @@ class NNTPContent(object):
             for chunk in \
                     iter(lambda: self.stream.read(128*sha256.block_size), b''):
                 sha256.update(chunk)
-            return sha256.digest()
+            return sha256.hexdigest()
         return None
 
     def tell(self):
