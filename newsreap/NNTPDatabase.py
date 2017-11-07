@@ -19,17 +19,17 @@ gevent.monkey.patch_all()
 
 # Importing these libraries forces them associate themselves
 # with the ObjectBase
-from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.GroupAlias import GroupAlias
-from newsreap.objects.nntp.GroupTrack import GroupTrack
-from newsreap.objects.nntp.Server import Server
+from .objects.nntp.Group import Group
+from .objects.nntp.GroupAlias import GroupAlias
+from .objects.nntp.GroupTrack import GroupTrack
+from .objects.nntp.Server import Server
 
 # The ObjectBase which contains all of the data required to
 # access our table.
-from newsreap.objects.nntp.ObjectBase import ObjectBase
-from newsreap.objects.nntp.Vsp import Vsp
+from .objects.nntp.ObjectBase import ObjectBase
+from .objects.nntp.Vsp import Vsp
 
-from newsreap.Database import Database
+from .Database import Database
 
 # The catch wit SQLLite when referencing paths is:
 # sqlite:///relative/path/to/where we are now

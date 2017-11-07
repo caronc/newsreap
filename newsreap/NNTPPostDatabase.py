@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 #
-# A common Group Database management class used by SQLAlchemy
+# A common NNTP Posting Database management class used by SQLAlchemy
 #
-# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -17,32 +17,23 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
-# Importing these libraries forces them associate themselves
-# with the ObjectBase
-from .objects.group.Article import Article
-
 # The ObjectBase which contains all of the data required to
 # access our table.
-from .objects.group.ObjectBase import ObjectBase
-from .objects.group.Vsp import Vsp
-
+from .objects.post.ObjectBase import ObjectBase
+from .objects.post.Vsp import Vsp
 from .Database import Database
 
-# The catch wit SQLite when referencing paths is:
-# sqlite:///relative/path/to/where we are now
-# sqlite:////absolute/path/
 
-
-class NNTPGroupDatabase(Database):
+class NNTPPostDatabase(Database):
     """
     A managment class to handle Group/Article Databases
     """
 
     def __init__(self, engine=None, reset=None):
         """
-        Initialize NNTP Group/Article Database
+        Initialize NNTP Posting Database
         """
-        super(NNTPGroupDatabase, self).__init__(
+        super(NNTPPostDatabase, self).__init__(
             base=ObjectBase,
             vsp=Vsp,
             engine=engine,

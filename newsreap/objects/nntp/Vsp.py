@@ -2,7 +2,7 @@
 #
 #  The Variable System Parameter Object
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -18,7 +18,8 @@ from sqlalchemy import Column
 from sqlalchemy import Integer
 from sqlalchemy import String
 
-from newsreap.objects.nntp.ObjectBase import ObjectBase
+from .ObjectBase import ObjectBase
+
 
 class Vsp(ObjectBase):
     """
@@ -43,8 +44,7 @@ class Vsp(ObjectBase):
     order = Column(Integer())
 
     # Create our primary key based on the group and hash key
-    __mapper_args__ = { "primary_key": (group, key) }
-
+    __mapper_args__ = {"primary_key": (group, key)}
 
     def __init__(self, group, key, value=None, order=0, *args, **kwargs):
         super(Vsp, self).__init__(*args, **kwargs)
@@ -52,7 +52,6 @@ class Vsp(ObjectBase):
         self.key = key
         self.value = value
         self.order = order
-
 
     def __repr__(self):
         return "<Vsp(key=%s, value='%s')>" % (self.key, self.value)

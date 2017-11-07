@@ -2,7 +2,7 @@
 #
 # A Codec for handling RAR Files
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -19,6 +19,7 @@ import re
 from blist import sortedset
 from os.path import basename
 from os.path import splitext
+from os.path import exists
 
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.codecs.CodecFile import CodecFile
@@ -35,10 +36,20 @@ from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Rar Path
-DEFAULT_RAR_PATH = '/usr/bin/rar'
+DEFAULT_RAR_PATH = next((c for c in (
+    # Fedora, CentOS, and RedHat
+    '/usr/bin/rar',
+    # Ubuntu/Debian
+    '/usr/local/bin/rar',
+) if exists(c)), None)
 
 # UnRar Path
-DEFAULT_UNRAR_PATH = '/usr/bin/unrar'
+DEFAULT_UNRAR_PATH = next((c for c in (
+    # Fedora, CentOS, and RedHat
+    '/usr/bin/unrar',
+    # Ubuntu/Debian
+    '/usr/local/bin/unrar',
+) if exists(c)), None)
 
 # Size to default spliting to if not otherwise specified
 DEFAULT_SPLIT_SIZE = strsize_to_bytes('25M')
@@ -51,6 +62,7 @@ RAR_PART_RE = re.compile(
     '^.*?\.((part|r)(?P<part>[0-9]+)(\.rar)?|rar)$',
     re.IGNORECASE,
 )
+
 
 class CodecRar(CodecFile):
     """
@@ -366,7 +378,7 @@ class CodecRar(CodecFile):
 
                 if not len(found_set):
                     logger.warning(
-                        'RAR archive (%s) contained no content.' % \
+                        'RAR archive (%s) contained no content.' %
                         basename(_path),
                     )
 

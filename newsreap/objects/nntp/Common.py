@@ -2,7 +2,7 @@
 #
 # A common set of database queries
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -14,8 +14,8 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.GroupAlias import GroupAlias
+from .Group import Group
+from .GroupAlias import GroupAlias
 
 # Logging
 import logging

@@ -2,7 +2,7 @@
 #
 #  The Article Object found on UseNet Servers
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -20,7 +20,7 @@ from sqlalchemy import String
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 
-from newsreap.objects.group.ObjectBase import ObjectBase
+from .ObjectBase import ObjectBase
 
 
 class Article(ObjectBase):
@@ -64,10 +64,8 @@ class Article(ObjectBase):
     # displayed or not; this over-rides any calculated score.
     hidden = Column(Boolean, default=False, nullable=False, index=True)
 
-
     def __init__(self, *args, **kwargs):
         super(Article, self).__init__(*args, **kwargs)
-
 
     def __repr__(self):
         return "<Article(message_id=%s)>" % (self.message_id)

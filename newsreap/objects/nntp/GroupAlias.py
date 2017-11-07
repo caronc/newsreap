@@ -2,7 +2,7 @@
 #
 # NewsReap NNTP Group Alias Object
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -19,8 +19,8 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
 
-from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.ObjectBase import ObjectBase
+from .Group import Group
+from .ObjectBase import ObjectBase
 
 
 class GroupAlias(ObjectBase):
@@ -46,7 +46,7 @@ class GroupAlias(ObjectBase):
     name = Column(String(64), index=True, nullable=False)
 
     # Create our primary key based on the server and group id's
-    __mapper_args__ = { "primary_key": (group_id, name) }
+    __mapper_args__ = {"primary_key": (group_id, name)}
 
     def __repr__(self):
         return "<GroupAlias(name='%s')>" % (self.name)

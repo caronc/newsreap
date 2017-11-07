@@ -2,7 +2,7 @@
 #
 # The GroupTrack Object used to track specific Groups
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -23,9 +23,9 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 
 # These are required since they are referenced inside the Tracking object
-from newsreap.objects.nntp.Server import Server
-from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.ObjectBase import ObjectBase
+from .Server import Server
+from .Group import Group
+from .ObjectBase import ObjectBase
 
 
 class GroupTrack(ObjectBase):

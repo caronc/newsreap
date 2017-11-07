@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# The NNTP Object Base
+# The Object NNTP Posting Object Base
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
@@ -16,5 +16,5 @@
 #
 from sqlalchemy.ext.declarative import declarative_base
 
-# Our common NNTP Base
+# Our common NNTP Posting Base
 ObjectBase = declarative_base()

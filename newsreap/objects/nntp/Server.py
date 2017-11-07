@@ -2,7 +2,7 @@
 #
 #  The Server Object used to track NNTP Servers
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -19,7 +19,7 @@ from sqlalchemy import Sequence
 from sqlalchemy import Integer
 from sqlalchemy import String
 
-from newsreap.objects.nntp.ObjectBase import ObjectBase
+from .ObjectBase import ObjectBase
 
 
 class Server(ObjectBase):

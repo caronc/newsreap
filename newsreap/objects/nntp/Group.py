@@ -2,7 +2,7 @@
 #
 # The Group Object used to wrap NNTP Groups
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -23,7 +23,7 @@ from sqlalchemy import String
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 
-from newsreap.objects.nntp.ObjectBase import ObjectBase
+from .ObjectBase import ObjectBase
 
 
 class Group(ObjectBase):
@@ -58,10 +58,8 @@ class Group(ObjectBase):
     # Track the time the group statistics were last updated
     last_updated = Column(DateTime, server_default=func.now())
 
-
     def __init__(self, *args, **kwargs):
         super(Group, self).__init__(*args, **kwargs)
-
 
     def __repr__(self):
         return "<Group(id='%d', name='%s', flag=%s', watch='%s')>" % (

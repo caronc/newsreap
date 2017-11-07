@@ -20,7 +20,8 @@ gevent.monkey.patch_all()
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import create_engine
-from newsreap.Utils import parse_url
+
+from .Utils import parse_url
 
 # Logging
 import logging
@@ -36,11 +37,14 @@ VSP_VERSION_KEYS = (
     (u'build', 0),
 )
 
+# A default group is used for just common set(), get() retrievals
+VSP_DEFAULT_GROUP = u'newsreap.common'
+
 # This one is used for testing since memory is destroyed once the program
 # exits
 MEMORY_DATABASE_ENGINE = 'sqlite:///:memory:'
 
-# The catch wit SQLLite when referencing paths is:
+# The catch with SQLite when referencing paths is:
 # sqlite:///relative/path/to/where we are now
 # sqlite:////absolute/path/
 #
@@ -120,6 +124,7 @@ class Database(object):
         if the database and raises the SQLAlchemy error raised higher
         if one is generated in the event there is a serious problem.
         """
+
         if not engine:
             engine = self._engine_str
             if not engine:
@@ -167,10 +172,10 @@ class Database(object):
             # versions don't match (or can't be retrieved, then we can handle
             # messaging that the database isn't initialized.
             try:
-                self._version = [(v.key, int(v.value)) \
-                                 for v in self._session.query(self.Vsp)\
-                    .filter_by(group=VSP_VERSION_GROUP)\
-                    .order_by(self.Vsp.order).all()]
+                self._version = [(v.key, int(v.value))
+                                 for v in self._session.query(self.Vsp)
+                                 .filter_by(group=VSP_VERSION_GROUP)
+                                 .order_by(self.Vsp.order).all()]
 
                 # Toggle Exists Flag
                 self._exists = True
@@ -245,11 +250,6 @@ class Database(object):
 
         return self._session
 
-    def escape_search_str(self):
-        """
-        Escapes a search string for searching the database
-        """
-
     def parse_url(self):
         """
         Returns details of the database already parsed
@@ -264,6 +264,66 @@ class Database(object):
         if self._engine_str:
             return self._engine_str
         return MEMORY_DATABASE_ENGINE
+
+    def set(self, key, value='', group=VSP_DEFAULT_GROUP):
+        """
+        Sets a VSP value based on the key specified; if a value is set to
+        None, then it is presumed you want to remove it.
+
+        """
+
+        try:
+            if value is not None:
+
+                if not self._session.query(self.Vsp)\
+                        .filter(self.Vsp.group == group)\
+                        .filter(self.Vsp.key == key)\
+                        .update({self.Vsp.value: value}):
+
+                    self._session.add(
+                        self.Vsp(
+                            group=group,
+                            key=key,
+                            value=value,
+                        ),
+                    )
+
+                self._session.commit()
+                return True
+
+            else:
+                # Remove the item if it exists
+                self._session.query(self.Vsp)\
+                            .filter_by(group=group)\
+                            .filter_by(key=key).delete()
+                return True
+
+        except OperationalError:
+            logger.error('Database.set({0}.{1}={2}) failed.'.format(
+                group, key, value
+            ))
+
+        # We failed if we get here
+        return False
+
+    def get(self, key, default=None, group=VSP_DEFAULT_GROUP):
+        """
+        Returns the value of a VSP identified by the key if set, otherwise
+        it returns the default value
+
+        """
+
+        response = None
+        try:
+            response = self._session.query(self.Vsp)\
+                        .filter_by(group=group)\
+                        .filter_by(key=key).one().value
+
+        except IndexError:
+            # Entry is simply missing
+            pass
+
+        return response if response is not None else default
 
     def __del__(self):
         """

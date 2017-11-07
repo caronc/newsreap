@@ -443,7 +443,7 @@ class CodecYENC_Test(TestBase):
         encoder = CodecYenc(work_dir=self.test_dir)
 
         # Create an NNTPContent Object
-        content = NNTPBinaryContent(binary_filepath)
+        content = NNTPBinaryContent(binary_filepath, work_dir=self.test_dir)
 
         # Encode our content by object
         new_content_a = content.encode(encoder)

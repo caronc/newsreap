@@ -2,7 +2,7 @@
 #
 # A Codec for handling PAR Files
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -19,13 +19,13 @@ import re
 from blist import sortedset
 from os.path import basename
 from os.path import dirname
+from os.path import exists
 
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.codecs.CodecFile import CodecFile
 from newsreap.SubProcess import SubProcess
 from newsreap.Utils import strsize_to_bytes
 from newsreap.Utils import pushd
-from newsreap.Utils import rm
 
 # Logging
 import logging
@@ -33,7 +33,12 @@ from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Par Path
-DEFAULT_PAR2_PATH = '/usr/bin/par2'
+DEFAULT_PAR2_PATH = next((c for c in (
+    # Fedora, CentOS, and RedHat
+    '/usr/bin/par2',
+    # Ubuntu/Debian
+    '/usr/local/bin/par2',
+) if exists(c)), None)
 
 # Used to detect the par part #
 #  - supports .vol07+08.par2 (the data block)
@@ -77,6 +82,7 @@ class ParVersion(object):
     """
     Two = 2
 
+
 # All Versions defined above must be also dadded to the list below
 PAR_VERSIONS = (ParVersion.Two, )
 
@@ -113,7 +119,7 @@ class CodecPar(CodecFile):
         self._par_version = par_version
         if self._par_version not in PAR_VERSIONS:
             raise AttributeError(
-                'CodecPar: Invalid PAR Version specified %s' % \
+                'CodecPar: Invalid PAR Version specified %s' %
                 str(self._par_version))
 
         # +++++++++++++++++
@@ -131,7 +137,7 @@ class CodecPar(CodecFile):
         if self.recovery_percent:
             if self.recovery_percent < 0 or self.recovery_percent > 100:
                 raise AttributeError(
-                    'CodecPar: Invalid recovery record percent %s%%.' % \
+                    'CodecPar: Invalid recovery record percent %s%%.' %
                     self.recovery_percent)
 
     def encode(self, content=None, *args, **kwargs):
@@ -160,7 +166,7 @@ class CodecPar(CodecFile):
             name = basename(target)
             target_dir = dirname(target)
 
-            #tmp_path, tmp_file = self.mkstemp(content=name, suffix='.par2')
+            # tmp_path, tmp_file = self.mkstemp(content=name, suffix='.par2')
 
             # Initialize our command
             execute = [
