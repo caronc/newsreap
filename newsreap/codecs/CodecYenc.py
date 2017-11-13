@@ -230,6 +230,7 @@ class CodecYenc(CodecBase):
 
             # Create our ascii instance
             _encoded = NNTPAsciiContent(
+                filepath=content,
                 work_dir=self.work_dir,
                 # We want to ensure we're working with a unique attached file
                 unique=True,

@@ -103,13 +103,17 @@ class CodecUU(CodecBase):
             )
 
         else:
+            # If we reach here, we presume our content is a filename
+
             # Create our ascii instance
             _encoded = NNTPAsciiContent(
+                filepath=content,
                 work_dir=self.work_dir,
                 # We want to ensure we're working with a unique attached file
                 unique=True,
             )
 
+            # Convert our content object into an NNTPContent object
             content = NNTPContent(
                 filepath=content,
                 work_dir=self.work_dir,
