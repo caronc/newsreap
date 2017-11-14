@@ -53,6 +53,8 @@ from newsreap.Utils import find
 from newsreap.Utils import rm
 from newsreap.Utils import parse_list
 from newsreap.Utils import parse_bool
+from newsreap.Utils import parse_paths
+from newsreap.Utils import scan_pylib
 from newsreap.Utils import hexdump
 from newsreap.Utils import dirsize
 
@@ -326,33 +328,33 @@ class Utils_Test(TestBase):
         Test parse_list function
         """
         # A simple single array entry (As str)
-        results = parse_list('.mkv,.avi,.divx,.xvid,' + \
-                '.mov,.wmv,.mp4,.mpg,.mpeg,.vob,.iso')
+        results = parse_list(
+            '.mkv,.avi,.divx,.xvid,.mov,.wmv,.mp4,.mpg,.mpeg,.vob,.iso')
 
         assert results == [
-            '.divx', '.iso', '.mkv', '.mov', '.mpg',
-            '.avi', '.mpeg', '.vob', '.xvid', '.wmv', '.mp4',
+            '.divx', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.mpeg', '.vob',
+            '.xvid', '.wmv', '.mp4',
         ]
 
         # Now 2 lists with lots of duplicates and other delimiters
-        results = parse_list('.mkv,.avi,.divx,.xvid,' + \
-            '.mov,.wmv,.mp4,.mpg .mpeg,.vob,,; ;',
-            '.mkv,.avi,.divx,.xvid,' + \
-            '.mov        .wmv,.mp4;.mpg,.mpeg,.vob,.iso')
+        results = parse_list(
+            '.mkv,.avi,.divx,.xvid,.mov,.wmv,.mp4,.mpg .mpeg,.vob,,; ;',
+            '.mkv,.avi,.divx,.xvid,.mov        .wmv,.mp4;.mpg,.mpeg,.vob,.iso')
+
         assert results == [
-            '.divx', '.iso', '.mkv', '.mov', '.mpg',
-            '.avi', '.mpeg', '.vob', '.xvid', '.wmv', '.mp4',
+            '.divx', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.mpeg', '.vob',
+            '.xvid', '.wmv', '.mp4',
         ]
 
         # Now a list with extras we want to add as strings
         # empty entries are removed
         results = parse_list([
-            '.divx', '.iso', '.mkv', '.mov', '', '  ',
-            '.avi', '.mpeg', '.vob', '.xvid', '.mp4',
-        ], '.mov,.wmv,.mp4,.mpg')
+            '.divx', '.iso', '.mkv', '.mov', '', '  ', '.avi', '.mpeg',
+            '.vob', '.xvid', '.mp4'], '.mov,.wmv,.mp4,.mpg')
+
         assert results == [
-            '.divx', '.wmv', '.iso', '.mkv', '.mov',
-            '.mpg', '.avi', '.vob', '.xvid', '.mpeg', '.mp4',
+            '.divx', '.wmv', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.vob',
+            '.xvid', '.mpeg', '.mp4',
         ]
 
         # Support Sets and Sorted Sets
@@ -363,8 +365,8 @@ class Utils_Test(TestBase):
             sortedset(['.vob', '.xvid']),
         )
         assert results == [
-            '.divx', '.wmv', '.iso', '.mkv', '.mov',
-            '.mpg', '.avi', '.vob', '.xvid', '.mpeg', '.mp4',
+            '.divx', '.wmv', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.vob',
+            '.xvid', '.mpeg', '.mp4',
         ]
 
     def test_find_prefix(self):
@@ -952,3 +954,162 @@ class Utils_Test(TestBase):
 
         # Back to normal
         assert(dirsize(work_dir) == strsize_to_bytes('2MB'))
+
+    def test_parse_paths(self):
+        """
+        tests parse_paths()
+        """
+
+        # A simple single array entry (As str)
+        results = parse_paths(
+            'C:\\test path with space\\and more spaces\\',
+            'D:\\weird path\\more spaces\\ ',
+            'D:\\weird path\\more spaces\\ G:\\save E:\\\\save_dir',
+            'D:\\weird path\\more spaces\\ ',  # Duplicate is removed
+            '  D:\\\\weird path\\more spaces\\\\ ',  # Duplicate is removed
+            'relative path\\\\\\with\\crap\\\\ second_path\\more spaces\\ ',
+            # Windows Network Paths
+            '\\\\a\\network\\path\\\\ \\\\\\another\\nw\\\\path\\\\         ',
+            # lists supported too
+            ['relative path\\in\\list', 'second_path\\more spaces\\\\'],
+            # Unsupported and ignored types
+            None, 1, 4.3, True, False, -4000,
+        )
+
+        assert(len(results) == 9)
+        assert('D:\\weird path\\more spaces' in results)
+        assert('E:\\save_dir' in results)
+        assert('G:\\save' in results)
+        assert('second_path\\more spaces' in results)
+        assert('\\\\a\\network\\path' in results)
+        assert('\\\\another\\nw\\path' in results)
+        assert('relative path\\with\\crap' in results)
+        assert('relative path\\in\\list' in results)
+        assert('C:\\test path with space\\and more spaces' in results)
+
+        # A simple single array entry (As str)
+        results = parse_paths(
+            # 3 paths identified below
+            '//absolute/path /another///absolute//path/// /',
+            # A whole slew of duplicates and list inside list
+            '/', ['/', '/', '//', '//////', ['/', ''], ],
+            'relative/path/here',
+            'relative/path/here/',
+            'another/relative////path///',
+        )
+        assert(len(results) == 5)
+        assert('/absolute/path' in results)
+        assert('/another/absolute/path' in results)
+        assert('another/relative/path' in results)
+        assert('/' in results)
+        assert('relative/path/here' in results)
+
+        results = parse_paths(
+            '/home/username/News/TVShows, /home/username/News/Movies',
+        )
+        assert(len(results) == 2)
+        assert('/home/username/News/TVShows' in results)
+        assert('/home/username/News/Movies' in results)
+
+        # A simple single array entry (As str)
+        results = parse_paths(
+            '\\\\ht-pc\\htpc_5tb\\Media\\TV, '
+            '\\\\ht-pc\\htpc_5tb\\Media\\Movies, '
+            '\\\\ht-pc\\htpc_2tb\\Media\\TV, '
+            '\\\\ht-pc\\htpc_2tb\\Media\\Movies',
+        )
+        assert(len(results) == 4)
+        assert('\\\\ht-pc\\htpc_5tb\\Media\\TV' in results)
+        assert('\\\\ht-pc\\htpc_5tb\\Media\\Movies' in results)
+        assert('\\\\ht-pc\\htpc_2tb\\Media\\TV' in results)
+        assert('\\\\ht-pc\\htpc_2tb\\Media\\Movies' in results)
+
+        # comma is a delimiter
+        results = parse_paths('path1, path2 ,path3,path4')
+        assert(len(results) == 4)
+        assert('path1' in results)
+        assert('path2' in results)
+        assert('path3' in results)
+        assert('path4' in results)
+
+    def test_scan_pylib(self):
+        """
+        tests scanning for python packages
+
+        """
+        # A working dir
+        work_dir = join(self.tmp_dir, 'Utils_Test.scan_pylib')
+
+        # The directory should not exist
+        assert(isdir(work_dir) is False)
+
+        # mkdir() should be successful
+        assert(mkdir(work_dir) is True)
+
+        # The directory should now exist
+        assert(isdir(work_dir) is True)
+
+        # Nothing in directory so we return nothing
+        assert(scan_pylib(work_dir) == {})
+
+        # We will ignore these types of files
+        assert(self.touch(join(work_dir, '__init__.py')))
+        assert(scan_pylib(work_dir) == {})
+
+        # If our directory is not accessible, we will return False signifying
+        # that we couldn't process the request at all.
+        chmod(work_dir, 0000)
+        assert(scan_pylib(work_dir) is None)
+
+        # Restore our permissions
+        chmod(work_dir, 0700)
+
+        # Create a proper module name that is loadable
+        assert(self.touch(join(work_dir, 'test01.py')))
+        results = scan_pylib(work_dir)
+        assert(len(results) == 1)
+        assert('test01' in results)
+        # Results are always a set (of directorys)
+        assert(isinstance(results['test01'], set))
+        # One entry
+        assert(len(results['test01']) == 1)
+        assert(next(iter(results['test01'])) == join(work_dir, 'test01.py'))
+
+        # We can load content directly by file as well
+        results = scan_pylib(join(work_dir, 'test01.py'))
+        assert(len(results) == 1)
+        assert('test01' in results)
+        # Results are always a set (of directorys)
+        assert(isinstance(results['test01'], set))
+        # One entry
+        assert(len(results['test01']) == 1)
+        assert(next(iter(results['test01'])) == join(work_dir, 'test01.py'))
+
+        # Multiple entries are handled (no duplicates are added)
+        results = scan_pylib([
+            work_dir,
+            work_dir,
+            join(work_dir, 'test01.py'),
+        ])
+        assert(len(results) == 1)
+        assert('test01' in results)
+        # Results are always a set (of directorys)
+        assert(isinstance(results['test01'], set))
+        # One entry (no duplicates)
+        assert(len(results['test01']) == 1)
+        assert(next(iter(results['test01'])) == join(work_dir, 'test01.py'))
+
+        # We add a new file type to our mix
+        assert(self.touch(join(work_dir, 'test02.py')))
+        results = scan_pylib(work_dir)
+        assert(len(results) == 2)
+        assert('test01' in results)
+        assert('test02' in results)
+        # Results are always a set (of directorys)
+        assert(isinstance(results['test01'], set))
+        assert(isinstance(results['test02'], set))
+        # One entry
+        assert(len(results['test01']) == 1)
+        assert(len(results['test02']) == 1)
+        assert(next(iter(results['test01'])) == join(work_dir, 'test01.py'))
+        assert(next(iter(results['test02'])) == join(work_dir, 'test02.py'))

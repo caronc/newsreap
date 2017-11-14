@@ -68,6 +68,10 @@ from stat import S_ISDIR
 from os import W_OK
 from os import stat as os_stat
 
+from .Mime import Mime
+from .Mime import DEFAULT_MIME_TYPE
+
+# delimiters used to separate values when content is passed in by string
 # Python 3 Support
 try:
     from importlib.machinery import SourceFileLoader
@@ -81,10 +85,7 @@ except ImportError:
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
-from newsreap.Mime import Mime
-from newsreap.Mime import DEFAULT_MIME_TYPE
 
-# delimiters used to separate values when content is passed in by string
 # This is useful when turning a string into a list
 STRING_DELIMITERS = r'[\[\]\;,\s]+'
 
@@ -123,10 +124,52 @@ TIDY_NUX_TRIM_RE = re.compile(
     ),
 )
 
+# A General Path Delimiter (look for semi-colon's and comma's)
+PATH_DELIMITERS_RE = re.compile(
+    r'([%s]+[%s;\|,\s]+|[;\|,\s%s]+[%s]+)' % (
+        ESCAPED_NUX_PATH_SEPARATOR,
+        ESCAPED_NUX_PATH_SEPARATOR,
+        ESCAPED_NUX_PATH_SEPARATOR,
+        ESCAPED_NUX_PATH_SEPARATOR,
+    )
+)
+
+# For separating windows paths
+# This separates D:\entry E:\entry2 by forcing a delimiter that will be caught
+# when the WINDOWS_PATH_DELIMITERS_RE is ran afterwards
+WIN_LOCAL_DRIVE_DELIMITERS_RE = re.compile(
+    r'[\s,\|]+([A-Za-z]):+(%s)%s*' % (
+        ESCAPED_WIN_PATH_SEPARATOR,
+        ESCAPED_WIN_PATH_SEPARATOR,
+    )
+)
+
+# For separating windows network paths
+# This separates \\entry1\path \\\entry2\path by forcing a delimiter that will
+# be caught when the WINDOWS_PATH_DELIMITERS_RE is ran afterwards
+WIN_NETWORK_DRIVE_DELIMITERS_RE = re.compile(
+    r'[\s,\|]+(%s%s)%s*' % (
+        ESCAPED_WIN_PATH_SEPARATOR,
+        ESCAPED_WIN_PATH_SEPARATOR,
+        ESCAPED_WIN_PATH_SEPARATOR,
+    )
+)
+
+# For separating (Microsoft) Windows based paths
+WIN_PATH_DELIMITERS_RE = re.compile(
+    r'[%s]+[\s,\|]+([%s]{2}%s*|[^%s])' % (
+        ESCAPED_WIN_PATH_SEPARATOR,
+        ESCAPED_WIN_PATH_SEPARATOR,
+        ESCAPED_WIN_PATH_SEPARATOR,
+        ESCAPED_WIN_PATH_SEPARATOR,
+    )
+)
+
 DEFAULT_PYLIB_IGNORE_LIST = (
     # Any item begining with an underscore
     re.compile(r'^_.*'),
 )
+
 # Stream `whence` variables were introduced in Python 2.7 but to remaing
 # compatible with Python 2.6, we define their values here which when
 # referenced make our code easier to read. These are used for stream
@@ -141,7 +184,7 @@ SEEK_CUR = 1
 SEEK_END = 2
 
 # Sub commands are identified by they're filename
-PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py?$')
+PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py[co]?$')
 
 # URL Indexing Table for returns via parse_url()
 VALID_URL_RE = re.compile(r'^[\s]*([^:\s]+):[/\\]*([^?]+)(\?(.+))?[\s]*$')
@@ -506,35 +549,55 @@ def scan_pylib(paths, ignore_re=DEFAULT_PYLIB_IGNORE_LIST):
     # Module paths
     rpaths = {}
 
-    if isinstance(paths, basestring):
-        paths = [paths]
+    # Prepare our list of paths
+    paths = parse_paths(paths)
 
-    # Filter dirs to those that exist
-    paths = [d for d in paths if isdir(d) is True]
-    for pd in paths:
-        for filename in listdir(pd):
-            result = PYTHON_MODULE_RE.match(filename)
-            if not result:
-                # Not our type of file
-                continue
+    def store(path, filename):
+        """
+        Attempts to store module
+        """
+        result = PYTHON_MODULE_RE.match(filename)
+        if not result:
+            # Not our type of file
+            return False
 
-            if next((True for r in ignore_re
-                     if r.match(result.group('fname')) is not None), False):
-                # We already loaded an alike file
-                # we don't wnat to over-ride it or we matched an element
-                # from our ignore list
-                continue
+        if next((True for r in ignore_re
+                 if r.match(result.group('fname')) is not None), False):
+            # We already loaded an alike file
+            # we don't wnat to over-ride it or we matched an element
+            # from our ignore list
+            return False
 
-            if result.group('fname') not in rpaths:
-                rpaths[result.group('fname')] = set()
+        if result.group('fname') not in rpaths:
+            rpaths[result.group('fname')] = set()
 
-            # Store unique entry
-            rpaths[result.group('fname')].add(join(pd, filename))
+        # Store unique entry
+        rpaths[result.group('fname')].add(join(path, filename))
+
+        return True
+
+    for _path in paths:
+        path = abspath(expanduser(_path))
+        try:
+            if isfile(path):
+                # we're being passed a module directly
+                store(dirname(path), basename(path))
+
+            else:
+                # We're dealing with a directory
+                for filename in listdir(path):
+                    store(path, filename)
+
+        except (OSError, IOError) as e:
+            # We failed, do not return an empty set; just abort
+            # out right
+            logger.debug('scan_pylib(%s) exception: %s' % (path, e))
+            return None
 
     return rpaths
 
 
-def load_pylib(module_name, filepath):
+def load_pylib(module_name, filepath=None):
     """
     Loads a python module presumable retreived by the
     scan_pylib() function call.
@@ -545,7 +608,28 @@ def load_pylib(module_name, filepath):
     ie:
         load_pylib('plugin.test', '/path/to/plugin.py')
 
+    If the filepath is None, then the module_name is
+    expected to be the full path to the module in question
+    to be loaded.
+
     """
+
+    if filepath is None:
+        if not isfile(module_name):
+            return None
+
+        # this is an allowed setting
+        file_path = module_name
+
+        module_name = basename(file_path)
+        match = PYTHON_MODULE_RE.match(module_name)
+        if not match:
+            return None
+
+        module_name = match.group('fname')
+
+        # fall through for loading
+
     if PYTHON_3:
         return SourceFileLoader(module_name, filepath).load_module()
     return load_source(module_name, filepath)
@@ -1100,6 +1184,60 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
     return files
 
 
+def parse_paths(*args):
+    """
+    Very similar to the parse_list() however this parses a listing of
+    provided directories.  The difference is that white space is
+    treated a bit more strictly since directory paths can contain
+    spaces in them. Trailing (back)slashes are always removed from
+    results. Duplicates are always combined in final results.
+
+    Hence: parse_paths('C:\\test dir\\, D:\\test2') becomes:
+        [ 'C:\\test dir', D:\\test2' ]
+
+    Hence: parse_paths('C:\\test dir\\, D:\\test2',
+        [ 'H:\\test 4', 'C:\\test dir', 'D:\\test2' ]
+    becomes:
+        [ 'C:\\test dir', D:\\test2', 'H:\\test 4' ]
+    """
+
+    result = []
+    for arg in args:
+        if isinstance(arg, basestring):
+            cleaned = PATH_DELIMITERS_RE.sub('|/', tidy_path(arg))
+            cleaned = WIN_PATH_DELIMITERS_RE.sub('|\\1', cleaned)
+            cleaned = WIN_NETWORK_DRIVE_DELIMITERS_RE.sub('|\\1', cleaned)
+            cleaned = WIN_LOCAL_DRIVE_DELIMITERS_RE.sub('|\\1:\\2', cleaned)
+            result += re.split('[,|]+', cleaned)
+
+        elif isinstance(arg, (list, tuple)):
+            for _arg in arg:
+                if isinstance(_arg, basestring):
+                    cleaned = PATH_DELIMITERS_RE.sub('|', tidy_path(_arg))
+                    cleaned = WIN_PATH_DELIMITERS_RE.sub('|\\1', cleaned)
+                    cleaned = WIN_NETWORK_DRIVE_DELIMITERS_RE.sub(
+                        '|\\1', cleaned)
+                    cleaned = WIN_LOCAL_DRIVE_DELIMITERS_RE.sub(
+                        '|\\1:\\2', cleaned)
+                    result += re.split('[,|]+', cleaned)
+
+                # A list inside a list? - use recursion
+                elif isinstance(_arg, (list, tuple)):
+                    result += parse_paths(_arg)
+
+                else:
+
+                    # unsupported content
+                    continue
+        else:
+            # unsupported content (None, bool's, int's, floats, etc)
+            continue
+
+    # apply as well as make the list unique by converting it
+    # to a set() first. filter() eliminates any empty entries
+    return filter(bool, list(set([tidy_path(p) for p in result])))
+
+
 @contextmanager
 def pushd(newdir, create_if_missing=False, perm=0775):
     """
@@ -1210,7 +1348,7 @@ def dirsize(src):
     """
     Takes a source directory and returns the entire size of all of it's
     content(s) in bytes.
-    
+
     The function returns None if the size can't be properly calculated.
     """
     if not isdir(src):
