@@ -219,7 +219,7 @@ class CodecFile(object):
         if isinstance(content, basestring):
             tmp_file = join(
                 tmp_path,
-                '%s%s' % (splitext(basename(content))[0], suffix,
+                '%s%s' % (basename(content), suffix,
             ))
 
         elif isinstance(content, NNTPContent):
