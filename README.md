@@ -69,6 +69,119 @@ nr get --headers abcd@1234
 
 ```
 
+## Posting
+Posting assumes the following:
+* You have a directory containing content you want to post to an NNTP Server.
+* The content you want to post may (or may not) require some additional preparation (archiving + parchives). The script will support both ways.
+* The directory name you post to will play a critical role in it's *naming* (identification).
+* The directory you point to will become the key input for all of the phases (should you do them one after another).
+* A workspace is prepared based on the directory name you point to. For example, if you attempt to post the contents of a directory called ```mystuff``` then the workspace created is ```mystuff.nrws```.
+
+Posting works in 5 phases that you control:
+1. **Preparation** (--prep or -P): This phase is completely optional. Preparation assumes you don't want to pass the content as is and instead want to archive and provide par2 files as well. If the directory you're being prepared is called ```my.backup.dir``` then the preparation directory will be created as ```my.backup.dir.nrws/prep```.  Once content is prepared in the newly created **prep** directory, you can freely add to it if you want.  Add a README.nfo, or whatever you want.  The preparation directory is just the blue-prints of how you want content to be posted as. You can not post directories, therefore any directory you create will be ignored by the staging phase. Had you had directories to post, they should be archived so they can be presented as files.
+2. **Staging** (--stage or -S): If a *prep* directory exists in the workspace the it is used. However if one doesn't exist, then the path being referenced is assumed to be in the final format you want to post. Staging creates a new directory in the workspace called **staged**.  It additionally creates a small SQLite (database) called **staged.db** that also resides in the workspace.  This stage is takes everything *to-be-posted* and prepares it in the correct *NNTPArticle* format.  This means building small messages that don't exceed NNTP Limitations and converting all binary data to yEnc encoded. All meta information is written to the SQLite database for further reference.  This database is also used to track what has been posted and what hasn't.  By default on this stage, everything is marked as having *not* been uploaded/posted yet.
+3. **Uploading** (--upload or -U): This phase will only work if content was previously staged.  This phase relies heavily on the newly created SQLite database. This stage iterates over the database and posts everything to the NNTPServer.  This stage is multi-threaded and will utilize all of the allowed connections to your NNTP Server you've defined.  Content that is uploaded successfully (as acknowledged by the remote server) is flagged in the database as being uploaded.  If a failure occurs, the content is not retransmitted.  However you an run this stage again and again as uploaded content is never re-uploaded (only missed entries).  The last thing this stage does is write an NZB-File. If you were originally dealing with ```my.backup.dir``` then you will now have a ```my.backup.dir.nzb```.
+4. **Verification** (--verify or -V): This phase is completely optional.  It utilizes the same SQLite database the *upload* phase did and attempts to verify that every segment got posted to the NNTP Server. It's useful if you just want that warm fuzzy feeling that the post went okay.
+5. **Cleanup** (--clean -or -C): This phase can be ran at anytime you want, it destroys the workspace managed by this script but does not touch the original directory content was referenced.  It will never touch the generated nzb file (if one was generated) either.  It's just a safe clean up option.
+
+Here is an example
+```bash
+
+# Let's generate a directory to work with
+mkdir content.to.post
+
+# Now lets place some content into it. Please note I'm demonstrating
+# using just simple text, but this directory can contain any content
+# you wish and as much of it as you like.
+cat << _EOF > content.to.post/README.txt
+Hello world, I'm going to be posted onto an NNTP Server!
+_EOF
+
+#
+# Phase 1: Preparation
+#
+
+# we prep our newly created directory; this will create a new directory
+# called content.to.post.nrws.  From within that new directory
+# we will find a directory called 'prep'
+nr post --prep content.to.post
+
+# Let's see what got created
+find content.to.post.nrws/prep
+#  output:
+#    content.to.post.nrws/prep
+#    content.to.post.nrws/prep/content.to.post.rar.par2
+#    content.to.post.nrws/prep/content.to.post.rar.vol0+1.par2
+#    content.to.post.nrws/prep/content.to.post.rar
+
+#
+# Phase 2: Staging
+#
+
+# Same command as above and same source directory, the fact that a
+# prep directory and workspace exists, the below command knows to use
+# that instead.  If they didn't, it would always use the directory
+# identified below (which is what makes the prepping part optional)
+nr post --stage content.to.post --groups alt.binaries.test
+
+# we will now find a directory called 'staged' and a database called
+# 'staged.db' in our workspace
+find content.to.post.nrws/staged content.to.post.nrws/staged.db
+#  output:
+#    content.to.post.nrws/staged
+#    content.to.post.nrws/staged/content.to.post.rar.par2
+#    content.to.post.nrws/staged/content.to.post.rar.vol0+1.par2
+#    content.to.post.nrws/staged/content.to.post.rar
+#    content.to.post.nrws/staged.db
+
+# These files 'look' simiar to what is in the prep directory but the are not
+# the are already in an ascii format; have a look:
+head -n2 content.to.post.nrws/staged/content.to.post.rar
+#  output:
+#    =ybegin part=1 total=1 line=128 size=710 name=content.to.post.rar
+#    =ypart begin=1 end=710
+
+#
+# Phase 3: Upload
+#
+
+# Same command as above and same source directory. This phase will reference
+# our new SQLite database (content.to.post.nrws/staged.db) and our staged
+# files residing in content.to.post.nrws/staged
+nr post --upload content.to.post
+
+# You'll now have an NZB-File you can reference. In this case it will be
+# called: content.to.post.nzb
+# You're technically done now, but it wouldn't hurt to verify your results:
+
+#
+# Phase 4: Verification
+#
+
+# Run a verification on our data to see how it made out:
+nr post --verify content.to.post
+
+#
+# Phase 5: Clean Up
+#
+# This just gets rid of our workspace since we're done with it now
+nr post --clean content.to.post
+
+```
+
+In all cases, the post action will return zero (0) if everything went according to plan.  Otherwise it will
+return a non-zero value.  If you want to increase the verbosity of the output, just add a *-v* switch
+following the *nr* command:
+```bash
+# Adding the -v increases the verbosity
+nr -v post --verify content.to.post
+
+# Adding a lot of -v makes the verbosity overkill, but you'll want to do this
+# if you need to raise a ticket later:
+nr -vvv post --verify content.to.post
+
+```
+
 ## Indexing
 Indexing allows you to scan headers from one or more groups and download them to a local cache.
 ```bash
