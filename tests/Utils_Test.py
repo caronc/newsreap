@@ -55,6 +55,7 @@ from newsreap.Utils import parse_list
 from newsreap.Utils import parse_bool
 from newsreap.Utils import parse_paths
 from newsreap.Utils import scan_pylib
+from newsreap.Utils import load_pylib
 from newsreap.Utils import hexdump
 from newsreap.Utils import dirsize
 
@@ -1113,3 +1114,42 @@ class Utils_Test(TestBase):
         assert(len(results['test02']) == 1)
         assert(next(iter(results['test01'])) == join(work_dir, 'test01.py'))
         assert(next(iter(results['test02'])) == join(work_dir, 'test02.py'))
+
+    def test_load_pylib(self):
+        """
+        tests the dynamic loading of a python package
+
+        """
+
+        # A working dir
+        work_dir = join(self.tmp_dir, 'Utils_Test.load_pylib')
+
+        # Add a few modules
+        assert(self.touch(join(work_dir, 'test01.py')))
+
+        # A module we can attempt to load
+        work_module = load_pylib('test01', join(work_dir, 'test01.py'))
+        assert(work_module is not None)
+        assert(work_module.__class__.__name__ == 'module')
+
+        work_module = load_pylib(join(work_dir, 'test01.py'))
+        assert(work_module is not None)
+        assert(work_module.__class__.__name__ == 'module')
+
+        # Now we'll protect our original directory
+        chmod(work_dir, 0000)
+
+        # We should fail to load our module
+        work_module = load_pylib('test01', join(work_dir, 'test01.py'))
+        assert(work_module is None)
+
+        # Restore our permissions
+        chmod(work_dir, 0700)
+
+        # Protect our module
+        chmod(join(work_dir, 'test01.py'), 0000)
+        work_module = load_pylib('test01', join(work_dir, 'test01.py'))
+        assert(work_module is None)
+
+        # Restore our permissions
+        chmod(join(work_dir, 'test01.py'), 0600)

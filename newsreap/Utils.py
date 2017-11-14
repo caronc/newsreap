@@ -619,9 +619,9 @@ def load_pylib(module_name, filepath=None):
             return None
 
         # this is an allowed setting
-        file_path = module_name
+        filepath = module_name
 
-        module_name = basename(file_path)
+        module_name = basename(filepath)
         match = PYTHON_MODULE_RE.match(module_name)
         if not match:
             return None
@@ -630,9 +630,20 @@ def load_pylib(module_name, filepath=None):
 
         # fall through for loading
 
-    if PYTHON_3:
-        return SourceFileLoader(module_name, filepath).load_module()
-    return load_source(module_name, filepath)
+    try:
+        if PYTHON_3:
+            return SourceFileLoader(module_name, filepath).load_module()
+        return load_source(module_name, filepath)
+
+    except IOError as e:
+        # Could not load module
+        logger.warning(
+            'Failed to load dynamic module: %s (reason: %s)' % (
+                filepath,
+                e[1],
+            )
+        )
+        return None
 
 
 def tidy_path(path):
