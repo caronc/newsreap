@@ -55,9 +55,9 @@ import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
-# The location we can stage our content in. It's always relative to the
-# content being posted
-STAGE_DIR_SUFFIX = '.nrs'
+# The workspace we can stage our content in. It's always relative to the
+# content being posted nrws (short for NewsReap Work Space)
+STAGE_DIR_SUFFIX = '.nrws'
 
 # The directory we can find our prep'ed content in
 PREP_DIR = 'prep'
