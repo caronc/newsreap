@@ -191,7 +191,9 @@ class CodecFile(object):
         """
         Can test if path exists and is executable
         """
-        return isfile(fpath) and access(fpath, X_OK)
+        if isinstance(fpath, basestring):
+            return isfile(fpath) and access(fpath, X_OK)
+        return False
 
     def mkstemp(self, content=None,  suffix='.tmp', prefix='_tmp_'):
         """

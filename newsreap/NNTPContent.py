@@ -624,14 +624,15 @@ class NNTPContent(object):
 
         """
 
-        # mkstemp used to genrate an unused temporary file
-        _, filepath = mkstemp(dir=self.work_dir)
-        try:
-            # Remove the created file to silence any warnings
-            # from the save() call coming next
-            unlink(filepath)
-        except:
-            pass
+        with pushd(self.work_dir, create_if_missing=True):
+            # mkstemp used to genrate an unused temporary file
+            _, filepath = mkstemp(dir=self.work_dir)
+            try:
+                # Remove the created file to silence any warnings
+                # from the save() call coming next
+                unlink(filepath)
+            except:
+                pass
 
         if not self.save(filepath, copy=True):
             return None

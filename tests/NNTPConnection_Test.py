@@ -29,6 +29,9 @@ gevent.monkey.patch_all()
 #        keyerror-in-module-threading-after-a-successful-py-test-run
 import threading
 
+import unittest
+import os
+
 from os.path import join
 from os.path import dirname
 from os.path import abspath
@@ -126,6 +129,8 @@ class NNTPConnection_Test(TestBase):
         # Invalid Password
         assert sock.connect(timeout=5.0) is False
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_secure_authentication(self):
         sock = NNTPConnection(
             host=self.nttps_ipaddr,

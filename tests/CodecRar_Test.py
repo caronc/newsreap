@@ -23,6 +23,9 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import unittest
+import os
+
 from blist import sortedset
 from os.path import join
 from os.path import dirname
@@ -75,7 +78,8 @@ class CodecRar_Test(TestBase):
         assert result is not None
         assert result.group('part') == '65'
 
-
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_rar_errors(self):
         """
         Test that we fail under certain conditions
@@ -195,6 +199,8 @@ class CodecRar_Test(TestBase):
         # We now have 3 entries
         assert len(cr) == 3
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_rar_single_file(self):
         """
         Test that we can rar content
@@ -232,6 +238,8 @@ class CodecRar_Test(TestBase):
         # Encoded content is attached by default
         assert content[0].is_attached() is True
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_rar_multi_files(self):
         """
         Test that we can rar content into multiple files
@@ -267,6 +275,8 @@ class CodecRar_Test(TestBase):
             # Encoded content is attached by default
             assert c.is_attached() is True
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_unrar(self):
         """
         Tests the un-raring of content
@@ -332,6 +342,8 @@ class CodecRar_Test(TestBase):
         del decoded
         assert isdir(decoded_path) is False
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_password_protection(self):
         """
         Tests the un-raring of content

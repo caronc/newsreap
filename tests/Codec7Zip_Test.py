@@ -2,7 +2,7 @@
 #
 # Test the Z-Zip Codec
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -22,6 +22,9 @@ if 'threading' in sys.modules:
 
 import gevent.monkey
 gevent.monkey.patch_all()
+
+import unittest
+import os
 
 from blist import sortedset
 from os.path import join
@@ -71,7 +74,8 @@ class Codec7Zip_Test(TestBase):
         assert result is not None
         assert result.group('part') == '65'
 
-
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_7z_errors(self):
         """
         Test that we fail under certain conditions
@@ -191,6 +195,8 @@ class Codec7Zip_Test(TestBase):
         # We now have 3 entries
         assert len(cr) == 3
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_7z_single_file(self):
         """
         Test that we can compress content
@@ -228,6 +234,8 @@ class Codec7Zip_Test(TestBase):
         # Encoded content is attached by default
         assert content[0].is_attached() is True
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_7z_multi_files(self):
         """
         Test that we can rar content into multiple files
@@ -263,6 +271,8 @@ class Codec7Zip_Test(TestBase):
             # Encoded content is attached by default
             assert c.is_attached() is True
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_7z_uncompress(self):
         """
         Tests the uncompressing of content
@@ -328,6 +338,8 @@ class Codec7Zip_Test(TestBase):
         del decoded
         assert isdir(decoded_path) is False
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_password_protection(self):
         """
         Tests the un-compressing of content with passwords

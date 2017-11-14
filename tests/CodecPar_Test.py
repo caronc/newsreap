@@ -2,7 +2,7 @@
 #
 # Test the PAR Codec
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -22,6 +22,9 @@ if 'threading' in sys.modules:
 
 import gevent.monkey
 gevent.monkey.patch_all()
+
+import unittest
+import os
 
 from blist import sortedset
 from os.path import join
@@ -62,6 +65,8 @@ class CodecPar_Test(TestBase):
         assert result.group('index') == '00'
         assert result.group('count') == '01'
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_par_single_file(self):
         """
         Test that we can par content
@@ -96,6 +101,8 @@ class CodecPar_Test(TestBase):
             # Content must be attached
             assert c.is_attached() is True
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_par_repair(self):
         """
         Test that we can repair a file

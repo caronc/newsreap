@@ -2,7 +2,7 @@
 #
 # Test the SubProcess Object
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -22,6 +22,9 @@ if 'threading' in sys.modules:
 
 import gevent.monkey
 gevent.monkey.patch_all()
+
+import unittest
+import os
 
 from os.path import dirname
 from os.path import abspath
@@ -182,6 +185,8 @@ class SubProcess_Test(TestBase):
         # A Timeout
         assert sp.response_code() is ReturnCode.Timeout
 
+    @unittest.skipIf(os.environ.get("TRAVIS") == "true",
+                     "Skipping this test on Travis CI.")
     def test_process_dies_with_object(self):
         """
         SubProcess for a process that will never stop
