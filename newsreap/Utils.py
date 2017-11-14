@@ -30,6 +30,7 @@ from os.path import join
 from os.path import islink
 from os.path import isfile
 from os.path import dirname
+from os.path import getsize
 from os.path import abspath
 from os.path import basename
 from os.path import splitext
@@ -1203,3 +1204,25 @@ def hexdump(src, length=16, sep='.'):
             (ord(x) <= 127 and print_map[ord(x)]) or sep) for x in chars])
         lines.append("%08x:  %-*s  |%s|" % (c, length*3, hex, printable))
     return '\n'.join(lines)
+
+
+def dirsize(src):
+    """
+    Takes a source directory and returns the entire size of all of it's
+    content(s) in bytes.
+    
+    The function returns None if the size can't be properly calculated.
+    """
+    if not isdir(src):
+        # Nothing to return
+        return 0
+
+    try:
+        with pushd(src, create_if_missing=False):
+            size = sum(getsize(f) for f in listdir('.') if isfile(f))
+
+    except (OSError, IOError):
+        return None
+
+    # Return our total size
+    return size

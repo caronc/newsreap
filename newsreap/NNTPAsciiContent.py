@@ -64,6 +64,10 @@ class NNTPAsciiContent(NNTPContent):
         """ Returns content """
         return self.getvalue()
 
+    def __unicode__(self):
+        """ Returns content """
+        return unicode(self.getvalue())
+
     def __repr__(self):
         """
         Return a printable version of the file being read

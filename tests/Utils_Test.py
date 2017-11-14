@@ -54,6 +54,7 @@ from newsreap.Utils import rm
 from newsreap.Utils import parse_list
 from newsreap.Utils import parse_bool
 from newsreap.Utils import hexdump
+from newsreap.Utils import dirsize
 
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
@@ -903,3 +904,51 @@ class Utils_Test(TestBase):
         # rstrip() to just simplify the test by stripping off
         # all trailing whitespace
         assert hexdump(all_characters) == ref_data.rstrip()
+
+    def test_dirsize(self):
+        """
+        tests dirsize()
+
+        """
+
+        # No problem if the directory doesn't exist; it's sizeless
+        assert(dirsize('non/existant/directory') == 0)
+
+        work_dir = join(self.tmp_dir, 'Utils_Test.dirsize', 'dirA')
+        # The directory should not exist
+        assert isdir(work_dir) is False
+
+        # mkdir() should be successful
+        assert mkdir(work_dir) is True
+
+        # The directory should exist now
+        assert isdir(work_dir) is True
+
+        # Directory should be zero-bytes
+        assert(dirsize(work_dir) == 0)
+
+        tmp_file01 = join(work_dir, 'test01_1MB')
+        assert self.touch(tmp_file01, size='1MB')
+
+        # Directory should be 1MB in size
+        assert(dirsize(work_dir) == strsize_to_bytes('1MB'))
+
+        tmp_file02 = join(work_dir, 'test02_1MB')
+        assert self.touch(tmp_file02, size='1MB')
+
+        # Now we should have double the storage
+        assert(dirsize(work_dir) == strsize_to_bytes('2MB'))
+
+        # Lets make the directory inaccessible
+        chmod(work_dir, 0000)
+
+        # Since we can't officially calculate the total size we abort
+        # internally, but instead of returning zero, we return None
+        # to signify our failure
+        assert(dirsize(work_dir) is None)
+
+        # restore our accessibility
+        chmod(work_dir, 0755)
+
+        # Back to normal
+        assert(dirsize(work_dir) == strsize_to_bytes('2MB'))

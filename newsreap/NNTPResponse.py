@@ -2,7 +2,7 @@
 #
 # An NNTPResponse Object used by the NNTPManagaer
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -18,9 +18,10 @@ import gevent.monkey
 gevent.monkey.patch_all()
 
 from blist import sortedset
+from datetime import datetime
 
-from newsreap.NNTPAsciiContent import NNTPAsciiContent
-from newsreap.NNTPContent import NNTPContent
+from .NNTPAsciiContent import NNTPAsciiContent
+from .NNTPContent import NNTPContent
 
 
 class NNTPResponseCode(object):
@@ -60,7 +61,8 @@ class NNTPResponseCode(object):
     # 250 Authorization accepted
     # 281 Authentication accepted
     # 290 features updated
-    SUCCESS = (111, 200, 201, 203, 205, 211, 223, 235, 238, 239, 240, 250, 281, 290)
+    SUCCESS = \
+        (111, 200, 201, 203, 205, 211, 223, 235, 238, 239, 240, 250, 281, 290)
 
     # A Success message that will be followed with data
     # This is done when calling NEWSGROUPS, XOVER, etc
@@ -88,7 +90,7 @@ class NNTPResponseCode(object):
     # 340 Send article to be posted
     # 350 Continue with authorization sequence
     # 381 More authentication information required
-    PENDING = (335, 381, 340, 350 )
+    PENDING = (335, 381, 340, 350)
 
     # Posting Failures
     # 400 Service temporarily unavailable
@@ -153,8 +155,8 @@ class NNTPResponse(object):
     objects in return.
     """
 
-
-    def __init__(self, code=None, code_str=None, work_dir=None, *args, **kwargs):
+    def __init__(self, code=None, code_str=None, work_dir=None,
+                 *args, **kwargs):
         """
         Initializes a request object and the 'action' must be a function
         name that exists in the NNTPConnection(), you can optionally specify
@@ -170,6 +172,11 @@ class NNTPResponse(object):
         if self.code_str is None:
             self.code_str = ''
 
+        # Track the time our response object was created; this is
+        # useful for multi-threading since we know when our response
+        # was generated
+        self.created = datetime.now()
+
         # Our body contains non-decoded content
         self.body = NNTPAsciiContent(work_dir=work_dir)
 
@@ -178,7 +185,6 @@ class NNTPResponse(object):
 
         # For iterating over decoded items
         self._iter = None
-
 
     def is_success(self, multiline=None):
         """
@@ -212,16 +218,23 @@ class NNTPResponse(object):
         # No match
         return False
 
-
     def detach(self):
         """
-        Detach the article stored on disk from being further managed by this class
+        Detach the article stored on disk from being further managed by this
+        class
         """
         for entry in self.decoded:
             if isinstance(entry, NNTPContent):
                 entry.detach()
         return
 
+
+    def key(self):
+        """
+        Returns a key that can be used for sorting with:
+            lambda x : x.key()
+        """
+        return self.body.key()
 
     def next(self):
         """
@@ -233,7 +246,6 @@ class NNTPResponse(object):
 
         return next(self._iter)
 
-
     def __next__(self):
         """
         Python 3 support
@@ -244,13 +256,11 @@ class NNTPResponse(object):
 
         return next(self._iter)
 
-
     def __iter__(self):
         """
         Mimic iter()
         """
         return iter(self.decoded)
-
 
     def __len__(self):
         """
@@ -261,6 +271,19 @@ class NNTPResponse(object):
             length += len(a)
         return length
 
+    def __contains__(self, code):
+        """
+        Enables usage of the 'in' keyword.  This allows us to check
+        if a code is set by it's value or by a set/tuple
+
+        """
+
+        if isinstance(code, (set, tuple, list)):
+            # find if one item in set matches us
+            return self.code in code
+
+        elif isinstance(code, int):
+            return code == self.code
 
     def __str__(self):
         """
@@ -272,7 +295,6 @@ class NNTPResponse(object):
             return '%d' % self.code
 
         return '%d: %s' % (self.code, self.code_str)
-
 
     def __repr__(self):
         """

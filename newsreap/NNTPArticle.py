@@ -27,22 +27,25 @@ from os.path import basename
 from os.path import expanduser
 from os.path import isdir
 
-from newsreap.NNTPResponse import NNTPResponse
-from newsreap.NNTPContent import NNTPContent
-from newsreap.NNTPBinaryContent import NNTPBinaryContent
-from newsreap.NNTPAsciiContent import NNTPAsciiContent
-from newsreap.codecs.CodecYenc import CodecYenc
-from newsreap.codecs.CodecBase import CodecBase
-from newsreap.NNTPHeader import NNTPHeader
-from newsreap.NNTPSettings import NNTP_EOL
-from newsreap.NNTPSettings import NNTP_EOD
-from newsreap.NNTPSettings import DEFAULT_TMP_DIR
-from newsreap.Utils import random_str
-from newsreap.Utils import bytes_to_strsize
-from newsreap.Utils import mkdir
-from newsreap.Utils import pushd
-from newsreap.Mime import Mime
-from newsreap.Mime import DEFAULT_MIME_TYPE
+from .codecs.CodecYenc import CodecYenc
+from .codecs.CodecBase import CodecBase
+from .NNTPResponse import NNTPResponse
+from .NNTPContent import NNTPContent
+from .NNTPGroup import NNTPGroup
+from .NNTPBinaryContent import NNTPBinaryContent
+from .NNTPAsciiContent import NNTPAsciiContent
+from .NNTPHeader import NNTPHeader
+from .NNTPSettings import NNTP_EOL
+from .NNTPSettings import DEFAULT_TMP_DIR
+from .Utils import random_str
+from .Utils import bytes_to_strsize
+from .Utils import strsize_to_bytes
+from .Utils import mkdir
+from .Utils import pushd
+from .Mime import Mime
+from .Mime import DEFAULT_MIME_TYPE
+from . import __version__
+from . import __title__
 
 # Logging
 import logging
@@ -76,9 +79,8 @@ class NNTPArticle(object):
 
     """
 
-    def __init__(self, id=None, subject=DEFAULT_NNTP_SUBJECT,
-                 poster=DEFAULT_NNTP_POSTER, groups=None, work_dir=None,
-                 codecs=None, *args, **kwargs):
+    def __init__(self, id=None, subject=None, poster=None, groups=None,
+                 work_dir=None, body=None, codecs=None, *args, **kwargs):
         """
         Initialize NNTP Article
 
@@ -97,9 +99,13 @@ class NNTPArticle(object):
 
         # The Subject
         self.subject = subject
+        if self.subject is None:
+            self.subject = DEFAULT_NNTP_SUBJECT
 
         # The Poster
         self.poster = poster
+        if self.poster is None:
+            self.poster = DEFAULT_NNTP_POSTER
 
         if work_dir is None:
             self.work_dir = DEFAULT_TMP_DIR
@@ -110,28 +116,21 @@ class NNTPArticle(object):
         # attachments
         self.decoded = sortedset(key=lambda x: x.key())
 
-        # Track the groups this article resides in.
-        # This is populated for meta information when an article is
-        # retrieved; but its contents are also used when posting an article.
-        self.groups = groups
-        if not self.groups:
-            self.groups = set()
-
-        elif isinstance(self.groups, basestring):
-            _groups = GROUP_DELIMITER_RE.split(self.groups)
-            self.groups = set([x.lower() for x in _groups if x])
-
-        elif isinstance(self.groups, (list, tuple)):
-            self.groups = set([x.lower() for x in self.groups])
-
-        elif not isinstance(self.groups, set):
-            raise AttributeError("Invalid group set specified.")
+        # The group(s) associated with our article
+        self.groups = NNTPGroup.split(groups)
 
         # A hash of header entries
         self.header = NNTPHeader(work_dir=self.work_dir)
 
-        # Our body contains non-decoded content
-        self.body = NNTPAsciiContent(work_dir=self.work_dir)
+        if isinstance(body, NNTPAsciiContent):
+            self.body = body
+        else:
+            # Our body contains non-decoded content
+            self.body = NNTPAsciiContent(work_dir=self.work_dir)
+
+        if isinstance(body, basestring) and len(body) > 0:
+            # Store our body content
+            self.body.write(body)
 
         # Load our Codecs
         self._codecs = codecs
@@ -159,16 +158,16 @@ class NNTPArticle(object):
             self.header = next(
                 (d for d in self.decoded if isinstance(d, NNTPHeader)), None)
 
+            # Our groups associated with the post (if we know it)
+            self.groups = set()
+
             if self.header is not None:
                 # Remove Header from decoded list
                 self.decoded.remove(self.header)
 
                 if u'Newsgroups' in self.header:
                     # Parse our groups out of the header
-                    _groups = GROUP_DELIMITER_RE.split(
-                        self.header[u'Newsgroups'],
-                    )
-                    self.groups = set([x.lower() for x in _groups if x])
+                    self.groups = NNTPGroup.split(self.header[u'Newsgroups'])
 
         elif isinstance(response, NNTPArticle):
             # We basically save everything except the work-dir since
@@ -209,12 +208,49 @@ class NNTPArticle(object):
         Returns NNTP string as it would be required for posting
         """
 
+        if not self.id:
+            # Generate ourselves a Message-ID
+            self.msgid()
+
+        if not len(self.body) and not len(self.decoded):
+            # Nothing to post
+            logger.error(
+                'Post Denied / Article %s has no content to post.' %
+                self.msgid())
+            return None
+
+        if not len(self.groups):
+            # Nothing to post
+            logger.error(
+                'Post Denied / Article %s has no groups defined.' %
+                self.msgid())
+            return None
+
+        try:
+            if not self.subject.strip():
+                logger.error(
+                    'Post Denied / Article %s has no subject.' %
+                    self.msgid())
+                return None
+
+        except AttributeError:
+            logger.error(
+                'Post Denied / Article %s has no subject.' % self.msgid())
+            return None
+
+        try:
+            if not self.poster.strip():
+                logger.error(
+                    'Post Denied / Article %s has no poster.' % self.msgid())
+                return None
+
+        except AttributeError:
+            logger.error(
+                'Post Denied /Article %s has no poster.' % self.msgid())
+            return None
+
         if update_headers:
-            self.header['Newsgroups'] = ','.join(self.groups)
-            self.header['Subject'] = self.subject
-            self.header['From'] = self.poster
-            self.header['X-Newsposter'] = self.poster
-            self.header['Message-ID'] = '<%s>' % self.msgid()
+            self.update_headers()
 
         args = [
             iter(self.header.post_iter()),
@@ -229,7 +265,6 @@ class NNTPArticle(object):
                 args.append(iter(entry.post_iter()))
                 args.append(NNTP_EOL)
 
-        args.extend([NNTP_EOL, NNTP_EOD])
         return chain(*args)
 
     def encode(self, encoders):
@@ -320,6 +355,21 @@ class NNTPArticle(object):
             # of type NNTPContent.
             return None
 
+        # ensure our size is set to some value
+        size = strsize_to_bytes(size)
+        if size is None:
+            # You can't call split() with a size value set at None
+            return None
+
+        # Size needs to consider our message body
+        # The length of our headers are not applicable
+        if len(self.body):
+            size -= len(self.body) + len(NNTP_EOL)
+
+        if size < 0:
+            # we can't perform the split
+            return None
+
         # Split our content
         new_content = content.split(size=size, mem_buf=mem_buf)
 
@@ -333,8 +383,6 @@ class NNTPArticle(object):
 
         for no, c in enumerate(new_content):
             a = NNTPArticle(
-                # TODO: Apply Subject Template here which the user can set when
-                # initializing htis function
                 subject=self.subject,
                 poster=self.poster,
                 groups=self.groups,
@@ -558,12 +606,14 @@ class NNTPArticle(object):
 
         return len(self.decoded) > _bcnt
 
-    def msgid(self, host=None):
+    def msgid(self, host=None, reset=False):
         """
         Returns a message ID; if one hasn't been generated yet, it is
         based on the content in the article and used
+
+        If reset is set to True, then a new ID is generated
         """
-        if self.id:
+        if not reset and self.id:
             return self.id
 
         if not host:
@@ -581,6 +631,9 @@ class NNTPArticle(object):
             partno,
             host
         )
+
+        # Then return it
+        return self.id
 
     def save(self, filepath=None, copy=False):
         """
@@ -739,8 +792,12 @@ class NNTPArticle(object):
 
     def size(self):
         """
-        return the total size of our decoded content
+        return the total size of our decoded content; we factor in the body if
+        it exists.
         """
+        if len(self.body):
+            return sum(len(d) for d in self.decoded) + \
+                len(self.body) + len(NNTP_EOL)
         return sum(len(d) for d in self.decoded)
 
     def strsize(self):
@@ -749,6 +806,19 @@ class NNTPArticle(object):
         string.
         """
         return bytes_to_strsize(self.size())
+
+    def update_headers(self):
+        """
+        Updates our header information based on specified content
+        """
+        # Our Newsgroups can be of type NNTPGroup, but it can also just
+        # be a plain string 'alt.binaries.test', etc. to support both
+        # types we need to do a loop inside of our join below
+        self.header['Newsgroups'] = ','.join([str(x) for x in self.groups])
+        self.header['Subject'] = self.subject.strip()
+        self.header['From'] = self.poster.strip()
+        self.header['X-Newsposter'] = '%s v%s' % (__title__, __version__)
+        self.header['Message-ID'] = '<%s>' % self.msgid()
 
     def __iter__(self):
         """

@@ -2,7 +2,7 @@
 #
 # Test the NNTPResponse Object
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -36,6 +36,7 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.NNTPResponse import NNTPResponse
+from newsreap.NNTPResponse import NNTPResponseCode
 
 
 class NNTPResponse_Test(TestBase):
@@ -69,3 +70,13 @@ class NNTPResponse_Test(TestBase):
         assert response.code_str == 'test response'
         assert isinstance(response.decoded, sortedset)
         assert str(response) ==  '400: test response'
+
+    def test_contains(self):
+        """
+        Test that we can use the keyword 'in' correctly
+
+        """
+
+        response = NNTPResponse(200)
+        assert(200 in response)
+        assert(NNTPResponseCode.SUCCESS in response)

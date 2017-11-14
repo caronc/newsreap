@@ -26,38 +26,41 @@ from os.path import expanduser
 from io import BytesIO
 from datetime import datetime
 from blist import sortedset
+import weakref
 
-from newsreap.NNTPHeader import NNTPHeader
-from newsreap.NNTPArticle import NNTPArticle
-from newsreap.NNTPResponse import NNTPResponse
-from newsreap.NNTPResponse import NNTPResponseCode
-from newsreap.NNTPContent import NNTPContent
-from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
-from newsreap.NNTPMetaContent import NNTPMetaContent
-from newsreap.NNTPFilterBase import NNTPFilterBase
-from newsreap.NNTPIOStream import NNTPIOStream
-from newsreap.NNTPIOStream import NNTP_SUPPORTED_IO_STREAMS
-from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
+from .NNTPHeader import NNTPHeader
+from .NNTPArticle import NNTPArticle
+from .NNTPResponse import NNTPResponse
+from .NNTPResponse import NNTPResponseCode
+from .NNTPContent import NNTPContent
+from .NNTPSegmentedPost import NNTPSegmentedPost
+from .NNTPMetaContent import NNTPMetaContent
+from .NNTPFilterBase import NNTPFilterBase
+from .NNTPIOStream import NNTPIOStream
+from .NNTPIOStream import NNTP_SUPPORTED_IO_STREAMS
+from .NNTPIOStream import NNTP_DEFAULT_ENCODING
 
-from newsreap.SocketBase import SocketBase
-from newsreap.SocketBase import SocketException
-from newsreap.SocketBase import SocketRetryLimit
-from newsreap.SocketBase import SignalCaughtException
-from newsreap.Utils import mkdir
-from newsreap.Utils import SEEK_SET
-from newsreap.Utils import SEEK_END
-from newsreap.NNTPnzb import NNTPnzb
-from newsreap.NNTPSettings import DEFAULT_TMP_DIR
+from .SocketBase import SocketBase
+from .SocketBase import SocketException
+from .SocketBase import SocketRetryLimit
+from .SocketBase import SignalCaughtException
+from .Utils import mkdir
+from .Utils import SEEK_SET
+from .Utils import SEEK_END
+from .NNTPnzb import NNTPnzb
+from .NNTPSettings import DEFAULT_TMP_DIR
+from .NNTPSettings import NNTP_EOL
+from .NNTPSettings import NNTP_EOD
 
 # Codecs
 # These define the messages themselves.
-from newsreap.codecs.CodecBase import CodecBase
-from newsreap.codecs.CodecHeader import CodecHeader
-from newsreap.codecs.CodecArticleIndex import CodecArticleIndex
-from newsreap.codecs.CodecArticleIndex import XoverGrouping
-from newsreap.codecs.CodecGroups import CodecGroups
-from newsreap.codecs.CodecUU import CodecUU
-from newsreap.codecs.CodecYenc import CodecYenc
+from .codecs.CodecBase import CodecBase
+from .codecs.CodecHeader import CodecHeader
+from .codecs.CodecArticleIndex import CodecArticleIndex
+from .codecs.CodecArticleIndex import XoverGrouping
+from .codecs.CodecGroups import CodecGroups
+from .codecs.CodecUU import CodecUU
+from .codecs.CodecYenc import CodecYenc
 
 # Logging
 import logging
@@ -514,31 +517,116 @@ class NNTPConnection(SocketBase):
 
         return True
 
-    def post(self, payload):
+    def post(self, payload, update_headers=True, success_only=False):
         """
         Allows posting content to a NNTP Server
 
+        If success_only is set to True, then the result set returned only
+        contains the entries of successfully posted content.  otherwise
+        the result set returns the actual response code for each
+        entry posted.
+
         """
+
+        # A sorted list of all articles pulled down
+        results = sortedset(key=lambda x: x.key())
+
+        postable = []
+        if isinstance(payload, (set, tuple, sortedset, list)):
+            # iterate over all items and append them to our resultset
+            for entry in payload:
+                _results = self.post(entry, update_headers=True)
+                if _results is not None:
+                    # Append our results
+                    results |= _results
+
+        elif isinstance(payload, NNTPArticle):
+            postable = [payload, ]
+
+        elif isinstance(payload, NNTPSegmentedPost):
+            postable = iter(payload)
+
+        for content in postable:
+            if content not in results:
+                try:
+                    response = self._post(content, update_headers=True)
+
+                except SocketException:
+                    # Connection Lost
+                    self.close()
+
+                    # Setup Response
+                    response = NNTPResponse(
+                        NNTPResponseCode.CONNECTION_LOST,
+                        'Connection Lost',
+                    )
+
+                # Point our body to our content
+                response.body = weakref.proxy(content)
+
+                if success_only:
+                    if response in NNTPResponseCode.SUCCESS:
+                        results.add(response)
+                else:
+                    # Store all response types
+                    results.add(response)
+
+        # Return our results
+        return results
+
+    def _post(self, article, update_headers=True):
+        """
+        Takes an NNTPArticle() and posts it to an NNTP Server if it can
+
+        """
+
+        if not self.connected:
+            # Attempt to establish a connection
+            if not self.connect():
+                logger.error('Could not establish a connetion to NNTP Server.')
+                return NNTPResponse(
+                    NNTPResponseCode.NO_CONNECTION, 'No Connection',
+                )
+
         if not self.can_post:
             # 480 Transfer permission denied
-            return (480, 'Transfer permission denied.')
+            return NNTPResponse(480, 'Transfer permission denied.')
 
+        if not isinstance(article, NNTPArticle):
+            # Not postable content
+                return NNTPResponse(
+                    NNTPResponseCode.INVALID_INPUT,
+                    'You may only post an NNTPArticle.',
+                )
+
+        # get an iterator
+        post_iter = article.post_iter(update_headers=update_headers)
+        if not post_iter:
+            return NNTPResponse(
+                NNTPResponseCode.INVALID_INPUT,
+                'NNTPArticle() is missing data (not postable).',
+            )
+
+        # send the POST keyword to the remote server
         response = self.send('POST')
         if response.code not in NNTPResponseCode.PENDING:
             # We got a 400 or 500 error, no good
             logger.error('Could not post content / %s' % response)
             return response
 
-        # The server
-        # header=('From: %s' % terry@richard.geek.org.au
+        # If we reach here we're read to go
+        xfer_total_bytes = 0
+        for chunk in post_iter:
+            xfer_bytes = super(NNTPConnection, self).send(chunk)
+            if xfer_bytes != len(chunk):
+                # uh-oh
+                return NNTPResponse(436, 'Transfer failed.')
+            xfer_total_bytes += xfer_bytes
 
-        # STUB: TODO
-        # payload should be a class that takes all the required
-        # items nessisary to post. It should also take a BytesIO
-        # stream it can use to to upload with.  Or a filename
-        # and the class will take care of opening it, streaming it's
-        # contents and closing it afterwards.
-        return NNTPResponse(239, 'Article transferred OK')
+        # Send our EOD and capture our response
+        response = self.send(NNTP_EOL + NNTP_EOD)
+
+        return response
 
     def group(self, name):
         """
@@ -1154,7 +1242,7 @@ class NNTPConnection(SocketBase):
                 )
                 return next(
                     (b.article for b in self._backups
-                        if b.stat(id, group) not in (None, False)), None)
+                        if b.stat(id, group) not in (None, False)), False)
 
             logger.warning('ARTICLE <%s> not found.' % id)
             return False
@@ -1169,7 +1257,7 @@ class NNTPConnection(SocketBase):
                 return next(
                     (b.article for b in self._backups
                         if b.stat(id, group) not in (None, False)), None)
-            return False
+            return None
 
         # Return
         return True

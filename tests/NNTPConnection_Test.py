@@ -288,3 +288,16 @@ class NNTPConnection_Test(TestBase):
         # Again without the lazy flag set
         groups = sock.groups(filters='alt.binaries')
         assert len(groups) == 5270
+
+    def test_posting(self):
+        sock = NNTPConnection(
+            host=self.nttp_ipaddr,
+            port=self.nntp_portno,
+            username='valid',
+            password='valid',
+            secure=False,
+            join_group=False,
+        )
+        assert sock.connect(timeout=5.0) is True
+
+        # TODO

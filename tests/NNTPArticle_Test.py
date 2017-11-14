@@ -201,17 +201,13 @@ class NNTPArticle_Test(TestBase):
         assert('convert.lead.2.gold' in article.groups)
         assert('convert.lead.2.gold.again' in article.groups)
 
-        try:
-            # Throw an exception if the group is invalid
-            article = NNTPArticle(
-                id='random-id',
-                groups=4,
-                work_dir=self.tmp_dir,
-            )
-            assert(False)
-
-        except Exception, e:
-            assert(isinstance(e, AttributeError) is True)
+        # Don't expect invalid groups to stick
+        article = NNTPArticle(
+            id='random-id',
+            groups=4,
+            work_dir=self.tmp_dir,
+        )
+        assert(len(article.groups) == 0)
 
         # Duplicates groups are are removed automatically
         article = NNTPArticle(
@@ -278,13 +274,15 @@ class NNTPArticle_Test(TestBase):
         assert(len(results) == 2)
 
         # Test that the parts were assigned correctly
-        for i, content in enumerate(results):
+        for i, article in enumerate(results):
             # We should only have one content object
-            assert(len(content) == 1)
+            assert(isinstance(article, NNTPArticle) is True)
+            assert(len(article) == 1)
             # Our content object should correctly have the part and
             # total part contents populated correctly
-            assert(content[0].part == (i+1))
-            assert(content[0].total_parts == len(results))
+            assert(article[0].part == (i+1))
+            assert(article[0].total_parts == len(results))
+
 
     def test_article_append(self):
         """
@@ -588,3 +586,69 @@ class NNTPArticle_Test(TestBase):
         # the attachment name takes priority over the detected article name
         # when 2 mime types collide
         assert(article.deobsfucate() == 'file.rar')
+
+    def test_msgid(self):
+        """
+        Tests that we can generate message id's when we need to
+
+        """
+        # Prepare Article
+        article = NNTPArticle(work_dir=self.tmp_dir)
+
+        # We equal a blank
+        assert(article.id == '')
+
+        # Store our new identifier (our Message-ID)
+        new_id = article.msgid()
+
+        # We now have a set id
+        assert(article.id == new_id)
+
+        # Consecutive calls do not change the value
+        assert(article.msgid() == new_id)
+
+        # However they do change if we put a reset in it
+        another_id = article.msgid(reset=True)
+
+        # We're no longer using the old ID
+        assert(article.id != new_id)
+        assert(another_id != new_id)
+
+        # We are using the new id
+        assert(article.msgid() == another_id)
+
+        # This is also what we're set to now
+        assert(article.id == another_id)
+
+    def test_post_iter(self):
+        """
+        Tests that we can correctly iterate over our content for posting
+        purposes.
+
+        """
+        # Prepare Article
+        article = NNTPArticle(
+            subject='',
+            poster='',
+            body='hello world',
+            work_dir=self.tmp_dir,
+        )
+
+        # we failed because our subject and poster was blank
+        # we also fail because we have no groups defined
+        assert(article.post_iter() is None)
+
+        article.groups.add('alt.binaries.test')
+        assert(article.post_iter() is None)
+
+        article.subject = 'Subject'
+        assert(article.post_iter() is None)
+
+        article.poster = 'l2g@nuxref.com'
+
+        # Now we're good to go
+        it = article.post_iter()
+        assert(it is not None)
+        for entry in it:
+            assert(isinstance(entry, basestring) is True)
+

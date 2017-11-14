@@ -54,8 +54,10 @@
 #       encoding: ISO-8859-1
 #
 #   posting:
-#     - poster: 'omg <putin@it.in.russia.ru>'
-#       max_article_size: 25M
+#       poster: 'omg <putin@it.in.russia.ru>'
+#       subject: '"{{filename}}" yEnc ({{index}}/{{count}})'
+#       max_article_size: 5M
+#       max_archive_size: 25M
 #
 #   processing:
 #     - threads: 5
@@ -158,8 +160,6 @@ except ImportError:
     sys.path.insert(0, dirname(NEWSREAP_ROOT))
     from newsreap.NNTPDatabase import NNTPDatabase
 
-from newsreap.objects.nntp.Server import Server
-from newsreap.objects.nntp.Vsp import Vsp
 from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 from newsreap.NNTPIOStream import NNTPIOStream
 from newsreap.Utils import parse_bool
@@ -291,11 +291,24 @@ PROCESSING_KEY = 'processing'
 # Processing Variables mapped to their defaults if not found.
 # if None is specified, then the field is mandatory or we'll abort
 DEFAULT_POSTING_VARIABLES = {
-    # The maximum article size before we split the content
-    'max_article_size': '25MB',
+    # The maximum article size before splitting the content; most providers do
+    # now allow you to exceed 760KB which is why it is the default.
+    'max_article_size': '760KB',
+
+    # The maximum archive size before splitting the content
+    # Some archivers (such as rar, zip, 7z) can break up a large archive
+    # into several smaller archived files
+
+    # If this value is set to auto, then the size is automatically calculated
+    # based on the total size of the content being prepared
+    'max_archive_size': 'auto',
 
     # The default poster
-    'poster': None,
+    'poster': 'Newsreap <reaper@newsreap.io>',
+
+    # The default subject
+    'subject': '{{description}} (%Y-%m-%d)" - "{{filename}}" yEnc '\
+               '({{index}}/{{count}})',
 }
 
 POSTING_KEY = 'posting'

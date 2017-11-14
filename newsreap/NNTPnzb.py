@@ -309,7 +309,7 @@ class NNTPnzb(NNTPContent):
                 for group in segment.groups:
                     self.write('%s<group>%s</group>%s' % (
                         indent,
-                        self.escape_xml(group),
+                        group,
                         eol,
                     ))
 
@@ -342,9 +342,9 @@ class NNTPnzb(NNTPContent):
                         self.write(
                             '%s<segment %snumber="%d">%s</segment>%s' % (
                                 indent,
-                                (('bytes="%d "' % _bytes) if _bytes else ''),
+                                (('bytes="%d" ' % _bytes) if _bytes else ''),
                                 part+1,
-                                self.escape_xml(article.id),
+                                self.escape_xml(article.msgid()),
                                 eol,
                             )
                         )
@@ -401,7 +401,7 @@ class NNTPnzb(NNTPContent):
                         # Use the md5 hash of the first message-id of the
                         # first segment
                         _md5sum = hashlib.md5()
-                        _md5sum.update(self.segments[0][0].id)
+                        _md5sum.update(self.segments[0][0].msgid())
 
                         # Store our data
                         self._lazy_gid = _md5sum.hexdigest()

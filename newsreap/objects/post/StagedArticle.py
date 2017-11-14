@@ -17,8 +17,9 @@
 from sqlalchemy import Column
 from sqlalchemy import Integer
 from sqlalchemy import String
-from sqlalchemy import Boolean
+from sqlalchemy import UnicodeText
 from sqlalchemy import DateTime
+from sqlalchemy import Sequence
 
 from .ObjectBase import ObjectBase
 
@@ -33,15 +34,22 @@ class StagedArticle(ObjectBase):
 
     __tablename__ = 'staged_article'
 
+    # Our unique identifier
+    id = Column(
+        Integer, Sequence('staged_article_id_seq'), primary_key=True)
+
     # The filename to associate with the staged content; if no filename is
     # specified then the filename associated with the filepath is used.
-    localfile = Column(String(256), nullable=False, primary_key=True)
+    localfile = Column(String(256), nullable=False)
 
     # Article (Unique) Message-ID
     message_id = Column(String(128), index=True)
 
     # Article Subject
     subject = Column(String(256), nullable=False)
+
+    # Article Body (this does not include the yEnc attachment)
+    body = Column(UnicodeText(), nullable=False)
 
     # Article Poster
     poster = Column(String(128), nullable=False)
@@ -62,7 +70,7 @@ class StagedArticle(ObjectBase):
 
     # Upon posting, this boolean flag is toggled after verifying the posted
     # content was performed successfully.
-    verified = Column(Boolean, default=False, nullable=False)
+    verified_date = Column(DateTime, default=None, nullable=True)
 
     # The sequence # associated with the filename. A sequence value of zero (0)
     # always identifies the root/main file. This is used when generating our
@@ -77,4 +85,4 @@ class StagedArticle(ObjectBase):
         super(StagedArticle, self).__init__(*args, **kwargs)
 
     def __repr__(self):
-        return "<StagedArticle(message_id=%s)>" % (self.message_id)
+        return "<StagedArticle(localfile=%s)>" % (self.localfile)

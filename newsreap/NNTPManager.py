@@ -479,6 +479,129 @@ class NNTPManager(object):
         # We aren't blocking, so just return the request object
         return request
 
+    def post(self, payload, update_headers=True, success_only=False,
+             block=True):
+        """
+        Queue's an NNTPRequest for processing and returns it's
+        response if block is set to True.
+
+        If block is not set to true, then it is up to the calling
+        application to monitor the request until it's complete.
+
+        Since the Request Object is inherited from a gevent.Event()
+        object, one can easily check the status with the ready()
+        call or, wait() if they want to block until content is ready.
+
+        See http://www.gevent.org/gevent.event.html#module-gevent.event
+        for more details.
+
+        To remain thread-safe; it's recommended that you do not change
+        any of the response contents or articles contents prior to
+        it's flag being set (marking completion)
+
+        """
+        # A list of results
+        requests = []
+
+        if isinstance(payload, NNTPnzb):
+            # We're dealing with an NZB-File
+            if not payload.is_valid():
+                return None
+
+            # Pre-Spawn workers based on the number of segments found in our
+            # NZB-File.
+            self.spawn_workers(payload.segcount())
+
+            # We iterate over each segment defined int our NZBFile and merge
+            # them into 1 file. We do this until we've processed all the
+            # segments and we return a list of articles
+            for segpost in payload:
+                for article in segpost:
+
+                    # Push request to the queue
+                    request = NNTPConnectionRequest(actions=[(
+                        # Append list of NNTPConnection requests in a list
+                        # ('function, (*args), (**kwargs) )
+                        'post', (article, ), {
+                            'update_headers': update_headers,
+                            'success_only': success_only,
+                            },
+                        ),
+                    ])
+
+                    # Append to Queue for processing
+                    self.put(request)
+
+                    # Store our request
+                    requests.append(request)
+
+        elif isinstance(payload, NNTPSegmentedPost):
+            # Pre-Spawn workers based on the number of segments we find.
+            self.spawn_workers(len(payload))
+
+            # We iterate over each segment defined int our NZBFile and merge
+            # them into 1 file. We do this until we've processed all the
+            # segments and we return a list of articles
+            for article in payload:
+
+                # Push request to the queue
+                request = NNTPConnectionRequest(actions=[(
+                    # Append list of NNTPConnection requests in a list
+                    # ('function, (*args), (**kwargs) )
+                    'post', (article, ), {
+                        'update_headers': update_headers,
+                        'success_only': success_only,
+                        },
+                    ),
+                ])
+
+                # Append to Queue for processing
+                self.put(request)
+
+                # Store our request
+                requests.append(request)
+
+        elif isinstance(payload, NNTPArticle):
+            # We're dealing with a single Article
+
+            # Push request to the queue
+            request = NNTPConnectionRequest(actions=[(
+                # Append list of NNTPConnection requests in a list
+                # ('function, (*args), (**kwargs) )
+                'post', (payload, ), {
+                    'update_headers': update_headers,
+                    'success_only': success_only,
+                    },
+                ),
+            ])
+
+            # Append to Queue for processing
+            self.put(request)
+
+            # Store our request
+            requests.append(request)
+
+        # We'll know when our request has been handled because the
+        # request is included in the response.
+        if not block:
+            # We aren't blocking, so just return the request objects
+            return requests
+
+        # Block indefinitely on all pending requests
+        [req.wait() for req in iter(requests)]
+
+        # Simplify things by returning just the response object
+        # instead of the request
+        responses = [req.response[0] for req in iter(requests)]
+
+        if isinstance(payload, NNTPArticle):
+            # A single Article, we can just go ahead and return a single
+            # response
+            return responses[0]
+
+        # Return our responses
+        return responses
+
     def get(self, id, work_dir, group=None, max_bytes=0, block=True,
             force=False):
         """

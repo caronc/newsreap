@@ -480,13 +480,9 @@ class NNTPContent(object):
         if not isinstance(encoder, object):
             return None
 
-        if not isinstance(encoder, (tuple, sortedset, list)):
+        if not isinstance(encoder, (list, tuple, sortedset, list)):
             # work with a tuple for now
             encoder = (encoder, )
-
-        if not isinstance(encoder, (tuple, sortedset, list)):
-            # We expect a list at this point
-            return None
 
         # Content object we chain to
         content = self
@@ -501,7 +497,7 @@ class NNTPContent(object):
             if hasattr(enc, 'encode') and \
                isinstance(enc.encode, MethodType):
                 # We're dealing with a stream based encoder
-                content = enc.encode(content.filepath)
+                content = enc.encode(self)
                 if content is None:
                     return None
 
@@ -1089,14 +1085,17 @@ class NNTPContent(object):
 
         return result
 
-    def post_iter(self):
+    def post_iter(self, block_size=BLOCK_SIZE):
         """
         Returns NNTP string as it would be required for posting to an
         NNTP Server
         """
+        if not block_size:
+            block_size = self._block_size
+
         if self.open(mode=NNTPFileMode.BINARY_RO):
             while 1:
-                data = self.stream.read(self._block_size)
+                data = self.stream.read(block_size)
                 if not data:
                     break
                 yield data

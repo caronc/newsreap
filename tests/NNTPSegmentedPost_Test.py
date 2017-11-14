@@ -48,8 +48,7 @@ class NNTPSegmentedPost_Test(TestBase):
 
     """
 
-    @classmethod
-    def test_general_features(cls):
+    def test_general_features(self):
         """
         NNTPSegmentedPost manage a list of NNTPArticles
 
@@ -61,7 +60,7 @@ class NNTPSegmentedPost_Test(TestBase):
 
         # Not valid because there are no entries
         assert segobj.is_valid() is False
-        article = NNTPArticle()
+        article = NNTPArticle(work_dir=self.tmp_dir)
 
         assert(segobj.add(article) is True)
         assert(len(segobj) == 1)

@@ -119,16 +119,26 @@ processing:
 # If you plan on posting an article, this field just provides some templated
 # information to make it easier to do so.
 posting:
-    # The author is stamped on all posts you make.
-    author: 'omg <putin@russia.ru>'
+    # The poster is stamped on all posts you make.
+    poster: 'Newsreap <reaper@newsreap.io>'
+
+    # The default subject
+    subject: '{{description}} (%Y-%m-%d)" - "{{filename}}" yEnc ({{index}}/{{count}})'
 
     # If posting binary content, what is the largest size you want your
-    # article to be before it's broken up into segments
-    max_article_size: 5M
+    # article to be before it's broken up into segments. Most providers do not
+    # allow you to exceed 760KB; so don't change this unless you know what
+    # you're doing
+    max_article_size: 760KB
 
     # Some archivers (such as rar, zip, 7z) can break up a large archive
     # into several smaller archived files
-    max_archive_size: 25M
+    # You can specify sizes like 25MB or 10MB, or just put in the byte
+    # value if you want (no unit).
+    #
+    # The default is 'auto'; auto is a special keyword to automatically
+    # calculate the size based on the content being archived.
+    max_archive_size: auto
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Database Configuration

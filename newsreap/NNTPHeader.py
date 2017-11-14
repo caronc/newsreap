@@ -14,8 +14,8 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 import re
-from newsreap.NNTPSettings import NNTP_EOL
-from newsreap.NNTPMetaContent import NNTPMetaContent
+from .NNTPSettings import NNTP_EOL
+from .NNTPMetaContent import NNTPMetaContent
 
 # When printing of the object is required, content is returned as
 # it appears in this list (sequentially).  Anything not matched
@@ -30,11 +30,32 @@ HEADER_PRINT_SEQUENCE = (
     'Newsgroups',
     'Content-Type',
     'Mime-Version',
-    'Content-Transfer-Encoding'
+    'Content-Transfer-Encoding',
 
     # Defined X-Entries
-    'X-Newsposter'
+    'X-Newsposter',
 )
+
+# By maintaining a list of headers we can set manually that are defined by the
+# NNTP Spec, we can automatically stick X- infront of anything else so that
+# they are valid as well.
+VALID_HEADER_ENTRIES = (
+    'Subject',
+    'From',
+    'Date',
+    'Message-ID',
+    'Lines',
+    'Size',
+    'Newsgroups',
+    'Content-Type',
+    'Mime-Version',
+    'Content-Transfer-Encoding',
+)
+
+# What we stick infront of any entry that is not marked in the Valid Header
+# list above
+UNKNOWN_PREFIX = "X-"
+
 
 class NNTPHeader(NNTPMetaContent):
     """
@@ -65,9 +86,16 @@ class NNTPHeader(NNTPMetaContent):
         """
         Returns NNTP string as it would be required for posting
         """
-        return NNTP_EOL.join(
-            ['%s: %s' % (k, v) \
-             for k, v in self.content.iteritems()]) + NNTP_EOL + NNTP_EOL
+        for k in HEADER_PRINT_SEQUENCE:
+            if k in self.content:
+                yield '%s: %s%s' % (k, self.content[k], NNTP_EOL)
+
+        for k, v in self.content.iteritems():
+            if k not in HEADER_PRINT_SEQUENCE:
+                yield '%s: %s%s' % (k, v, NNTP_EOL)
+
+        # Last entry
+        yield NNTP_EOL
 
     def clear(self):
         """
@@ -81,16 +109,9 @@ class NNTPHeader(NNTPMetaContent):
         """
         return self.content.copy()
 
-    def has_key(self, key):
-        """
-        Mimic Dictionary:  dict.has_key(key)
-        """
-        key = self.__fmt_key(key)
-        return self.content.has_key(key)
-
     def update(self, *args, **kwargs):
         """
-        Mimic Dictionary:  dict.has_key(key)
+        Mimic Dictionary:  dict.update(key)
         """
         return self.content.update(*args, **kwargs)
 
@@ -172,7 +193,7 @@ class NNTPHeader(NNTPMetaContent):
         def _fmt(_k):
             return _k.group(1) + _k.group(2).upper()
 
-        return re.sub(
+        key = re.sub(
             # Flip -id to ID (short for Identifier)
             # Flip -crc to CRC (short for Cyclic Redundancy Check)
             r'([_-])((id|crc)([^a-z0-9]|$))',
@@ -180,12 +201,22 @@ class NNTPHeader(NNTPMetaContent):
             re.sub(r'(^|\s|[_-])(\S)', _fmt, key.strip().lower()),
             flags=re.IGNORECASE,
         )
+        if key in VALID_HEADER_ENTRIES or key.startswith(UNKNOWN_PREFIX):
+            return key
+        return UNKNOWN_PREFIX + key
 
     def __len__(self):
         """
         Returns the number of header entries
         """
         return len(self.content)
+
+    def __contains__(self, key):
+        """
+        support 'in' keyword
+        """
+        key = self.__fmt_key(key)
+        return key in self.content
 
     def __delitem__(self, key):
         """

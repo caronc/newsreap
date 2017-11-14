@@ -2,7 +2,7 @@
 #
 # Test the NNTP Header Object
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -82,24 +82,12 @@ class NNTPHeader_Test(TestBase):
         # We only have 1 entry in our header table now
         assert len(hdr) == 1
 
-        # This simple check just makes sure we don't create a key called
-        # My-IDentifier
-        assert hdr.keys()[0] == 'My-Identifier'
-
-    def test_post_formating(self):
-        """
-        Test that we properly format the header for posting
-        """
-
-        # Initialize Header
-        hdr = NNTPHeader()
-        hdr['message-id'] = '<msgid1234>'
-        hdr['Newsgroups'] = 'alt.binaries.test,alt.binaries.test2'
-        hdr['Subject'] = 'Test Subject'
-        hdr['From'] = 'l2g <noreply@newsreap.com>'
-        hdr['X-Newsposter'] = 'newsreap'
-
-        assert isinstance(hdr.post_iter(), basestring)
+        # Since My-Identifier does not follow NNTP Rules, it actually
+        # gets stored with an X- infront of it
+        assert ('My-Identifier' in hdr)
+        assert ('X-My-Identifier' in hdr)
+        assert (hdr.keys()[0] != 'My-Identifier')
+        assert (hdr.keys()[0] == 'X-My-Identifier')
 
     def test_print_ordering(self):
         # Initialize Header
@@ -128,3 +116,46 @@ class NNTPHeader_Test(TestBase):
             # they exist on this list somewhere.  For full bulletproofing
             # every type of entry should be added above
             assert key == expected
+
+    def test_header_post_iterator(self):
+        # Initialize Header
+        hdr = NNTPHeader()
+        hdr['date'] = 'Mon, 05 Jun 2017 07:54:52 -0700'
+        hdr['From'] = 'l2g <noreply@newsreap.com>'
+        hdr['Newsgroups'] = 'alt.binaries.test,alt.binaries.test2'
+        hdr['message-id'] = '<msgid1234>'
+        hdr['Subject'] = 'Test Subject'
+
+        it = hdr.post_iter()
+        assert(it is not None)
+
+        # Manage a iterator to hdrseq
+        hdrseq = iter(HEADER_PRINT_SEQUENCE)
+
+        for line in it:
+            key = re.split(':', line.strip())[0]
+
+            if not key:
+                # we got our EOL entry
+                # we'll test that were at the end below
+                break
+
+            # Get next expected entry even if it means
+            # iterating a bit further down the list
+            expected = next(hdrseq)
+            while expected != key:
+                expected = next(hdrseq)
+
+            # Our entries defined were specifically specified because
+            # they exist on this list somewhere.  For full bulletproofing
+            # every type of entry should be added above
+            assert key == expected
+
+        # We should be at the end of our list here
+        try:
+            next(it)
+            assert(False)
+
+        except StopIteration:
+            assert(True)
+

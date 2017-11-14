@@ -23,19 +23,20 @@ from os.path import expanduser
 from os.path import splitext
 from os.path import basename
 
-from newsreap.codecs.CodecBase import CodecBase
-from newsreap.codecs.CodecYenc import CodecYenc
-from newsreap.NNTPSettings import DEFAULT_TMP_DIR
-from newsreap.NNTPArticle import NNTPArticle
-from newsreap.NNTPArticle import DEFAULT_NNTP_SUBJECT
-from newsreap.NNTPArticle import DEFAULT_NNTP_POSTER
-from newsreap.NNTPContent import NNTPContent
-from newsreap.NNTPBinaryContent import NNTPBinaryContent
-from newsreap.NNTPAsciiContent import NNTPAsciiContent
-from newsreap.Utils import bytes_to_strsize
-from newsreap.Utils import pushd
-from newsreap.Mime import Mime
-from newsreap.Mime import DEFAULT_MIME_TYPE
+from .codecs.CodecBase import CodecBase
+from .codecs.CodecYenc import CodecYenc
+from .NNTPSettings import DEFAULT_TMP_DIR
+from .NNTPGroup import NNTPGroup
+from .NNTPArticle import NNTPArticle
+from .NNTPArticle import DEFAULT_NNTP_SUBJECT
+from .NNTPArticle import DEFAULT_NNTP_POSTER
+from .NNTPContent import NNTPContent
+from .NNTPBinaryContent import NNTPBinaryContent
+from .NNTPAsciiContent import NNTPAsciiContent
+from .Utils import bytes_to_strsize
+from .Utils import pushd
+from .Mime import Mime
+from .Mime import DEFAULT_MIME_TYPE
 
 # Logging
 import logging
@@ -150,21 +151,8 @@ class NNTPSegmentedPost(object):
         else:
             self.work_dir = abspath(expanduser(work_dir))
 
-        self.groups = groups
-        if not self.groups:
-            self.groups = set()
-
-        if isinstance(self.groups, basestring):
-            self.groups = [self.groups]
-
-        elif isinstance(self.groups, basestring):
-            self.groups = set((self.groups, ))
-
-        elif isinstance(self.groups, list):
-            self.groups = set(self.groups)
-
-        elif not isinstance(self.groups, set):
-            raise AttributeError("Invalid group set specified.")
+        # The group(s) associatd with our article(s)
+        self.groups = NNTPGroup.split(groups)
 
         if self.filename:
             # attempt to add our filename
@@ -222,11 +210,8 @@ class NNTPSegmentedPost(object):
                         )
 
                     else:
-                        # we're dealing with a new file; just save what we have
-                        content = NNTPBinaryContent(
-                            filepath=content,
-                            work_dir=self.work_dir,
-                        )
+                        # Nothing to add
+                        return False
 
                     # At this point we fall through and the next set of
                     # if checks will catch our new content object we created
