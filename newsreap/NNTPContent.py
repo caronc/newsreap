@@ -854,13 +854,11 @@ class NNTPContent(object):
                     block_size = total_bytes
 
                 if f_length == 0:
-                    # Increment our part
-                    part += 1
 
                     # Create a new object
                     obj = NNTPContent(
                         filepath=self.filename,
-                        part=part,
+                        part=part+1,
                         total_parts=total_parts,
                         begin=(part*size),
                         end=((part*size)+size),
@@ -869,8 +867,11 @@ class NNTPContent(object):
                         sort_no=self.sort_no,
                     )
 
+                    # Increment our part
+                    part += 1
+
                     # Create a pointer to the parent
-                    obj._parent = weakref.ref(self)
+                    obj._parent = weakref.proxy(self)
 
                     # Open the new file
                     obj.open(mode=NNTPFileMode.BINARY_WO_TRUNCATE)
@@ -1013,7 +1014,7 @@ class NNTPContent(object):
         """
         if self._begin:
             return self._begin
-        return 1
+        return 0
 
     def end(self):
         """
