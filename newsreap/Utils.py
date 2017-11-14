@@ -184,7 +184,7 @@ SEEK_CUR = 1
 SEEK_END = 2
 
 # Sub commands are identified by they're filename
-PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py[co]?$')
+PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py$')
 
 # URL Indexing Table for returns via parse_url()
 VALID_URL_RE = re.compile(r'^[\s]*([^:\s]+):[/\\]*([^?]+)(\?(.+))?[\s]*$')
