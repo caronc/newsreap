@@ -152,6 +152,12 @@ class NNTPHeader(NNTPMetaContent):
         """
         return self.content.items()
 
+    def iteritems(self):
+        """
+        Mimic Dictionary:  dict.items()
+        """
+        return self.content.iteritems()
+
     def pop(self, key, d=None):
         """
         Mimic Dictionary:  dict.pop(key, default)
