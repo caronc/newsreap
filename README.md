@@ -134,8 +134,8 @@ find content.to.post.nrws/staged content.to.post.nrws/staged.db
 #    content.to.post.nrws/staged/content.to.post.rar
 #    content.to.post.nrws/staged.db
 
-# These files 'look' simiar to what is in the prep directory but the are not
-# the are already in an ascii format; have a look:
+# These files 'look' simiar to what is in the prep directory but they are not,
+# they are already in an ascii format... have a look:
 head -n2 content.to.post.nrws/staged/content.to.post.rar
 #  output:
 #    =ybegin part=1 total=1 line=128 size=710 name=content.to.post.rar
