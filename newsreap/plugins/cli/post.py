@@ -69,7 +69,7 @@ NEWSREAP_CLI_PLUGINS = {
 @click.option('--archive-size', '-a', default=None, type=str,
               help='The maximum archive size before splitting')
 @click.option('--hooks', '-k', default=None, type=str,
-              help='Specify some hook(s) to load')
+              help='Specify one or more hooks to load')
 @click.argument('paths', nargs=-1)
 @click.pass_obj
 def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
@@ -137,13 +137,13 @@ def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
                 continue
 
         if stage:
-            if not pf.stage(groups, split_size=split_size, poster=poster,
-                            subject=subject):
+            if not pf.stage(groups=groups, split_size=split_size,
+                            poster=poster, subject=subject):
                 return_code = 1
                 continue
 
         if upload:
-            if not pf.upload():
+            if not pf.upload(groups=groups):
                 return_code = 1
                 continue
 

@@ -635,6 +635,14 @@ def load_pylib(module_name, filepath=None):
             return SourceFileLoader(module_name, filepath).load_module()
         return load_source(module_name, filepath)
 
+    except ImportError as e:
+        # Could not load module
+        logger.warning(
+            'Failed to import from dynamic module: %s (reason: %s)' % (
+                filepath,
+                str(e),
+            )
+        )
     except IOError as e:
         # Could not load module
         logger.warning(
