@@ -64,6 +64,7 @@ NEWSREAP_CLI_PLUGINS = {
     },
 }
 
+
 # Define our functions below
 # all functions are prefixed with what is identified
 # above or they are simply ignored.
@@ -174,9 +175,9 @@ def alias_del(ctx, alias, groups):
         return
 
     # Get the groups impacted
-    a_groups = dict(session.query(Group.name, Group.id).join(GroupAlias)\
-                .filter(GroupAlias.group_id == Group.id)\
-                .filter(GroupAlias.name == _alias).all())
+    a_groups = dict(session.query(Group.name, Group.id).join(GroupAlias)
+                    .filter(GroupAlias.group_id == Group.id)
+                    .filter(GroupAlias.name == _alias).all())
 
     # Track list of groups to remove
     remove_groups = list()
@@ -198,11 +199,12 @@ def alias_del(ctx, alias, groups):
             continue
 
         try:
-            _groups = session.query(Group.name).filter(Group.name==_group).all()
+            _groups = session.query(Group.name)\
+                .filter(Group.name == _group).all()
             if not _groups:
                 # No problem; let us treat it as an alias and try again
                 _groups = session.query(Group.name).join(GroupAlias)\
-                        .filter(GroupAlias.name==_group).all()
+                        .filter(GroupAlias.name == _group).all()
                 if not _groups:
                     logger.warning("The group/alias '%s' was not found." % g)
                     continue
@@ -234,6 +236,7 @@ def alias_del(ctx, alias, groups):
 
     return
 
+
 @click.command(name='list')
 @click.pass_obj
 def alias_list(ctx):
@@ -247,10 +250,11 @@ def alias_list(ctx):
         exit(1)
 
     last = None
-    for entry in session.query(Group.name, GroupAlias.name).join(GroupAlias)\
-                 .filter(Group.id == GroupAlias.group_id)\
-                 .order_by(GroupAlias.name)\
-                 .order_by(Group.name).all():
+    for entry in session.query(Group.name, GroupAlias.name)\
+            .join(GroupAlias)\
+            .filter(Group.id == GroupAlias.group_id)\
+            .order_by(GroupAlias.name)\
+            .order_by(Group.name).all():
 
         if last != entry[1]:
             if last is not None:

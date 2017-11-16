@@ -2,7 +2,7 @@
 #
 # NewsReap NNTP Group CLI Plugin
 #
-# Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -15,11 +15,20 @@
 # GNU Lesser General Public License for more details.
 
 import click
+import sys
 
-from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.GroupAlias import GroupAlias
-from newsreap.objects.nntp.Common import get_groups
 from sqlalchemy.exc import OperationalError
+
+from os.path import abspath
+from os.path import dirname
+
+try:
+    from newsreap.objects.nntp.Group import Group
+except ImportError:
+    # Path
+    sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
+
+from newsreap.objects.nntp.Common import get_groups
 
 # Logging
 import logging
@@ -34,6 +43,7 @@ NEWSREAP_CLI_PLUGINS = {
         'desc': 'Group management',
     },
 }
+
 
 # Define our functions below
 # all functions are prefixed with what is identified
@@ -61,10 +71,17 @@ def group_watch(ctx, groups):
         )
         exit(1)
 
+    # PEP8 E712 does not allow us to make a comparison to a boolean value
+    # using the == instead of the keyword 'in'.  However SQLAlchemy
+    # requires us to do just because that's how the amazing tool works.
+    # so to get around the pep8 error, we'll just define a variable equal
+    # to True and then we can compare to it
+    pep8_e712 = False
+
     for name, _id in groups.items():
         # Remove the entry if we can otherwise we just gracefully move on
         if session.query(Group).filter(Group.id == _id)\
-                .filter(Group.watch==False)\
+                .filter(Group.watch == pep8_e712)\
                 .update({Group.watch: True}):
             logger.info("Added the group '%s' to the watchlist." % name)
             pending_commits += 1
@@ -98,10 +115,17 @@ def group_unwatch(ctx, groups):
         )
         exit(1)
 
+    # PEP8 E712 does not allow us to make a comparison to a boolean value
+    # using the == instead of the keyword 'in'.  However SQLAlchemy
+    # requires us to do just because that's how the amazing tool works.
+    # so to get around the pep8 error, we'll just define a variable equal
+    # to True and then we can compare to it
+    pep8_e712 = True
+
     for name, _id in groups.items():
         # Remove the entry if we can otherwise we just gracefully move on
         if session.query(Group).filter(Group.id == _id)\
-                .filter(Group.watch==True)\
+                .filter(Group.watch == pep8_e712)\
                 .update({Group.watch: False}):
             logger.info(
                 "Removed the group '%s' from the watchlist." % name,
@@ -128,11 +152,19 @@ def group_list(ctx, all):
     If content is already cached in a database; that is used. Otherwise the
     first available news server is polled for the information.
     """
+    # PEP8 E712 does not allow us to make a comparison to a boolean value
+    # using the == instead of the keyword 'in'.  However SQLAlchemy
+    # requires us to do just because that's how the amazing tool works.
+    # so to get around the pep8 error, we'll just define a variable equal
+    # to True and then we can compare to it
+    pep8_e712 = True
 
     results = None
+
     # Use our Database first if it exists
     session = ctx['NNTPSettings'].session()
     if session:
+
         # Used cached copy if we can
         try:
             # Check our database for groups to display
@@ -142,7 +174,7 @@ def group_list(ctx, all):
                     .all()
             else:
                 results = session.query(Group)\
-                    .filter(Group.watch == True)\
+                    .filter(Group.watch == pep8_e712)\
                     .order_by(Group.name.asc())\
                     .all()
 

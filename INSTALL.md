@@ -50,7 +50,7 @@ sudo dnf --enablerepo=nuxref* --best install \
 ## Other Distributions
 ### PIP
 For other distributions, you may need to go the PIP route.
-```
+```bash
 # Browse to the directory you installed newsreap into
 # Then Install the nessisary dependencies like so:
 pip install -r requirements.txt

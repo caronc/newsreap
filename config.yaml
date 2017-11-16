@@ -69,6 +69,18 @@ servers:
     # value
     use_stat: True
 
+# Define any number of servers you want
+#  - host: my.other.provider
+#    port: 563
+#    username: myusername
+#    password: mypassword
+#    secure: True
+#    verify_cert: False
+#    iostream: gzip.rfc3977
+#    join_group: False
+#    use_body: False
+#    use_stat: True
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Processing (Before and After Downloading)
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

@@ -36,8 +36,8 @@ def get_groups(session, lookup=None, watched=False):
         returned.
      - If the lookup just matches a group; then that group object is returned.
      - If the lookup is an integer; then the group is looked up and fetched
-     - If the lookup is a tuple or list, then all of the entries in the list are
-       processed using the above criteria and results merged in the list
+     - If the lookup is a tuple or list, then all of the entries in the list
+       are processed using the above criteria and results merged in the list
        returned.
 
        None is returned if there was a problem fetching the information.
@@ -56,9 +56,16 @@ def get_groups(session, lookup=None, watched=False):
     results = None
 
     if watched:
+        # PEP8 E712 does not allow us to make a comparison to a boolean value
+        # using the == instead of the keyword 'in'.  However SQLAlchemy
+        # requires us to do just because that's how the amazing tool works.
+        # so to get around the pep8 error, we'll just define a variable equal
+        # to True and then we can compare to it
+        pep8_e712 = True
+
         # Fetch our watch list
-        results = dict(session.query(Group.name, Group.id)\
-                    .filter(Group.watch==True).all())
+        results = dict(session.query(Group.name, Group.id)
+                       .filter(Group.watch == pep8_e712).all())
 
     if isinstance(lookup, (basestring, int)):
         lookup = [lookup, ]
@@ -70,7 +77,7 @@ def get_groups(session, lookup=None, watched=False):
     elif not isinstance(lookup, (dict, tuple, list)):
         # Not supported; return what we have
         logger.warning(
-            "An unsupported group/alias lookup type (%s) was specified." % \
+            "An unsupported group/alias lookup type (%s) was specified." %
             type(lookup),
         )
         return results
@@ -90,14 +97,14 @@ def get_groups(session, lookup=None, watched=False):
             if not _id:
                 continue
 
-            groups = dict(session.query(Group.name, Group.id)\
-                .filter(Group.name==_id).all())
+            groups = dict(session.query(Group.name, Group.id)
+                          .filter(Group.name == _id).all())
 
             if not groups:
                 # No problem; let us use the alias too
-                groups = dict(session.query(Group.name, Group.id)\
-                               .join(GroupAlias)\
-                               .filter(GroupAlias.name==_id).all())
+                groups = dict(session.query(Group.name, Group.id)
+                              .join(GroupAlias)
+                              .filter(GroupAlias.name == _id).all())
 
                 if not groups:
                     # Try one last time using normalization
@@ -122,8 +129,8 @@ def get_groups(session, lookup=None, watched=False):
 
         elif isinstance(group_id, int) and group_id > 0:
             # A id was specified; fetch it
-            groups = dict(session.query(Group.name, Group.id)\
-                       .filter(Group.id==group_id).all())
+            groups = dict(session.query(Group.name, Group.id)
+                          .filter(Group.id == group_id).all())
 
             if not groups:
                 logger.warning("The group id '%d' does not exist." % group_id)

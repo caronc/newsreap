@@ -36,6 +36,7 @@ from newsreap.objects.nntp.Group import Group
 
 from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 from newsreap.Utils import find
+from newsreap.Utils import pushd
 from newsreap.Utils import bytes_to_strsize
 
 # Logging
@@ -119,17 +120,17 @@ def database_reset(ctx):
 
     db_path = join(ctx['NNTPSettings'].base_dir, 'cache', 'search')
     logger.debug('Scanning %s for databases...' % db_path)
-    for entry in listdir(db_path):
+    with pushd(db_path, create_if_missing=True):
+        for entry in listdir(db_path):
+            db_file = join(db_path, entry)
+            if not isfile(db_file):
+                continue
 
-        db_file = join(db_path, entry)
-        if not isfile(db_file):
-            continue
-
-        try:
-            unlink(db_file)
-            logger.info('Removed %s ...' % entry)
-        except:
-            logger.warning('Failed to remove %s ...' % entry)
+            try:
+                unlink(db_file)
+                logger.info('Removed %s ...' % entry)
+            except:
+                logger.warning('Failed to remove %s ...' % entry)
 
 
 @click.command(name='status')
@@ -140,12 +141,13 @@ def database_status(ctx):
     """
     db_path = join(ctx['NNTPSettings'].work_dir, 'cache', 'search')
     logger.debug('Scanning %s for databases...' % db_path)
-    results = find(
-        db_path,
-        suffix_filter=SQLITE_DATABASE_EXTENSION,
-        fsinfo=True,
-        max_depth=1,
-    )
+    with pushd(db_path, create_if_missing=True):
+        results = find(
+            db_path,
+            suffix_filter=SQLITE_DATABASE_EXTENSION,
+            fsinfo=True,
+            max_depth=1,
+        )
 
     # Use our Database first if it exists
     session = ctx['NNTPSettings'].session()
@@ -153,10 +155,17 @@ def database_status(ctx):
         logger.error('Could not acquire a database connection.')
         exit(1)
 
+    # PEP8 E712 does not allow us to make a comparison to a boolean value
+    # using the == instead of the keyword 'in'.  However SQLAlchemy
+    # requires us to do just because that's how the amazing tool works.
+    # so to get around the pep8 error, we'll just define a variable equal
+    # to True and then we can compare to it
+    pep8_e712 = True
+
     try:
         # Get a list of watched groups
-        groups = dict(session.query(Group.name, Group.id)\
-                    .filter(Group.watch==True).all())
+        groups = dict(session.query(Group.name, Group.id)
+                      .filter(Group.watch == pep8_e712).all())
 
     except OperationalError:
         # Get a list of watched groups

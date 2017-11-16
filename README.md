@@ -32,6 +32,12 @@ Make sure you configure your __config.yaml__ file (sample included) and place it
 5. /etc/config.yaml
 
 Assuming you configured the file correctly, you can now start interfacing with you're NNTP Provider.
+You'll want to make sure you meet all of the dependencies:
+```bash
+# Browse to the directory you installed newsreap into
+# Then Install the nessisary dependencies like so:
+pip install -r requirements.txt
+```
 
 ## Downloading
 If you know the article-id/Message-ID of the item in question, the following
