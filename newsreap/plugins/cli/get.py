@@ -44,6 +44,7 @@ logger = logging.getLogger(NEWSREAP_CLI)
 from newsreap.NNTPnzb import NNTPnzb
 from newsreap.Utils import hexdump
 from newsreap.Mime import Mime
+from newsreap.NNTPGroup import NNTPGroup
 
 # Define our function
 NEWSREAP_CLI_PLUGINS = 'get'
@@ -76,6 +77,9 @@ def get(ctx, group, workdir, headers, inspect, sources):
 
     # Link to our NNTP Manager
     mgr = ctx['NNTPManager']
+
+    # Normalize our group name
+    group = NNTPGroup.normalize(group)
 
     for source in sources:
 

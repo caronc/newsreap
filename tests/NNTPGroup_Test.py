@@ -61,15 +61,55 @@ class NNTPGroup_Test(TestBase):
         Tests the normalize() function
         """
 
-        assert(NNTPGroup.normalize('alt.binaries.TEST')
+        assert(NNTPGroup.normalize('alt.binaries.TEST', shorthand=False)
                == 'alt.binaries.test')
-        assert(NNTPGroup.normalize('  alt.binaries.TEST   ')
+        assert(NNTPGroup.normalize('  alt.binaries.TEST   ', shorthand=False)
                == 'alt.binaries.test')
 
-        assert(NNTPGroup.normalize(None) is None)
-        assert(NNTPGroup.normalize('') is None)
-        assert(NNTPGroup.normalize('     ') is None)
-        assert(NNTPGroup.normalize('% &   ') is None)
+        # No shorthand enabled, so therefore we don't translate this to it's
+        # longer translated value
+        assert(NNTPGroup.normalize('a.b.Test', shorthand=False)
+               == 'a.b.test')
+
+        assert(NNTPGroup.normalize(None, shorthand=False) is None)
+        assert(NNTPGroup.normalize('', shorthand=False) is None)
+        assert(NNTPGroup.normalize('     ', shorthand=False) is None)
+        assert(NNTPGroup.normalize('% &   ', shorthand=False) is None)
+
+    def test_normalize_with_shorthand(self):
+        """
+        Tests the normalize() function with shorthand
+        """
+
+        # not much of a difference with shorthand turned on as these
+        # values do not translate to anything further, so they're just
+        # cleaned up
+        assert(NNTPGroup.normalize('alt.binaries.TEST', shorthand=True)
+               == 'alt.binaries.test')
+        assert(NNTPGroup.normalize('  alt.binaries.TEST   ', shorthand=True)
+               == 'alt.binaries.test')
+
+        assert(NNTPGroup.normalize(None, shorthand=True) is None)
+        assert(NNTPGroup.normalize('', shorthand=True) is None)
+        assert(NNTPGroup.normalize('     ', shorthand=True) is None)
+        assert(NNTPGroup.normalize('% &   ', shorthand=True) is None)
+
+        # Test some of our lookups that actually perform the shorthand
+        # translations
+        assert(NNTPGroup.normalize('a.b', shorthand=True) == 'alt.binaries')
+        # By default this is always on
+        assert(NNTPGroup.normalize('a.b') == 'alt.binaries')
+        assert(NNTPGroup.normalize('ab') == 'alt.binaries')
+        assert(NNTPGroup.normalize('abs') == 'alt.binaries.sounds')
+
+        # Translations stop after a match isn't hit; in the below case, alt
+        # has already been translated (and won't look up, therefore the b
+        # following is not checked).  This is 100% by design and will not
+        # change!
+        assert(NNTPGroup.normalize('alt.b.sounds') == 'alt.b.sounds')
+
+        assert(NNTPGroup.normalize('a.binaries.sounds')
+               == 'alt.binaries.sounds')
 
     def test_split(self):
         """

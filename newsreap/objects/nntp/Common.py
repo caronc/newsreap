@@ -16,6 +16,7 @@
 
 from .Group import Group
 from .GroupAlias import GroupAlias
+from newsreap.NNTPGroup import NNTPGroup
 
 # Logging
 import logging
@@ -75,7 +76,16 @@ def get_groups(session, lookup=None, watched=False):
         return results
 
     for group_id in lookup:
-        if isinstance(group_id, basestring):
+        if isinstance(group_id, NNTPGroup):
+            # We already know we're dealing with an NNTPGroup at this point
+            groups = dict(session.query(Group.name, Group.id)
+                          .filter(Group.name == str(group_id)).all())
+            if not groups:
+                logger.warning(
+                    "The group '%s' does not exist." % str(group_id),
+                )
+
+        elif isinstance(group_id, basestring):
             _id = group_id.lower().strip()
             if not _id:
                 continue
@@ -90,10 +100,25 @@ def get_groups(session, lookup=None, watched=False):
                                .filter(GroupAlias.name==_id).all())
 
                 if not groups:
-                    logger.warning(
-                        "The group/alias '%s' does not exist." % group_id,
-                    )
-                    continue
+                    # Try one last time using normalization
+                    _group = NNTPGroup.normalize(group_id)
+
+                    if _group == _id:
+                        # We normalized to the same thing the above check did
+                        logger.warning(
+                            "The group/alias '%s' does not exist." % group_id,
+                        )
+                        continue
+
+                    # if we reach here, we normalized to something different
+                    groups = dict(session.query(Group.name, Group.id)
+                                  .filter(Group.name == _group).all())
+                    if not groups:
+                        # We're definitely out of options at htis point
+                        logger.warning(
+                            "The group/alias '%s' does not exist." % group_id,
+                        )
+                        continue
 
         elif isinstance(group_id, int) and group_id > 0:
             # A id was specified; fetch it

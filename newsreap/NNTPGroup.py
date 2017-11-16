@@ -15,10 +15,13 @@
 # GNU Lesser General Public License for more details.
 
 import re
+from os.path import dirname
+from os.path import abspath
+from os.path import join
 
 # a regular expression used to break appart multiple groups
 # identfied; we split on anything that isn't a valid group token
-GROUP_INVALID_CHAR_RE = re.compile('[^A-Z0-9.-]+', re.I)
+GROUP_INVALID_CHAR_RE = re.compile(r'[^A-Z0-9.-]+', re.I)
 
 
 class NNTPGroup(object):
@@ -29,6 +32,10 @@ class NNTPGroup(object):
     to alt.binaries., etc.
 
     """
+
+    # used for translation lookups
+    _translations = None
+
     def __init__(self, name, *args, **kwargs):
         """
         Initialize NNTP Group
@@ -42,7 +49,7 @@ class NNTPGroup(object):
                 "Invalid group {} set specified.".format(name))
 
     @staticmethod
-    def normalize(group):
+    def normalize(group, shorthand=True):
         """
         takes a group identifier and normalizes it. For example:
         a.b.test           returns alt.binaries.test
@@ -53,7 +60,6 @@ class NNTPGroup(object):
         function to return None.
 
         """
-        # TODO
 
         if isinstance(group, NNTPGroup):
             # Support passing in ourselves
@@ -69,7 +75,55 @@ class NNTPGroup(object):
         if not group:
             return None
 
-        return group
+        if not shorthand:
+            return group
+
+        # If we reach here, we want to additionally try to look up any
+        # shorthand notation and expand it
+        entries = re.split('[.]+', group)
+
+        if NNTPGroup._translations is None:
+            # Populate it
+            line_re = re.compile(
+                r'^(?P<index>\d)\s+'
+                r'(?P<key>[a-z0-9.-]+)\s+'
+                r'(?P<lookup>[a-z0-9.-]+)', re.I)
+
+            NNTPGroup._translations = list()
+            path = join(dirname(abspath(__file__)), 'var', 'groups.dat')
+            with open(path) as fd:
+                for line in fd:
+                    result = line_re.match(line)
+                    if not result:
+                        continue
+
+                    index = int(result.group('index'))
+
+                    while len(NNTPGroup._translations) < index+1:
+                        NNTPGroup._translations.append({})
+
+                    # store our lookup
+                    NNTPGroup._translations[index][result.group('key')] = \
+                        result.group('lookup')
+
+        # Iterate over our names
+        for depth in range(len(NNTPGroup._translations)):
+            if depth >= len(entries):
+                # we're done
+                break
+
+            # Perform our lookup and translate if we can
+            match = NNTPGroup._translations[depth].get(entries[depth])
+            if not match:
+                # We can't skip some entries and translate others, the chain
+                # is broken on our first-mismatch
+                break
+
+            # Store our match and keep going
+            entries[depth] = match
+
+        # Return our compiled list
+        return '.'.join(entries)
 
     @staticmethod
     def split(groups):
