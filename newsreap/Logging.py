@@ -37,6 +37,9 @@ NEWSREAP_ENGINE = '%s.engine' % NEWSREAP_LOGGER
 # Codec Manipulation such as yEnc, uuencoded, etc
 NEWSREAP_CODEC = '%s.codec' % NEWSREAP_LOGGER
 
+# Users should utilize this for their hook logging
+NEWSREAP_HOOKS = '%s.hooks' % NEWSREAP_LOGGER
+
 # Command Line Interface Logger
 NEWSREAP_CLI = '%s.cli' % NEWSREAP_LOGGER
 
@@ -60,6 +63,7 @@ SQLALCHEMY_ORM = '%s.orm' % SQLALCHEMY_LOGGER
 # if this option was specified
 # 5000000 bytes == 5 Megabytes
 LOG_ROTATE_FILESIZE_BYTES = 5000000
+
 
 def add_handler(logger, sendto=True, backupCount=5):
     """
@@ -160,15 +164,18 @@ def set_verbosity(verbose):
     logging.getLogger(NEWSREAP_LOGGER).setLevel(logging.ERROR)
     logging.getLogger(NEWSREAP_CLI).setLevel(logging.ERROR)
     logging.getLogger(NEWSREAP_CODEC).setLevel(logging.ERROR)
+    logging.getLogger(NEWSREAP_HOOKS).setLevel(logging.ERROR)
     logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.ERROR)
 
     # Handle Verbosity
     if verbose > 0:
         logging.getLogger(NEWSREAP_CLI).setLevel(logging.INFO)
+        logging.getLogger(NEWSREAP_HOOKS).setLevel(logging.INFO)
         logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.INFO)
 
     if verbose > 1:
         logging.getLogger(NEWSREAP_CLI).setLevel(logging.DEBUG)
+        logging.getLogger(NEWSREAP_HOOKS).setLevel(logging.DEBUG)
         logging.getLogger(NEWSREAP_ENGINE).setLevel(logging.DEBUG)
 
     if verbose > 2:
@@ -180,6 +187,7 @@ def set_verbosity(verbose):
 
     if verbose > 4:
         logging.getLogger(SQLALCHEMY_ENGINE).setLevel(logging.DEBUG)
+
 
 # set initial level to WARN.
 rootlogger = logging.getLogger(NEWSREAP_LOGGER)

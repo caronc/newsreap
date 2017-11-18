@@ -49,11 +49,9 @@ from .NNTPArticle import NNTPArticle
 from .NNTPPostDatabase import NNTPPostDatabase
 from .NNTPConnection import NNTPConnection
 from .NNTPManager import NNTPManager
+from .HookManager import HookManager
 from .NNTPHeader import NNTPHeader
 from .NNTPResponse import NNTPResponseCode
-from .Utils import scan_pylib
-from .Utils import load_pylib
-from .Utils import parse_paths
 
 # Logging
 import logging
@@ -85,34 +83,6 @@ class NNTPPostFactory(object):
     server with.
     """
 
-    # The name (based on the directory of the original path)
-    path = None
-
-    # The absolute path to the content to be posted
-    path = None
-
-    # The root path content will be staged
-    staging_root = None
-
-    # The path to where we zip/rar/par etc
-    # content is still in a binary format in this dir.  If no
-    # prepping occurs, then the reference directory is used instead
-    # Simply specify --skip-prep if you like things the way they are
-    prep_path = None
-
-    # The path to where all files are prior to posting; content residing
-    # in this directory is already in a text format
-    stage_path = None
-
-    # The path to our database for managing our staged content
-    db_path = None
-
-    # The sqlalchemy engine reference
-    engine = None
-
-    # our Database object
-    _db = None
-
     # The default size to split our content up as.  This defines the maximum
     # size of each of the uploaded articles
     split_size = '760KB'
@@ -122,51 +92,56 @@ class NNTPPostFactory(object):
     # passed directly into zip, 7z, rar, etc
     archive_size = 'auto'
 
-    # A boolean that allows us to enable/disable certain parts of our factory
-    # depending on whether or not we loaded content successfully
-    _loaded = False
-
-    # Defines hook(s) allowing us to over-ride sections of the
-    # process. This grants the user to ability to manipulate
-    # content prior to it being posted and/or staged
-    _hooks = None
-
-    # A link to either an NNTPManager or NNTPConnection object
-    # This only referenced for the upload and verify stages
-    connection = None
-
-    # A pointer to an NZB-File object if it exists
-    nzb = None
-
     def __init__(self, connection=None, hooks=None, *args, **kwargs):
         """
         Initializes an NNTPPost object
 
-        The hooks can be a name of a file found in hooks/post/ or it can be
-        a path to a hook file you've defined elsewhere. Hook files allow you to
-        declare your own handling (assuming you include the decorator) ie:
-
-            # include the module
-            from newsreap.decorators import post_staging
-
-            @post_staging
-            def my_function(article, *args, **kwargs):
-
-               # mangle the article now in any way you want. If you want to
-               # skip over this file, you can just return False and the file
-               # will not be processed/posted
-               #
-               # If you return a different NNTPArticle, NNTPSegmentedFile or a
-               # set of, then the article passed in will be ignored and the
-               # returned content will be used instead.
+        hooks are called if specific functions exist in the module defined by
+        the hook. You can specfy as many hooks as you want.
 
         """
 
-        # Setup our hooks
-        self._hooks = self.get_hooks(hooks)
+        # A pointer to an NZB-File object if it exists
+        self.nzb = None
 
-        # Set up our connection object
+        # A boolean that allows us to enable/disable certain parts of our
+        # factory depending on whether or not we loaded content successfully
+        self._loaded = False
+
+        # Setup our hooks
+        self.hooks = self._load_hooks(hooks)
+
+        # A link to either an NNTPManager or NNTPConnection object
+        # This only referenced for the upload and verify stages
         self.connection = connection
+
+        # The name (based on the directory of the original path)
+        self.name = None
+
+        # The absolute path to the content to be posted
+        self.path = None
+
+        # The root path content will be staged
+        self.staging_root = None
+
+        # The path to where we zip/rar/par etc
+        # content is still in a binary format in this dir.  If no
+        # prepping occurs, then the reference directory is used instead
+        # Simply specify --skip-prep if you like things the way they are
+        self.prep_path = None
+
+        # The path to where all files are prior to posting; content residing
+        # in this directory is already in a text format
+        self.stage_path = None
+
+        # The path to our database for managing our staged content
+        self.db_path = None
+
+        # The sqlalchemy engine reference
+        self.engine = None
+
+        # our Database object
+        self._db = None
 
     def load(self, path, hooks=True, *args, **kwargs):
         """
@@ -178,7 +153,8 @@ class NNTPPostFactory(object):
         """
 
         if hooks is not True:
-            self._hooks = self.get_hooks(hooks)
+            # Update our hooks
+            self.hooks = self._load_hooks(hooks)
 
         # Ensure we're not loaded
         self._loaded = False
@@ -247,7 +223,7 @@ class NNTPPostFactory(object):
         status = False
 
         try:
-            response = self.call_hook(
+            response = self.hooks.call(
                 'pre_prepare',
                 name=self.name,
                 path=self.prep_path,
@@ -263,7 +239,7 @@ class NNTPPostFactory(object):
                 status = None
 
         finally:
-            self.call_hook(
+            self.hooks.call(
                 'post_prepare',
                 name=self.name,
                 path=self.prep_path,
@@ -376,7 +352,7 @@ class NNTPPostFactory(object):
                 rm(self.prep_path)
                 return False
 
-        self.call_hook('post_prep', path=self.prep_path)
+        self.hooks.call('post_prep', path=self.prep_path)
 
         return True
 
@@ -420,7 +396,7 @@ class NNTPPostFactory(object):
             return False
 
         try:
-            response = self.call_hook(
+            response = self.hooks.call(
                 'pre_stage',
                 name=self.name,
                 path=self.prep_path,
@@ -428,11 +404,11 @@ class NNTPPostFactory(object):
 
             if False not in [r for (_, r) in response.iteritems()]:
                 status = self._stage(
-                     groups=groups,
-                     split_size=split_size,
-                     poster=poster,
-                     subject=subject,
-                     *args, **kwargs)
+                    groups=groups,
+                    split_size=split_size,
+                    poster=poster,
+                    subject=subject,
+                    *args, **kwargs)
 
             else:
                 logger.warning("Staging aborted by pre_stage() hook.")
@@ -440,7 +416,7 @@ class NNTPPostFactory(object):
                 status = None
 
         finally:
-            self.call_hook(
+            self.hooks.call(
                 'post_stage',
                 name=self.name,
                 path=self.prep_path,
@@ -506,6 +482,21 @@ class NNTPPostFactory(object):
                 subject=subject,
             )
 
+            # allow a user to intercept what the filename should be encoded as
+            # if get_encoded_filename() returns a string, then that is used as
+            # the filename that shows up in the yenc= line
+            response = self.hooks.call(
+                'post_encoded_filename',
+                name=self.name,
+                path=self.prep_path,
+                # Provide the full path
+                fullpath=entry,
+                filename=basename(entry),
+            )
+            if isinstance(response, basestring):
+                # Set the provided filename
+                post.filename = basename(response.strip())
+
             # Split our content up based on our split-size
             if strsize_to_bytes(split_size):
                 if not post.split(size=split_size):
@@ -529,15 +520,18 @@ class NNTPPostFactory(object):
                 logger.error("Could write yEncoded content '%s'." % entry)
                 return False
 
-            # The best hook of them all
-            self.call_hook(
-                'staged_segment',
+            # The best hook of them all as you can adjust the contents of the
+            # segment (add headers, remove them, etc)
+            self.hooks.call(
+                'post_staged_segment',
                 name=self.name,
                 path=self.prep_path,
+                # Provide the full path
+                fullpath=entry,
                 segment=weakref.proxy(post),
             )
 
-            self.save_segment(post, sort_no=sort_no+1, commit=False)
+            self.save_segment(post, sort_no=(sort_no + 1), commit=False)
 
         # Pass along some meta information we can use as part of the NZB-File
         self._db.set('filename', basename(self.path))
@@ -569,7 +563,7 @@ class NNTPPostFactory(object):
             return False
 
         try:
-            response = self.call_hook(
+            response = self.hooks.call(
                 'pre_upload',
                 name=self.name,
                 path=self.prep_path,
@@ -584,7 +578,7 @@ class NNTPPostFactory(object):
                 status = None
 
         finally:
-            self.call_hook(
+            self.hooks.call(
                 'post_upload',
                 name=self.name,
                 path=self.prep_path,
@@ -750,7 +744,7 @@ class NNTPPostFactory(object):
                     article.msgid(reset=True)
 
                 # capture our response
-                response = self.call_hook(
+                response = self.hooks.call(
                     'upload_article',
                     name=self.name,
                     path=self.prep_path,
@@ -783,6 +777,15 @@ class NNTPPostFactory(object):
         if segment is not None:
             # Add our segment
             self.nzb.add(segment)
+
+        # Set any last minute items to the NZB-File prior to it being saved
+        # to disk
+        self.hooks.call(
+            'post_staged_nzb',
+            name=self.name,
+            path=self.prep_path,
+            nzb=weakref.proxy(self.nzb),
+        )
 
         # At this stage we have an NZB-File created; save it
         if not self.nzb.save('{0}.nzb'.format(self.path)):
@@ -851,7 +854,7 @@ class NNTPPostFactory(object):
             return False
 
         try:
-            response = self.call_hook(
+            response = self.hooks.call(
                 'pre_verify',
                 name=self.name,
                 path=self.prep_path,
@@ -866,7 +869,7 @@ class NNTPPostFactory(object):
                 status = None
 
         finally:
-            self.call_hook(
+            self.hooks.call(
                 'post_verify',
                 name=self.name,
                 path=self.prep_path,
@@ -939,11 +942,11 @@ class NNTPPostFactory(object):
                 # Verify that our article got posted
                 verification_map[key] = {
                     'response': self.connection.stat(
-                            entry.message_id,
-                            full=True,
-                            group=group,
-                            block=False,
-                        ),
+                        entry.message_id,
+                        full=True,
+                        group=group,
+                        block=False,
+                    ),
                     'id': entry.id,
                     'msgid': entry.message_id,
                     'group': group,
@@ -996,7 +999,7 @@ class NNTPPostFactory(object):
         status = False
 
         try:
-            response = self.call_hook(
+            response = self.hooks.call(
                 'pre_clean',
                 name=self.name,
                 path=self.prep_path,
@@ -1011,7 +1014,7 @@ class NNTPPostFactory(object):
                 status = None
 
         finally:
-            self.call_hook(
+            self.hooks.call(
                 'post_clean',
                 name=self.name,
                 path=self.prep_path,
@@ -1052,10 +1055,9 @@ class NNTPPostFactory(object):
             # prepare our database object
             if not self.save_article(
                     article,
-                    sequence_no=sequence_no+1,
+                    sequence_no=(sequence_no + 1),
                     sort_no=sort_no,
-                    commit=False,
-                    ):
+                    commit=False):
                 logger.warning(
                     "Could not save new article %s" % article.msgid())
 
@@ -1174,80 +1176,26 @@ class NNTPPostFactory(object):
 
         return True
 
-    def get_hooks(self, hooks=None):
+    def _load_hooks(self, hooks=None):
         """
-        Initializes any hooks set
+        Initializes any hooks and return them
 
         """
         if hooks is True:
             # No change
-            return self._hooks
+            return self.hooks
 
-        if hooks is None:
-            # Nothing to do
-            return None
+        # Get our default path
+        default_path = join(dirname(abspath(__file__)), 'hooks', 'post')
 
-        # Get all of the entries from what was specified
-        paths = parse_paths(hooks)
+        # Load our hook manager
+        hm = HookManager()
 
-        here = scan_pylib('.')
-        there = scan_pylib(join(
-            dirname(abspath(__file__)),
-            'hooks', 'post'
-        ))
+        # Load our hooks
+        hm.add(hooks, default_path)
 
-        _loaded = list()
-
-        for hook in paths:
-            if isfile(hook):
-                # We were referenced a (python) file directly
-                # Attempt to load it
-                result = load_pylib(hook)
-
-            elif hook in here:
-                # We found our hook
-                result = load_pylib(hook, next(iter(here[hook])))
-
-            elif hook in there:
-                # We found our hook
-                result = load_pylib(hook, next(iter(there[hook])))
-
-            else:
-                # not a supported entry
-                logger.warning("Could not locate hook '{}'.".format(hook))
-                continue
-
-            if result is not None:
-                _loaded.append(result)
-
-        return _loaded
-
-    def call_hook(self, function_name, *args, **kwargs):
-        """
-        wrapper to call posting hooks
-
-        """
-        if not self._hooks:
-            return dict()
-
-        response = dict()
-        for hook in self._hooks:
-            if not hasattr(hook, function_name):
-                continue
-
-            try:
-                # Execute our function
-                response[hook] = getattr(hook, function_name)(*args, **kwargs)
-
-            except:
-                logger.warning(
-                    "Hook Exception calling {0}.{1}'."
-                    .format(hook, function_name))
-                # We don't care, we're moving on anyway
-                pass
-
-        # Return all of our responses
-        return response
+        # Return our hook manager
+        return hm
 
     def session(self, reset=False):
         """
