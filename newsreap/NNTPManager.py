@@ -292,7 +292,7 @@ class NNTPManager(object):
         if len(self._pool):
             # Find the first connected connection
             connection = next(
-                    (c for c in self._pool if c.connected is True), None)
+                (c for c in self._pool if c.connected is True), None)
 
             if connection:
                 return connection
@@ -343,7 +343,7 @@ class NNTPManager(object):
 
         if len(self._work_tracker.available) == 0:
             if len(self._work_tracker) < self._settings\
-                                            .nntp_processing['threads']:
+                    .nntp_processing['threads']:
                 # Spin up more work
                 self.spawn_workers(count=1)
 
@@ -525,8 +525,7 @@ class NNTPManager(object):
                         'post', (article, ), {
                             'update_headers': update_headers,
                             'success_only': success_only,
-                            },
-                        ),
+                        }),
                     ])
 
                     # Append to Queue for processing
@@ -551,8 +550,7 @@ class NNTPManager(object):
                     'post', (article, ), {
                         'update_headers': update_headers,
                         'success_only': success_only,
-                        },
-                    ),
+                    }),
                 ])
 
                 # Append to Queue for processing
@@ -571,8 +569,7 @@ class NNTPManager(object):
                 'post', (payload, ), {
                     'update_headers': update_headers,
                     'success_only': success_only,
-                    },
-                ),
+                }),
             ])
 
             # Append to Queue for processing

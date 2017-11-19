@@ -895,19 +895,19 @@ class NNTPConnection(SocketBase):
 
         logger.debug('Scanning for index at %s in %d article(s)' % (
             refdate.strftime('%Y-%m-%d %H:%M:%S'),
-            tail-head,
+            tail - head,
         ))
 
         # initalize filter count
         filter_count = tail - head
 
         # Get the middle
-        start = head + (filter_count/2) - (NNTP_FETCH_BY_DATE_MAX_MISSES/2)
+        start = head + (filter_count / 2) - (NNTP_FETCH_BY_DATE_MAX_MISSES / 2)
         end = start + min(NNTP_FETCH_BY_DATE_MAX_MISSES, filter_count)
 
         response = self.xover(
             start=start,
-            end=end-1,
+            end=end - 1,
             sort=XoverGrouping.BY_TIME,
         )
 
@@ -943,7 +943,7 @@ class NNTPConnection(SocketBase):
             #
             # Decisions
             #
-            if end-start < NNTP_FETCH_BY_DATE_MAX_MISSES and \
+            if end - start < NNTP_FETCH_BY_DATE_MAX_MISSES and \
                len(_refkeys) < NNTP_FETCH_BY_DATE_MAX_MISSES:
                 # We're in great shape if we reach here
                 # It means we've narrowed off our search to just
@@ -957,8 +957,8 @@ class NNTPConnection(SocketBase):
                     _refkeys[-1],
                 ))
 
-                if tail-end > 0:
-                    result = self._seek_by_date(refdate, end-1, tail)
+                if tail - end > 0:
+                    result = self._seek_by_date(refdate, end - 1, tail)
                 else:
                     result = tail
 
@@ -966,8 +966,8 @@ class NNTPConnection(SocketBase):
                     # SHIFT LEFT
                     logger.debug('SHIFT LEFT')
                     tail -= ((tail - end) / 2)
-                    if tail-end > 0:
-                        result = self._seek_by_date(refdate, end-1, tail)
+                    if tail - end > 0:
+                        result = self._seek_by_date(refdate, end - 1, tail)
                     else:
                         result = tail
                         break
@@ -981,7 +981,7 @@ class NNTPConnection(SocketBase):
                     _refkeys[0],
                 ))
 
-                if start-head > 1:
+                if start - head > 1:
                     result = self._seek_by_date(refdate, head, start)
                 else:
                     result = start
@@ -990,7 +990,7 @@ class NNTPConnection(SocketBase):
                     # SHIFT RIGHT
                     logger.debug('SHIFT RIGHT')
                     head += ((start - head) / 2)
-                    if start-head > 1:
+                    if start - head > 1:
                         result = self._seek_by_date(refdate, head, start)
                     else:
                         result = start
@@ -1034,14 +1034,14 @@ class NNTPConnection(SocketBase):
 
         """
         # Control Count gracefully
-        count = min(count, self.group_tail-self.group_index)
+        count = min(count, self.group_tail - self.group_index)
 
         if count <= 0:
             # 423: Empty Range
             return NNTPResponse(423, 'Empty Range')
 
         # Fetch our results and adjust our pointer accordingly
-        response = self.xover(self.group_index, self.group_index+count-1)
+        response = self.xover(self.group_index, self.group_index + count - 1)
         if response:
             self.group_index += count
 
@@ -1059,14 +1059,15 @@ class NNTPConnection(SocketBase):
 
         """
         # Control Count gracefully
-        count = min(count, self.group_tail-self.group_index-self.group_head)
+        count = min(
+            count, self.group_tail - self.group_index - self.group_head)
 
         if count <= 0:
             # 423: Empty Range
             return NNTPResponse(423, 'Empty Range')
 
         # Fetch our results and adjust our pointer accordingly
-        response = self.xover(self.group_index-count, self.group_index-1)
+        response = self.xover(self.group_index - count, self.group_index - 1)
         if response:
             self.group_index -= count
 
@@ -1571,7 +1572,7 @@ class NNTPConnection(SocketBase):
                     logger.warning(
                         'Received NNTP error %d; retrying... (%d/%d)' % (
                             response.code,
-                            total_retries-retries,
+                            total_retries - retries,
                             total_retries,
                         ))
                     continue
@@ -1666,7 +1667,7 @@ class NNTPConnection(SocketBase):
 
             try:
                 self._buffer.write(self.read(
-                    max_bytes=self.MAX_BUFFER_SIZE-total_bytes,
+                    max_bytes=self.MAX_BUFFER_SIZE - total_bytes,
                     timeout=timeout, retry_wait=None,
                 ))
 
@@ -1835,7 +1836,7 @@ class NNTPConnection(SocketBase):
                 if eod_results:
                     # We can truncate here to trim the EOD off
                     self._buffer.truncate(
-                        total_bytes-len(eod_results.group(1)),
+                        total_bytes - len(eod_results.group(1)),
                     )
 
                     # Correct Total Length
@@ -1867,7 +1868,7 @@ class NNTPConnection(SocketBase):
                 if eol_results:
                     # We can truncate here to trim the EOL off
                     self._buffer.truncate(
-                        total_bytes-len(eol_results.group(1)),
+                        total_bytes - len(eol_results.group(1)),
                     )
 
                     # Correct Total Length
@@ -1926,7 +1927,7 @@ class NNTPConnection(SocketBase):
 
                     # a few checks to make sure we don't look past
                     # our head_ptr
-                    chunk_size = min(ref_ptr-head_ptr, chunk_size)
+                    chunk_size = min(ref_ptr - head_ptr, chunk_size)
                     ref_ptr -= (chunk_size + 1)
 
                     if ref_ptr < head_ptr:
@@ -1942,7 +1943,7 @@ class NNTPConnection(SocketBase):
                         tail_ptr = offset + chunk_ptr
                         break
 
-            if not self.payload_gzipped and (tail_ptr-head_ptr) > 0 \
+            if not self.payload_gzipped and (tail_ptr - head_ptr) > 0 \
                     and total_bytes < self.MAX_BUFFER_SIZE \
                     and tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
                 # Astraweb is absolutely terrible for sending a little
@@ -1955,13 +1956,13 @@ class NNTPConnection(SocketBase):
             self._buffer.seek(head_ptr, SEEK_SET)
 
             # Compression Support
-            if (tail_ptr-head_ptr) > 0:
+            if (tail_ptr - head_ptr) > 0:
                 if self.payload_gzipped is True:
 
                     dc_obj = decompressobj()
                     try:
                         self._data.write(dc_obj.decompress(
-                            self._buffer.read(tail_ptr-head_ptr),
+                            self._buffer.read(tail_ptr - head_ptr),
                         ))
                         logger.debug("NNTP ZLIB decompression successful.")
 
@@ -1982,7 +1983,7 @@ class NNTPConnection(SocketBase):
                         )
                 else:
                     # No compression
-                    self._data.write(self._buffer.read(tail_ptr-head_ptr))
+                    self._data.write(self._buffer.read(tail_ptr - head_ptr))
 
                 # Truncate our original buffer by striping out what was already
                 # processed from it
@@ -2230,9 +2231,9 @@ class NNTPConnection(SocketBase):
         Return a printable object
         """
         return '<NNTPConnection id=%d url="%s://%s@%s:%d" />' % (
-                id(self),
-                self.protocol,
-                self.username,
-                self.host,
-                self.port,
+            id(self),
+            self.protocol,
+            self.username,
+            self.host,
+            self.port,
         )
