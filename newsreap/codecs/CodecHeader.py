@@ -17,6 +17,7 @@
 import re
 
 from newsreap.NNTPHeader import NNTPHeader
+from newsreap.NNTPHeader import NNTP_NUKED_MSG
 from newsreap.Utils import SEEK_SET
 from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 from newsreap.codecs.CodecBase import CodecBase
@@ -34,20 +35,14 @@ HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Common Details detected from the message Header
-NNTP_NUKED_MSG = re.compile(
-    r'^x-(dmca|removed|cancel?(led)?|blocked)',
-    re.IGNORECASE,
-)
-
 
 class CodecHeader(CodecBase):
     """
     This class is used for interpreting NNTP Headers
     """
     def __init__(self, descriptor=None, encoding=None, *args, **kwargs):
-        super(CodecHeader, self).__init__(
-                descriptor=descriptor, *args, **kwargs)
+        super(CodecHeader, self)\
+            .__init__(descriptor=descriptor, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
         self.decoded = NNTPHeader(work_dir=self.work_dir)

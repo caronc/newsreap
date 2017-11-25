@@ -56,6 +56,12 @@ VALID_HEADER_ENTRIES = (
 # list above
 UNKNOWN_PREFIX = "X-"
 
+# Common Details detected from the message Header
+NNTP_NUKED_MSG = re.compile(
+    r'^x-(dmca|removed|cancel?(led)?|blocked)',
+    re.IGNORECASE,
+)
+
 
 class NNTPHeader(NNTPMetaContent):
     """
@@ -199,6 +205,10 @@ class NNTPHeader(NNTPMetaContent):
         def _fmt(_k):
             return _k.group(1) + _k.group(2).upper()
 
+        if not isinstance(key, basestring):
+            # Handle invalid key entries types
+            key = str(key)
+
         key = re.sub(
             # Flip -id to ID (short for Identifier)
             # Flip -crc to CRC (short for Cyclic Redundancy Check)
@@ -210,6 +220,22 @@ class NNTPHeader(NNTPMetaContent):
         if key in VALID_HEADER_ENTRIES or key.startswith(UNKNOWN_PREFIX):
             return key
         return UNKNOWN_PREFIX + key
+
+    def article_exists(self):
+        """
+        Simply scans the header for keys that usually invalidate an article or
+        anounce it's non-existance.
+
+        If these keywords aren't found, we'll presume the article does in fact
+        exist and therefore we'll return True
+
+        """
+        # If we reach here; we've decoded the file, the next thing
+        # we need to do is check for some common entries that
+        # would oherwise have made it so it's not valid
+        return next((
+            False for k in self.iterkeys()
+            if NNTP_NUKED_MSG.match(k) is not None), True)
 
     def __len__(self):
         """

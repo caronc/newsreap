@@ -6,3 +6,4 @@ sqlalchemy >= 1.0
 gevent >= 1.1.2
 python-dateutil
 cryptography >= 0.7
+tqdm

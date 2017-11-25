@@ -831,7 +831,7 @@ class NNTPnzb(NNTPContent):
                 NNTPEmptyContent(
                     filepath=_filename,
                     part=self.xml_itr_count,
-                    size=_size,
+                    total_size=_size,
                     work_dir=self.work_dir,
                 )
             )
@@ -971,6 +971,19 @@ class NNTPnzb(NNTPContent):
             self._lazy_is_valid = False
 
         return self
+
+    def size(self):
+        """
+        Returns the calculated size of all of the contents residing in the
+        NZB-File.  If it has not been downloaded yet, the size is calculated
+        based on the contents of the NZB-File
+
+        """
+        if self._segments_loaded:
+            return sum(s.size() for s in self.segments)
+
+        else:
+            return sum(c.size() for c in self)
 
     def __len__(self):
         """

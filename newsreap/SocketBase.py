@@ -2,7 +2,7 @@
 #
 # A Low Level Socket Manager
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -13,6 +13,8 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
+
+import weakref
 
 from gevent import sleep
 from gevent import socket
@@ -34,9 +36,12 @@ from datetime import datetime
 import errno
 import re
 
+# Hook Manager
+from .HookManager import HookManager
+
 # Logging
 import logging
-from newsreap.Logging import NEWSREAP_ENGINE
+from .Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 # Default Binding Address
@@ -44,7 +49,7 @@ DEFAULT_BIND_ADDR = '0.0.0.0'
 
 # Number of seconds to wait for a connection to expire/timeout
 # or fail to connect before failing out right
-socket.setdefaulttimeout(30.0)
+socket.setdefaulttimeout(10.0)
 
 try:
     SECURE_PROTOCOL_PRIORITY = (
@@ -120,7 +125,7 @@ class SocketBase(object):
 
     """
     def __init__(self, host=None, port=0, bindaddr=None, bindport=0,
-                 secure=False, verify_cert=True, *args, **kwargs):
+                 secure=False, verify_cert=True, hooks=None, *args, **kwargs):
 
         try:
             self.port = int(port)
@@ -181,6 +186,30 @@ class SocketBase(object):
         self._local_port = None
         self._remote_addr = None
         self._remote_port = None
+
+        # Define our hooks (if any)
+        self.hooks = HookManager()
+        if hooks:
+            self.hooks.add(hooks=hooks)
+
+    def hooks(self, hooks, reset=True):
+        """
+        Sets hooks into our connection object(s)
+
+        """
+        if reset:
+            # Reset our loaded hooks
+            self.hooks.reset()
+
+        if isinstance(hooks, HookManager):
+            # update our hooks
+            for key in hooks.iterkeys():
+                self.hooks.add(hooks[key])
+
+        else:
+            self.hooks.add(hooks)
+
+        return
 
     def can_read(self, timeout=0.0):
         """
@@ -253,7 +282,7 @@ class SocketBase(object):
         data = ''
 
         # Close socket and exit gracefully as retry count was met
-        if self.socket:
+        if self.socket is not None:
             # Copy rest of input buffer
             try:
                 data = self.socket.recv()
@@ -271,6 +300,14 @@ class SocketBase(object):
                     self.socket.close()
                 except:
                     pass
+
+            # Call a close hook
+            self.hooks.call(
+                'socket_close',
+                host=self._remote_addr,
+                port=self._remote_port,
+                socket=weakref.proxy(self),
+            )
 
             # Remove Socket Reference
             self.socket = None
@@ -495,7 +532,7 @@ class SocketBase(object):
                 # difference defined by timeout
                 delta_time = datetime.now() - cur_time
                 delta_time = (delta_time.days * 86400) + delta_time.seconds \
-                    + (delta_time.microseconds/1e6)
+                    + (delta_time.microseconds / 1e6)
 
                 if delta_time >= timeout:
                     # Connection timeout elapsed
@@ -508,6 +545,14 @@ class SocketBase(object):
         # Connection Established
         self.stat_connect_time = datetime.now()
         self.connected = True
+
+        # Call a connect hook
+        self.hooks.call(
+            'socket_connect',
+            host=self._remote_addr,
+            port=self._remote_port,
+            socket=weakref.proxy(self),
+        )
 
         return True
 
@@ -563,7 +608,7 @@ class SocketBase(object):
         while True:
             try:
                 conn, (self._remote_addr, self._remote_port) = \
-                        self.socket.accept()
+                    self.socket.accept()
                 # If we get here, we've got a connection
                 break
 
@@ -601,7 +646,7 @@ class SocketBase(object):
                 # difference defined by timeout
                 delta_time = datetime.now() - cur_time
                 delta_time = (delta_time.days * 86400) + delta_time.seconds \
-                    + (delta_time.microseconds/1e6)
+                    + (delta_time.microseconds / 1e6)
 
                 if delta_time >= timeout:
                     # Connection timeout elapsed
@@ -692,6 +737,14 @@ class SocketBase(object):
         # Toggle our connection flag
         self.connected = True
 
+        # Call a connect hook
+        self.hooks.call(
+            'socket_listen',
+            host=self._remote_addr,
+            port=self._remote_port,
+            socket=weakref.proxy(self),
+        )
+
         return True
 
     def read(self, max_bytes=32768, timeout=None, retry_wait=0.25):
@@ -713,8 +766,10 @@ class SocketBase(object):
 
         # Get reference time
         cur_time = datetime.now()
+
         # track bytes read
         bytes_read = 0
+
         # Current elapsed time
         elapsed_time = 0.0
 
@@ -736,24 +791,45 @@ class SocketBase(object):
             # Update Elapsed Time
             elapsed_time = datetime.now() - cur_time
             elapsed_time = (elapsed_time.days * 86400) \
-                + elapsed_time.seconds + (elapsed_time.microseconds/1e6)
+                + elapsed_time.seconds + (elapsed_time.microseconds / 1e6)
 
             if timeout and elapsed_time > timeout:
                 # Time is up; return what we have
                 break
 
-            if timeout and not self.can_read(timeout-elapsed_time):
+            if timeout and not self.can_read(timeout - elapsed_time):
                 # Times up
                 break
 
             try:
                 # Fetch data
-                data = self.socket.recv(max_bytes-bytes_read)
+                data = self.socket.recv(max_bytes - bytes_read)
 
                 if data:
                     # Store data
                     bytes_read += len(data)
                     total_data.append(data)
+
+                    # Get our elapsed transfer time
+                    elapsed_xfer_time = datetime.now() - cur_time
+                    elapsed_xfer_time = (
+                        (elapsed_xfer_time.days * 86400) +
+                        elapsed_xfer_time.seconds +
+                        (elapsed_xfer_time.microseconds / 1e6)) - elapsed_time
+
+                    # Call read hook
+                    self.hooks.call(
+                        'socket_read',
+                        # host information
+                        host=self._remote_addr,
+                        port=self._remote_port,
+                        # The number of bytes read
+                        xfer_bytes=len(data),
+                        # The time it took to read these bytes
+                        xfer_time=elapsed_xfer_time,
+                        # Our sockets
+                        socket=weakref.proxy(self),
+                    )
 
                 # If we reach here, then we aren't using timeouts and the
                 # socket returned nothing...
@@ -833,7 +909,16 @@ class SocketBase(object):
             a python socket class; always ignore EINTR flags to finish
             sending the data
         """
+
+        # track bytes written
         tot_bytes = 0
+
+        # Get reference time
+        cur_time = datetime.now()
+
+        # Current elapsed time
+        elapsed_time = 0.0
+
         if not max_bytes:
             max_bytes = len(data)
 
@@ -843,7 +928,7 @@ class SocketBase(object):
             # wait before assuming we can't send content and that we
             # have connection problems.
 
-            stale_timeout = max(((max_bytes-tot_bytes)/10800.0), 15.0)
+            stale_timeout = max(((max_bytes - tot_bytes) / 10800.0), 15.0)
 
             if not self.can_write(stale_timeout):
                 # can't write down pipe; something has gone wrong
@@ -856,15 +941,27 @@ class SocketBase(object):
             # Initialize our stale timeout timer
             stale_timer = Timeout(stale_timeout)
 
+            # Update Elapsed Time
+            elapsed_time = datetime.now() - cur_time
+            elapsed_time = (elapsed_time.days * 86400) \
+                + elapsed_time.seconds + (elapsed_time.microseconds / 1e6)
+
             try:
                 # Start stale_timer
                 stale_timer.start()
 
                 # Send data
                 bytes_sent = self.socket.send(
-                    data[tot_bytes:tot_bytes+max_bytes],
+                    data[tot_bytes:tot_bytes + max_bytes],
                 )
                 stale_timer.cancel()
+
+                # Get our elapsed transfer time
+                elapsed_xfer_time = datetime.now() - cur_time
+                elapsed_xfer_time = (
+                    (elapsed_xfer_time.days * 86400) +
+                    elapsed_xfer_time.seconds +
+                    (elapsed_xfer_time.microseconds / 1e6)) - elapsed_time
 
                 if not bytes_sent:
                     self.close()
@@ -872,6 +969,20 @@ class SocketBase(object):
 
                 # Handle content received
                 tot_bytes += bytes_sent
+
+                # Call write hook
+                self.hooks.call(
+                    'socket_write',
+                    # Host information
+                    host=self._remote_addr,
+                    port=self._remote_port,
+                    # The number of bytes read
+                    xfer_bytes=bytes_sent,
+                    # The time it took to read these bytes
+                    xfer_time=elapsed_xfer_time,
+                    # Our sockets
+                    socket=weakref.proxy(self),
+                )
 
             except Timeout:
                 # Timeout occurred; Sleep for a little bit
@@ -1095,7 +1206,7 @@ class SocketBase(object):
                             cert_host = \
                                 self.peer_certificate.subject\
                                     .get_attributes_for_oid(
-                                            NameOID.COMMON_NAME)\
+                                        NameOID.COMMON_NAME)\
                                     .pop().value
 
                             # Perform a reverse lookup on our remote IP Address
@@ -1120,7 +1231,8 @@ class SocketBase(object):
 
                             if not matched_host:
                                 raise SocketRetryLimit(
-                                    "Certificate for '%s' and does not match." % (
+                                    "Certificate for '%s' and does not "
+                                    "match." % (
                                         cert_host,
                                     )
                                 )
@@ -1128,7 +1240,8 @@ class SocketBase(object):
                         except socket.herror, e:
                             if e[0] == 2:
                                 raise SocketRetryLimit(
-                                    "Certificate for '%s' could not be resolved." % (
+                                    "Certificate for '%s' could not be "
+                                    "resolved." % (
                                         self._remote_addr,
                                     )
                                 )
@@ -1173,7 +1286,7 @@ class SocketBase(object):
                 # Update Elapsed Time
                 elapsed_time = datetime.now() - cur_time
                 elapsed_time = (elapsed_time.days * 86400) \
-                    + elapsed_time.seconds + (elapsed_time.microseconds/1e6)
+                    + elapsed_time.seconds + (elapsed_time.microseconds / 1e6)
 
                 if elapsed_time > timeout:
                     # Times up

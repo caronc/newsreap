@@ -48,7 +48,7 @@ class HookManager(object):
         # our calling efforts
         self.hooks = sortedset(key=lambda x: x.key())
 
-    def add(self, names, paths='.', priority=1000):
+    def add(self, name, paths='.', priority=1000):
         """
         Adds first module identified by the name found in the paths defined.
 
@@ -65,13 +65,41 @@ class HookManager(object):
         # value
         _bcnt = len(self.hooks)
 
-        if isinstance(names, Hook):
+        if isinstance(name, Hook):
             # Add our hook
-            self.hooks.add(names)
+            self.hooks.add(name)
+            return len(self.hooks) > _bcnt
+
+        elif isinstance(name, HookManager):
+            # Merge the HookManager with this one
+            retcode = True
+            for hook in name.iterkeys():
+                self.hooks.add(hook)
+                if len(self.hooks) <= _bcnt:
+                    # Toggle our success
+                    retcode = False
+
+                else:
+                    # Account for our added entry
+                    _bcnt = len(self.hooks)
+
+            return retcode
+
+        elif callable(name):
+            # we were passed in a function; assocate it with the module
+            # defined by name
+            if self.__class__.__name__ in self:
+                self[self.__class__.__name__].add(name)
+
+            else:
+                hook = Hook(name=self.__class__.__name__)
+                hook.add(name)
+                self.hooks.add(hook)
+
             return len(self.hooks) > _bcnt
 
         # Get all of the entries from what was specified
-        names = parse_paths(names)
+        names = parse_paths(name)
         paths = parse_paths(paths)
         modules = []
         for path in paths:
@@ -121,18 +149,19 @@ class HookManager(object):
         """
         self.hooks.clear()
 
-    def call(self, function_name, *args, **kwargs):
+    def call(self, function_name, **kwargs):
         """
         Executes the specified function while passing in the same parameters
         you feed it here.
 
         This will execute all loaded hooks that have a matching function
-        name. The called function will be provided the shared args and kwargs
+        name. The called function will be provided the kwargs
 
         a list is returned containing all of the return values in the
         order to which they were returned.
 
         """
+
         # first we generate a list of all of our functions
         ordered_funcs = None
         for hook in self.hooks:
@@ -146,10 +175,15 @@ class HookManager(object):
         # We sort on index zero (0) which will be our priority
         responses = sortedset(key=lambda x: x['key'])
 
+        if not ordered_funcs:
+            # Nothing more to do
+            return responses
+
         # We now have an ordered set of hooks to call; itereate over each and
         # execute it
-        for func in ordered_funcs:
-            priority = int(getattr(func, Hook.priority_id, Hook.priority))
+        for meta in ordered_funcs:
+            func = meta['function']
+            priority = meta['priority']
             module = getattr(func, Hook.module_id, func.__name__)
 
             try:
@@ -170,12 +204,13 @@ class HookManager(object):
                     'module': module,
 
                     # Store our result
-                    'result': func(args, **kwargs),
+                    'result': func(**kwargs),
                 })
 
-            except:
-                logger.warning(
-                    "Hook Exception calling {}.".format(module))
+            except Exception as e:
+                    logger.warning(
+                        "Hook Exception {0} calling {1}."
+                        .format(str(e), module))
 
         return responses
 

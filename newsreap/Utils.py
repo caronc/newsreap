@@ -239,36 +239,36 @@ def strsize_to_bytes(strsize):
 
         elif unit == 'K':
             # We're dealing with Kilobytes
-            return size*1024
+            return size * 1024
 
         elif unit == 'M':
             # We're dealing with Megabytes
-            return size*1048576
+            return size * 1048576
 
         elif unit == 'G':
             # We're dealing with Gigabytes
-            return size*1073741824
+            return size * 1073741824
 
         elif unit == 'T':
             # We're dealing with Terabytes
-            return size*1073741824*1024
+            return size * 1073741824 * 1024
 
     # In Bits
     if unit == 'K':
         # We're dealing with Kilobytes
-        return size*1e3
+        return size * 1e3
 
     elif unit == 'M':
         # We're dealing with Megabytes
-        return size*1e6
+        return size * 1e6
 
     elif unit == 'G':
         # We're dealing with Gigabytes
-        return size*1e9
+        return size * 1e9
 
     elif unit == 'T':
         # We're dealing with Terabytes
-        return size*1e12
+        return size * 1e12
 
     # Unsupported Type
     return None
@@ -288,19 +288,19 @@ def bytes_to_strsize(byteval):
         return None
 
     if byteval >= 1024.0:
-        byteval = byteval/1024.0
+        byteval = byteval / 1024.0
         unit = 'KB'
         if byteval >= 1024.0:
-            byteval = byteval/1024.0
+            byteval = byteval / 1024.0
             unit = 'MB'
             if byteval >= 1024.0:
-                byteval = byteval/1024.0
+                byteval = byteval / 1024.0
                 unit = 'GB'
                 if byteval >= 1024.0:
-                    byteval = byteval/1024.0
+                    byteval = byteval / 1024.0
                     unit = 'TB'
 
-    return '%.2f%s' % (byteval, unit)
+    return '%.2f%s' % (round(byteval, 2), unit)
 
 
 def stat(path, fsinfo=True, mime=True):
@@ -351,7 +351,7 @@ def stat(path, fsinfo=True, mime=True):
 
         except ValueError:
             nfo['modified'] = \
-                    datetime(1980, 1, 1, 0, 0, 0, 0)
+                datetime(1980, 1, 1, 0, 0, 0, 0)
 
         try:
             nfo['accessed'] = \
@@ -359,7 +359,7 @@ def stat(path, fsinfo=True, mime=True):
 
         except ValueError:
             nfo['accessed'] = \
-                    datetime(1980, 1, 1, 0, 0, 0, 0)
+                datetime(1980, 1, 1, 0, 0, 0, 0)
 
         try:
             nfo['created'] = \
@@ -367,7 +367,7 @@ def stat(path, fsinfo=True, mime=True):
 
         except ValueError:
             nfo['created'] = \
-                    datetime(1980, 1, 1, 0, 0, 0, 0)
+                datetime(1980, 1, 1, 0, 0, 0, 0)
 
         nfo['size'] = stat_obj[ST_SIZE]
 
@@ -491,7 +491,8 @@ def rm(path, *args, **kwargs):
 
                 except _OSError:
                     # It's not empty, so recursively enter it
-                    if not rm(fullname, __recursion_level=recursion_count+1):
+                    if not rm(
+                            fullname, __recursion_level=recursion_count + 1):
                         return False
             else:
                 # We're dealing with file/link
@@ -794,7 +795,7 @@ def parse_url(url, default_schema='http'):
                 result['query'] = None
     try:
         (result['user'], result['host']) = \
-                re.split('[\s@]+', result['host'])[:2]
+            re.split('[\s@]+', result['host'])[:2]
 
     except ValueError:
         # no problem then, host only exists
@@ -804,7 +805,7 @@ def parse_url(url, default_schema='http'):
     if result['user'] is not None:
         try:
             (result['user'], result['password']) = \
-                    re.split('[:\s]+', result['user'])[:2]
+                re.split('[:\s]+', result['user'])[:2]
 
         except ValueError:
             # no problem then, user only exists
@@ -813,7 +814,7 @@ def parse_url(url, default_schema='http'):
 
     try:
         (result['host'], result['port']) = \
-                re.split('[\s:]+', result['host'])[:2]
+            re.split('[\s:]+', result['host'])[:2]
 
     except ValueError:
         # no problem then, user only exists
@@ -1120,7 +1121,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 max_depth=max_depth,
                 case_sensitive=case_sensitive,
                 # Internal Current Directory Depth tracking
-                __current_depth=current_depth+1,
+                __current_depth=current_depth + 1,
                 __root_dir=root_dir,
             ).items())
             continue
@@ -1353,13 +1354,13 @@ def hexdump(src, length=16, sep='.'):
     lines = []
 
     for c in xrange(0, len(src), length):
-        chars = src[c:c+length]
+        chars = src[c:c + length]
         hex = ' '.join(["%02x" % ord(x) for x in chars])
         if len(hex) > 24:
             hex = "%s %s" % (hex[:24], hex[24:])
         printable = ''.join(["%s" % (
             (ord(x) <= 127 and print_map[ord(x)]) or sep) for x in chars])
-        lines.append("%08x:  %-*s  |%s|" % (c, length*3, hex, printable))
+        lines.append("%08x:  %-*s  |%s|" % (c, length * 3, hex, printable))
     return '\n'.join(lines)
 
 

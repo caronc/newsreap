@@ -25,13 +25,14 @@ from gevent.lock import Semaphore
 from gevent.queue import Queue
 from gevent.queue import Empty as EmptyQueueException
 
-from newsreap.NNTPConnection import NNTPConnection
-from newsreap.NNTPnzb import NNTPnzb
-from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
-from newsreap.NNTPArticle import NNTPArticle
-from newsreap.NNTPConnection import XoverGrouping
-from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
-from newsreap.NNTPSettings import NNTPSettings
+from .HookManager import HookManager
+from .NNTPConnection import NNTPConnection
+from .NNTPnzb import NNTPnzb
+from .NNTPSegmentedPost import NNTPSegmentedPost
+from .NNTPArticle import NNTPArticle
+from .NNTPConnection import XoverGrouping
+from .NNTPConnectionRequest import NNTPConnectionRequest
+from .NNTPSettings import NNTPSettings
 
 # Logging
 import logging
@@ -200,8 +201,12 @@ class NNTPManager(object):
     NNTPManager() requires an NNTPSettings() object to work correctly
 
     """
+    # Defines hook(s) allowing us to over-ride sections of the process.
+    # This grants the user to ability to manipulate content prior to it
+    # being posted and/or staged
+    hooks = None
 
-    def __init__(self, settings=None, *args, **kwargs):
+    def __init__(self, settings=None, hooks=None, *args, **kwargs):
         """
         Initialize the NNTPManager() based on the provided settings.
         it is presumed settings is a loaded NNTPSettings() object.
@@ -224,6 +229,11 @@ class NNTPManager(object):
         # Map signal
         gevent.signal(signal.SIGQUIT, gevent.kill)
 
+        # Define our hooks (if any)
+        self.hooks = HookManager()
+        if hooks:
+            self.hooks.add(hooks=hooks)
+
         if settings is None:
             # Use defaults
             settings = NNTPSettings()
@@ -237,6 +247,23 @@ class NNTPManager(object):
 
         return
 
+    def hooks(self, hooks, reset=True):
+        """
+        Sets hooks into our connection object(s)
+
+        """
+        if reset:
+            # Reset our loaded hooks
+            self.hooks.reset()
+
+        if isinstance(hooks, HookManager):
+            # update our hooks
+            for key in hooks.iterkeys():
+                self.hooks.add(hooks[key])
+
+        else:
+            self.hooks.add(hooks)
+
     def spawn_workers(self, count=1):
         """
         Spawns X workers (but never more then the total allowed)
@@ -245,14 +272,24 @@ class NNTPManager(object):
         while len(self._pool) < self._settings.nntp_processing['threads']:
             # First we build our connection object
             connection = NNTPConnection(**self._settings.nntp_servers[0])
+
+            # Directly map the connection's hooks to the ones here in the
+            # NNTPManager() object
+            connection.hooks = self.hooks
+
             if len(self._settings.nntp_servers) > 1:
                 # Append backup servers (if any defined)
                 for idx in range(1, len(self._settings.nntp_servers)):
                     _connection = NNTPConnection(
-                            **self._settings.nntp_servers[idx])
+                        **self._settings.nntp_servers[idx])
+
+                    # Directly map the connection's hooks to the ones here in
+                    # the NNTPManager() object
+                    _connection.hooks = self.hooks
+
                     connection.append(_connection)
 
-            # Appened connection object to a pool
+            # Append connection object to a pool
             self._pool.append(connection)
 
             logger.debug("Spawning worker...")
@@ -599,8 +636,8 @@ class NNTPManager(object):
         # Return our responses
         return responses
 
-    def get(self, id, work_dir, group=None, max_bytes=0, block=True,
-            force=False):
+    def get(self, id, work_dir, decoders=None, group=None, max_bytes=0,
+            block=True, force=False):
         """
         Queue's an NNTPRequest for processing and returns it's
         response if block is set to True.
@@ -652,6 +689,7 @@ class NNTPManager(object):
                         # Append list of NNTPConnection requests in a list
                         # ('function, (*args), (**kwargs) )
                         ('get', (article, work_dir), {
+                            'decoders': decoders,
                             'group': group,
                             'max_bytes': max_bytes,
                         }),
@@ -677,6 +715,7 @@ class NNTPManager(object):
                     # Append list of NNTPConnection requests in a list
                     # ('function, (*args), (**kwargs) )
                     ('get', (article, work_dir), {
+                        'decoders': decoders,
                         'group': group,
                         'max_bytes': max_bytes,
                     }),
@@ -696,6 +735,7 @@ class NNTPManager(object):
                 # Append list of NNTPConnection requests in a list
                 # ('function, (*args), (**kwargs) )
                 ('get', (id, work_dir), {
+                    'decoders': decoders,
                     'group': group,
                     'max_bytes': max_bytes,
                 }),
@@ -715,6 +755,7 @@ class NNTPManager(object):
                 # Append list of NNTPConnection requests in a list
                 # ('function, (*args), (**kwargs) )
                 ('get', (id, work_dir), {
+                    'decoders': decoders,
                     'group': group,
                     'max_bytes': max_bytes,
                 }),

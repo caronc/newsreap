@@ -45,6 +45,7 @@ class NNTPResponseCode(object):
     FETCH_ERROR = 507
     INVALID_GROUP = 508
     INVALID_INPUT = 509
+    HOOK_OVERRIDE = 510
 
     # to also work with the NNTP wrapper to make life easy to
     # reference back (simply check you're return code against this

@@ -14,7 +14,8 @@ sudo yum --enablerepo=nuxref* install \
            PyYAML python-sqlalchemy \
            python-gevent python-click \
            python-dateutil \
-           python-cryptography pytz
+           python-cryptography pytz \
+           python-tqdm
 
 7zip support (add /usr/bin/7za)
 sudo yum --enablerepo=nuxref* install p7zip

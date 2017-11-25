@@ -15,10 +15,15 @@
 # GNU Lesser General Public License for more details.
 
 
+import logging
 import click
+import sys
+
 from os.path import join
 from os.path import isdir
 from os.path import exists
+from os.path import dirname
+from os.path import abspath
 from os import rename
 from os import unlink
 from os import access
@@ -29,6 +34,14 @@ from dateutil.parser import parse
 
 from shutil import copyfile as copy
 from shutil import move
+
+
+try:
+    from newsreap.Logging import NEWSREAP_CLI
+except ImportError:
+    # Path
+    sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
+    from newsreap.Logging import NEWSREAP_CLI
 
 from newsreap.objects.nntp.Group import Group
 from newsreap.objects.nntp.GroupAlias import GroupAlias
@@ -43,14 +56,11 @@ from sqlalchemy.exc import IntegrityError
 from newsreap.NNTPConnection import XoverGrouping
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPConnection import NNTPConnection
-from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
 from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 
 from newsreap.Utils import mkdir
 
-# Logging
-import logging
-from newsreap.Logging import NEWSREAP_CLI
+# initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
 
 NEWSREAP_CLI_PLUGINS = {
@@ -61,6 +71,7 @@ NEWSREAP_CLI_PLUGINS = {
         'desc': 'Cache/Index to Database management',
     },
 }
+
 
 @click.command(name='groups')
 @click.pass_obj
@@ -120,11 +131,11 @@ def update_groups(ctx):
             else:
                 # Update flags if nessisary
                 session.query(Group)\
-                        .filter(Group.name == r['group'])\
-                        .update({
-                            Group.count: r['count'],
-                            Group.flags: flags,
-                        })
+                       .filter(Group.name == r['group'])\
+                       .update({
+                           Group.count: r['count'],
+                           Group.flags: flags,
+                       })
 
             # Using our group; update any tracking settings (if present)
             # we don't care if we can't.
@@ -223,7 +234,6 @@ def update_search(ctx, groups, date_from, date_to, watched):
             )
             exit(1)
 
-
     if date_to and date_from and date_from > date_to:
         logger.error(
             "The from date can not be larger then the to date.",
@@ -302,17 +312,11 @@ def update_search(ctx, groups, date_from, date_to, watched):
                 # Database exists, and ramdisk exists, and we're not
                 # reseting anything... copy existing database onto
                 # ramdisk for processing
-                logger.debug(
-                    'Transfering %s database to ramdisk.' % (
-                        name,
-                ))
+                logger.debug('Transfering %s database to ramdisk.' % name)
                 copy(db_file, ram_db_file)
-                logger.info(
-                    'Transfered %s database to ramdisk.' % (name),
-                )
+                logger.info('Transfered %s database to ramdisk.' % name)
         else:
             engine = 'sqlite:///%s' % db_file
-
 
         db = NNTPGroupDatabase(engine=engine, reset=reset)
         group_session = db.session()
@@ -327,8 +331,8 @@ def update_search(ctx, groups, date_from, date_to, watched):
         # it initialized at 0
         logger.debug('Retrieving information on group %s' % (name))
         gt = session.query(GroupTrack)\
-                .filter(GroupTrack.group_id==_id)\
-                .filter(GroupTrack.server_id==_server.id).first()
+                    .filter(GroupTrack.group_id == _id)\
+                    .filter(GroupTrack.server_id == _server.id).first()
 
         if not gt or reset:
             # Get an connection to work with
@@ -365,17 +369,17 @@ def update_search(ctx, groups, date_from, date_to, watched):
         requests = []
         if date_to:
             requests.append(
-                ctx['NNTPManager'].\
-                    seek_by_date(
-                        date_to+timedelta(seconds=1), group=name, block=False))
+                ctx['NNTPManager'].seek_by_date(
+                    date_to + timedelta(seconds=1), group=name, block=False))
+
             # Mark our item
             requests[-1]._watermark = 'high'
 
         if date_from:
             requests.append(
-                ctx['NNTPManager'].\
-                    seek_by_date(
-                        date_from, group=name, block=False))
+                ctx['NNTPManager'].seek_by_date(
+                    date_from, group=name, block=False))
+
             # Mark our item
             requests[-1]._watermark = 'low'
 
@@ -398,8 +402,7 @@ def update_search(ctx, groups, date_from, date_to, watched):
                 # exit for now
                 logger.error(
                     'An unhandled server response was received: %s.' % (
-                        response,
-                ))
+                        response))
 
             # Store our watermark (high/low)
             if watermark == 'low':
@@ -419,12 +422,12 @@ def update_search(ctx, groups, date_from, date_to, watched):
         # so powerful and allows pulling down multiple things at once
         # Retrieve a list of articles from the database in concurrent blocks
         # Scan them and place them into the NNTPGroupDatabase()
-        batch_size = ctx['NNTPSettings']\
-                .nntp_processing.get('header_batch_size', 5000)
+        batch_size = ctx['NNTPSettings'].nntp_processing\
+                                        .get('header_batch_size', 5000)
 
         logger.info('Fetching from %d to %d [%d article(s)]' % (
-                    cur, high, (high-cur+1),
-        ))
+                    cur, high, (high - cur + 1)))
+
         # Initialize our batch
         batch = list()
 
@@ -453,14 +456,14 @@ def update_search(ctx, groups, date_from, date_to, watched):
 
         while high > cur:
             # Figure out our bach size
-            inc = min(batch_size-1, high-cur)
+            inc = min(batch_size - 1, high - cur)
             logger.debug('Pushing XOVER batch %d-%d (inc=%d)' % (
-                cur, cur+inc, inc+1,
+                cur, cur + inc, inc + 1,
             ))
 
             # Prepare our batch list
-            batch.append((cur, cur+inc, ctx['NNTPManager'].xover(
-                group=name, start=cur, end=cur+inc,
+            batch.append((cur, cur + inc, ctx['NNTPManager'].xover(
+                group=name, start=cur, end=cur + inc,
                 sort=XoverGrouping.BY_ARTICLE_NO,
                 block=False,
             )))
@@ -500,8 +503,7 @@ def update_search(ctx, groups, date_from, date_to, watched):
                 # exit for now
                 logger.error(
                     'An unhandled server response was received: %s.' % (
-                        response,
-                ))
+                        response))
 
                 # Reverse our list again
                 batch = batch[::-1]
@@ -537,7 +539,7 @@ def update_search(ctx, groups, date_from, date_to, watched):
                 )
 
             except (OperationalError, IntegrityError):
-                logger.debug('Preparing for a slow load of %d items' % \
+                logger.debug('Preparing for a slow load of %d items' %
                              len(response))
                 for article in response.itervalues():
                     # Store our batch into the database and update
@@ -563,7 +565,7 @@ def update_search(ctx, groups, date_from, date_to, watched):
 
                     except TypeError, e:
                         logger.error(
-                            'Failed to save article: %s.' % \
+                            'Failed to save article: %s.' %
                             str(article),
                         )
                         logger.debug('Exception: %s' % str(e))
@@ -577,12 +579,12 @@ def update_search(ctx, groups, date_from, date_to, watched):
             #       case it needs to be updated 'after' the batch has
             #       completed.
             session.query(GroupTrack)\
-                .filter(GroupTrack.group_id==_id)\
-                .filter(GroupTrack.server_id==_server.id)\
-                    .update({
-                        GroupTrack.scan_pointer: high,
-                        GroupTrack.last_scan: datetime.now(),
-                    })
+                .filter(GroupTrack.group_id == _id)\
+                .filter(GroupTrack.server_id == _server.id)\
+                .update({
+                    GroupTrack.scan_pointer: high,
+                    GroupTrack.last_scan: datetime.now(),
+                })
 
             # Save this now as it allows for Cntrl-C or aborts
             # To take place and we'll resume from where we left off
@@ -591,20 +593,19 @@ def update_search(ctx, groups, date_from, date_to, watched):
             # Calculate Processing Time
             delta_time = datetime.now() - cur_time
             delta_time = (delta_time.days * 86400) + delta_time.seconds \
-                         + (delta_time.microseconds/1e6)
-            logger.info(
-                'Cached %d article(s) in %s sec(s) [mode=%s, remaining=%d].' % (
-                    len(response),
-                    delta_time,
-                    load_speed,
-                    len(batch),
-            ))
+                + (delta_time.microseconds / 1e6)
+
+            logtxt = 'Cached %d article(s) in %s sec(s) '\
+                     '[mode=%s, remaining=%d].'
+            logger.info(logtxt % (
+                len(response),
+                delta_time,
+                load_speed,
+                len(batch)),
+            )
 
         # Recrete all indexes
         for index in Article.__table__.indexes:
-            #if index.name.startswith('ix_'):
-                # We want to avoid the primary key
-            #db._engine
             try:
                 index.create(bind=db._engine)
                 logger.info('Recreated Article Index "%s"' % index.name)
@@ -668,13 +669,20 @@ def update_index(ctx, groups, watched):
     # Track our database updates
     pending_commits = 0
 
+    # PEP8 E712 does not allow us to make a comparison to a boolean value
+    # using the == instead of the keyword 'in'.  However SQLAlchemy
+    # requires us to do just because that's how the amazing tool works.
+    # so to get around the pep8 error, we'll just define a variable equal
+    # to True and then we can compare to it
+    pep8_e712 = True
+
     if watched:
         _groups = session.query(Group.name)\
-                    .filter(Group.watch==True).all()
+                         .filter(Group.watch == pep8_e712).all()
         if not _groups:
             logger.error("There are no current groups being watched.")
             exit(1)
-        groups = set(groups) | set([ g[0] for g in _groups ])
+        groups = set(groups) | set([g[0] for g in _groups])
 
     if not groups:
         logger.error("There were not groups identified for indexing.")
@@ -689,11 +697,12 @@ def update_index(ctx, groups, watched):
         if not _group:
             continue
 
-        _id = session.query(Group.id).filter(Group.name==_group).first()
+        _id = session.query(Group.id).filter(Group.name == _group).first()
         if not _id:
             # No problem; let us use the alias too
-            _id = session.query(Group.id).join(GroupAlias)\
-                    .filter(GroupAlias.name==_group).first()
+            _id = session.query(Group.id)\
+                         .join(GroupAlias)\
+                         .filter(GroupAlias.name == _group).first()
             if not _id:
                 logger.warning("The group '%s' does not exist." % group)
                 continue

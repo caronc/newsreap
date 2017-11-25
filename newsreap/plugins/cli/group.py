@@ -26,7 +26,7 @@ try:
     from newsreap.objects.nntp.Group import Group
 except ImportError:
     # Path
-    sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
+    sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
 
 from newsreap.objects.nntp.Common import get_groups
 

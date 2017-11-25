@@ -2,7 +2,7 @@
 #
 # NewsReap NNTP Search CLI Plugin
 #
-# Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
+# Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published by
@@ -14,30 +14,32 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import logging
 import click
+import sys
 import re
+
 from os.path import join
 from os.path import isfile
+from os.path import dirname
+from os.path import abspath
+
+try:
+    from newsreap.Logging import NEWSREAP_CLI
+except ImportError:
+    # Path
+    sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
+    from newsreap.Logging import NEWSREAP_CLI
 
 from newsreap.objects.group.Article import Article
-#from newsreap.objects.nntp.Group import Group
-#from newsreap.objects.nntp.GroupAlias import GroupAlias
-#from newsreap.objects.nntp.GroupTrack import GroupTrack
-#from newsreap.objects.nntp.Server import Server
 from newsreap.objects.nntp.Common import get_groups
 
-#from newsreap.objects.search.Article import Article
-#from sqlalchemy.exc import OperationalError
 from sqlalchemy import not_
 
-#from newsreap.NNTPConnection import NNTPConnection
-#from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 
-# Logging
-import logging
-from newsreap.Logging import NEWSREAP_CLI
+# initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
 
 NEWSREAP_CLI_PLUGINS = {
@@ -51,15 +53,22 @@ class SearchOperation(object):
     """
     Search Operation Type
     """
-    INCLUDE = '+' # AND
-    EXCLUDE = '-' # AND NOT
+    # AND
+    INCLUDE = '+'
+
+    # AND NOT
+    EXCLUDE = '-'
+
 
 class SearchCategory(object):
     """
     Search Category
     """
-    SUBJECT = 's' # SUBJECT
-    POSTER = 'p' # POSTER
+    # SUBJECT
+    SUBJECT = 's'
+
+    # POSTER
+    POSTER = 'p'
 
 
 def parse_search_keyword(keywords):
@@ -166,8 +175,8 @@ def search(ctx, group, keywords, minscore, maxscore, case_insensitive):
         The final thing worth noting is doing a search for text that contains
         dash/minus (-) signs.  Click (the awesome cli wrapper this script
         uses can pick the - up as an actual switch thinking you're trying to
-        pass it into this function. So you can easily disable this with by adding
-        a double dash/minus sign (--) like so:
+        pass it into this function. So you can easily disable this with by
+        adding a double dash/minus sign (--) like so:
 
             nr search -- -keyword +keyword2
 
@@ -213,52 +222,82 @@ def search(ctx, group, keywords, minscore, maxscore, case_insensitive):
             if _cat == SearchCategory.SUBJECT:
                 if _op == SearchOperation.INCLUDE:
                     if case_insensitive:
-                        logger.debug('Scanning -and- (case-insensitive) subject: "%s"' % (keyword))
-                        gt = gt.filter(Article.subject.ilike('%%%s%%' % keyword))
+                        logger.debug(
+                            'Scanning -and- (case-insensitive) subject: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            Article.subject.ilike('%%%s%%' % keyword))
                     else:
-                        logger.debug('Scanning -and- (case-sensitive) subject: "%s"' % (keyword))
-                        gt = gt.filter(Article.subject.like('%%%s%%' % keyword))
-
-                else: # _op == SearchCategory.EXCLUDE
+                        logger.debug(
+                            'Scanning -and- (case-sensitive) subject: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            Article.subject.like('%%%s%%' % keyword))
+                else:
+                    # _op == SearchCategory.EXCLUDE
                     if case_insensitive:
-                        logger.debug('Scanning -not- (case-insensitive) subject: "%s"' % (keyword))
-                        gt = gt.filter(not_(Article.subject.ilike('%%%s%%' % keyword)))
+                        logger.debug(
+                            'Scanning -not- (case-insensitive) subject: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            not_(Article.subject.ilike('%%%s%%' % keyword)))
                     else:
-                        logger.debug('Scanning -and not- (case-sensitive) subject: "%s"' % (keyword))
-                        gt = gt.filter(not_(Article.subject.like('%%%s%%' % keyword)))
+                        logger.debug(
+                            'Scanning -and not- (case-sensitive) subject: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            not_(Article.subject.like('%%%s%%' % keyword)))
 
             elif _cat == SearchCategory.POSTER:
                 if _op == SearchOperation.INCLUDE:
                     if case_insensitive:
-                        logger.debug('Scanning -and- (case-insensitive) poster: "%s"' % (keyword))
-                        gt = gt.filter(Article.poster.ilike('%%%s%%' % keyword))
+                        logger.debug(
+                            'Scanning -and- (case-insensitive) poster: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            Article.poster.ilike('%%%s%%' % keyword))
                     else:
-                        logger.debug('Scanning -and- (case-sensitive) poster: "%s"' % (keyword))
-                        gt = gt.filter(Article.poster.like('%%%s%%' % keyword))
+                        logger.debug(
+                            'Scanning -and- (case-sensitive) poster: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            Article.poster.like('%%%s%%' % keyword))
 
-                else: # _op == SearchCategory.EXCLUDE
+                else:
+                    # _op == SearchCategory.EXCLUDE
                     if case_insensitive:
-                        logger.debug('Scanning -and not- (case-insensitive) poster: "%s"' % (keyword))
-                        gt = gt.filter(not_(Article.poster.ilike('%%%s%%' % keyword)))
+                        logger.debug(
+                            'Scanning -and not- (case-insensitive) poster: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            not_(Article.poster.ilike('%%%s%%' % keyword)))
                     else:
-                        logger.debug('Scanning -and not- (case-sensitive) poster: "%s"' % (keyword))
-                        gt = gt.filter(not_(Article.poster.like('%%%s%%' % keyword)))
+                        logger.debug(
+                            'Scanning -and not- (case-sensitive) poster: '
+                            '"%s"' % (keyword))
+                        gt = gt.filter(
+                            not_(Article.poster.like('%%%s%%' % keyword)))
 
         # Handle Scores
         if maxscore == minscore:
             logger.debug('Scanning -score == %d-' % (maxscore))
             gt = gt.filter(Article.score == maxscore)
+
         else:
-            logger.debug('Scanning -score >= %d and score <= %d-' % (minscore, maxscore))
+            logger.debug(
+                'Scanning -score >= %d and score <= %d-' % (
+                    minscore, maxscore))
+
             gt = gt.filter(Article.score <= maxscore)\
-                    .filter(Article.score >= minscore)
+                   .filter(Article.score >= minscore)
 
         gt = gt.order_by(Article.score.desc())
 
         # Iterate through our list
         print("%s:" % (name))
         for entry in gt:
-            print("  [%.5d] %.4d %s" % (entry.article_no, entry.score, entry.subject))
+            print("  [%.5d] %.4d %s" % (
+                entry.article_no, entry.score, entry.subject))
 
         group_session.close()
         db.close()

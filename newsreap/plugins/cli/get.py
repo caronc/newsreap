@@ -18,8 +18,10 @@
 # the message-id, or nzbpath
 #
 # If you add the --headers flag then only details surrounding what
-# you specified is fetched from usenet
+# If you add the --inspect flag then you'll peak at the first few
+#   bytes of the file(s)
 
+import logging
 import click
 import sys
 
@@ -30,21 +32,19 @@ from os.path import splitext
 from os.path import isfile
 from os.path import join
 
-# Logging
-import logging
 try:
     from newsreap.Logging import NEWSREAP_CLI
 except ImportError:
     # Path
-    sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
+    sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
-logger = logging.getLogger(NEWSREAP_CLI)
-
 from newsreap.NNTPnzb import NNTPnzb
-from newsreap.Utils import hexdump
 from newsreap.Mime import Mime
-from newsreap.NNTPGroup import NNTPGroup
+from newsreap.NNTPGetFactory import NNTPGetFactory
+
+# initialize our logger
+logger = logging.getLogger(NEWSREAP_CLI)
 
 # Define our function
 NEWSREAP_CLI_PLUGINS = 'get'
@@ -61,8 +61,10 @@ NEWSREAP_CLI_PLUGINS = 'get'
               help="Return header details")
 @click.option('--inspect', default=False, flag_value=True,
               help="Inspect the first few bytes of the body only")
+@click.option('--hooks', '-k', default=None, type=str,
+              help='Specify one or more hooks to load')
 @click.argument('sources', nargs=-1)
-def get(ctx, group, workdir, headers, inspect, sources):
+def get(ctx, group, workdir, headers, inspect, sources, hooks):
     """
     Retrieves content from Usenet when provided a NZB-File and/or a Message-ID
     """
@@ -78,188 +80,52 @@ def get(ctx, group, workdir, headers, inspect, sources):
     # Link to our NNTP Manager
     mgr = ctx['NNTPManager']
 
-    # Normalize our group name
-    group = NNTPGroup.normalize(group)
+    # Initialize our GetFactory
+    gf = NNTPGetFactory(connection=mgr, hooks=hooks, groups=group)
+
+    # initialize our return code to zero (0) which means okay
+    # but we'll toggle it if we have any sort of failure
+    return_code = 0
 
     for source in sources:
 
-        if isfile(source):
-            logger.debug("Scanning NZB-File '%s'." % (source))
+        if not gf.load(source):
+            return_code = 1
+            continue
 
-            # If we reach here, we need to download the contents
-            # associated with the NZB-File
-            if not workdir:
-                workdir = join(
-                    abspath(dirname(source)),
-                    splitext(basename(source))[0],
-                )
+        if not (headers or inspect):
+            # We're just here to fetch content
+            if not gf.download():
+                # our download failed
+                return_code = 1
 
-            # Open up our NZB-File and Ignore any detected par files for now
-            nzb = NNTPnzb(
-                source,
-                work_dir=workdir,
-            )
+            # Move on
+            continue
 
-            if not nzb.is_valid():
-                # Check that the file is valid
-                logger.warning("Skipping invalid NZB-File '%s'." % (source))
+        if inspect:
+            # inspect will pull headers as well
+            response = gf.inspect()
+            if not response:
+                # our retrieval failed; this is the case if we had a problem
+                # communicating with our server.  Successfully connecting by
+                # finding out the article simply doesn't exist does not cause
+                # headers() to fail.
+                return_code = 1
                 continue
 
-            # Load our NZB-File into memory
-            if not nzb.load():
-                logger.warning("Failed to load NZB-File '%s'." % (source))
+        elif headers:
+            # We just want to retrive our headers
+            response = gf.headers()
+            if not response:
+                # our retrieval failed; this is the case if we had a problem
+                # communicating with our server.  Successfully connecting by
+                # finding out the article simply doesn't exist does not cause
+                # headers() to fail.
+                return_code = 1
                 continue
 
-            if headers or inspect:
-                #  Scan each element in our NZB-File
-                for article in nzb:
-                    for segment in article:
-                        if headers:
-                            # Inspect our article header
-                            response = mgr.stat(
-                                segment.msgid(),
-                                full=True,
-                                group=group,
-                            )
+        # Print our response
+        print(gf.str(headers=headers, inspect=inspect))
 
-                            if response:
-                                print('****')
-                                print(response.str())
-
-                        if inspect:
-                            # Inspect our article body
-                            response = mgr.get(
-                                segment.msgid(),
-                                work_dir=workdir,
-                                group=group,
-                                max_bytes=128,
-                            )
-
-                            if response is None:
-                                logger.warning(
-                                    "No Response Retrieved (from %s)." % (
-                                        segment.msgid()),
-                                )
-                                continue
-
-                            if response.body:
-                                # Display our message body (if one is set)
-                                print('****')
-                                print(response.body.getvalue().strip())
-
-                            if response and len(response):
-                                # Display any binary content:
-                                print('****')
-                                print('Mime-Type: %s' % (
-                                    response.decoded[0].mime().type(),
-                                ))
-                                print(hexdump(response.decoded[0].getvalue()))
-
-                continue
-
-            # If the code reaches here, then we're downloading content
-
-            response = mgr.get(nzb, work_dir=workdir)
-            # TODO: Call a post-process-download hooks here
-
-            # Deobsfucate re-scans the existing NZB-Content and attempts to pair
-            # up filenames to their records (if they exist).  A refresh does
-            # nothing unless it has downloaded content to compare against, but
-            # in this case... we do
-            nzb.deobsfucate()
-
-            for segment in nzb:
-                # Now for each segment entry in our nzb file, we need to
-                # combine it as one; but we need to get our filename's
-                # straight. We will try to build the best name we can from
-                # each entry we find.
-
-                # Track our segment count
-                seg_count = len(segment)
-
-                if not segment.join():
-                    # We failed to join
-                    if segment.filename:
-                        logger.warning(
-                            "Failed to assemble segment '%s' (%s)." % (
-                                segment.filename,
-                                segment.strsize(),
-                            ),
-                        )
-                        continue
-
-                    else:
-                        logger.warning(
-                            "Failed to assemble segment (%s)." % (
-                                segment.strsize(),
-                            ),
-                        )
-                else:
-                    # We failed to join
-                    logger.debug("Assembled '%s' len=%s (parts=%d)." % (
-                        segment.filename, segment.strsize(), seg_count))
-
-                if segment.save():
-                    logger.info(
-                        "Successfully saved %s (%s)" % (
-                            segment.filename,
-                            segment.strsize(),
-                        ),
-                    )
-                else:
-                    logger.error(
-                        "Failed to save %s (%s)" % (
-                            segment.filename,
-                            segment.strsize(),
-                        ),
-                    )
-        else:
-            logger.debug("Handling Message-ID '%s'." % (source))
-            # Download content by its Message-ID
-
-            if headers or inspect:
-                if headers:
-                    # Inspect our Message-ID only; do not download
-                    response = mgr.stat(source, full=True, group=group)
-                    if response:
-                        print('****')
-                        print(response.str())
-
-                if inspect:
-                    # Preview our Message by Message-ID only; do not download
-                    response = mgr.get(
-                        source,
-                        work_dir=workdir,
-                        group=group,
-                        max_bytes=128,
-                    )
-                    if response is None:
-                        logger.warning(
-                            "No Response Retrieved (from %s)." % (
-                                source),
-                        )
-                        continue
-
-                    if response.body:
-                        # Display our message body (if one is set)
-                        print('****')
-                        print(response.body.getvalue().strip())
-
-                    if response and len(response):
-                        # Display any binary content:
-                        print('****')
-                        print('Mime-Type: %s' % (
-                            response.decoded[0].mime().type(),
-                        ))
-                        print(hexdump(response.decoded[0].getvalue()))
-
-                # Move along
-                continue
-
-            # If we reach here, we need to download the contents
-            # associated with the Message-ID
-            if not workdir:
-                # Get Default Working Directory
-                workdir = basename(source)
-
-            response = mgr.get(source, work_dir=workdir, group=group)
+    # return our return code
+    exit(return_code)

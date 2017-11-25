@@ -14,6 +14,9 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from os.path import splitext
+from os.path import basename
+
 from newsreap.Hook import Hook
 
 
@@ -36,20 +39,49 @@ def hook(name=None, priority=Hook.priority):
     """
     if callable(name):
         def callable_hook(func):
-            setattr(func, Hook.hook_id, True)
-            setattr(func, Hook.priority_id, Hook.priority)
-            setattr(func, Hook.name_id, func.__name__)
+            # Acquire our potentially existing entries as we don't want to
+            # replace them
+            entries = getattr(func, Hook.hook_id, dict())
+
+            # Store our new entry contents
+            entries[func.__name__] = {
+                'priority': Hook.priority,
+            }
+
+            # Save our entries back to the function
+            setattr(func, Hook.hook_id, entries)
+
+            # Storing meta information into our object allows us to reference
+            # it later on by external wrappers such as the HookManager
+            setattr(func, Hook.module_id, '{module}.{function}'.format(
+                module=splitext(basename(__file__))[0],
+                function=func.__name__,
+            ))
+
             return func
         return callable_hook(name)
+
     else:
         def noncallable_hook(func):
-            setattr(func, Hook.hook_id, True)
-            setattr(func, Hook.priority_id, priority)
-            setattr(
-                func,
-                Hook.name_id,
-                func.__name__ if name is None else name,
-            )
+            # Acquire our potentially existing entries as we don't want to
+            # replace them
+            entries = getattr(func, Hook.hook_id, dict())
+
+            # Store our new entry contents
+            entries[func.__name__ if name is None else name] = {
+                'priority': priority,
+            }
+
+            # Save our entries back to the function
+            setattr(func, Hook.hook_id, entries)
+
+            # Storing meta information into our object allows us to reference
+            # it later on by external wrappers such as the HookManager
+            setattr(func, Hook.module_id, '{module}.{function}'.format(
+                module=splitext(basename(__file__))[0],
+                function=func.__name__,
+            ))
+
             return func
 
         return noncallable_hook

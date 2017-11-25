@@ -149,19 +149,6 @@ SCAN_FROM_TAIL = 10
 # query fails
 NNTP_XOVER_RETRIES = 5
 
-# RAW_TEXT_MESSAGE = re.compile(
-#     r'^message-id:\s*<?([^>]+)>?\s*$',
-# )
-
-# Used with BytesIO seek().  These variables
-# are part of python v2.7 but included here for python v2.6
-# support too.
-
-# TODO: Change all references of 'id' to article_id; this sadly exists
-#      everywhere, id is a reserved function id() and is and is pretty
-#      ambiguous.  article_id would explicity identify what the id
-#      represents
-
 
 class NNTPConnection(SocketBase):
     """
@@ -206,7 +193,7 @@ class NNTPConnection(SocketBase):
                  iostream=NNTPIOStream.RFC3977_GZIP,
                  join_group=False, use_body=False, use_head=True,
                  encoding=None, work_dir=None,
-                 filters=None, *args, **kwargs):
+                 filters=None, hooks=None, *args, **kwargs):
         """
         Initialize NNTP Connection
 
@@ -270,6 +257,10 @@ class NNTPConnection(SocketBase):
             self.filters.extend([
                 x for x in filters if isinstance(x, NNTPFilterBase)
             ])
+
+        if hooks:
+            # Force defined hooks into arguments
+            kwargs['hooks'] = hooks
 
         # Initialize the Socket Base Class
         super(NNTPConnection, self).__init__(*args, **kwargs)
@@ -437,15 +428,32 @@ class NNTPConnection(SocketBase):
         # Reset tracking items
         self._soft_reset()
 
+        # initialize our return flag
+        status = False
+
         try:
-            # call _connect()
-            result = self._connect(*args, **kwargs)
+            # pre_connect hook
+            response = self.hooks.call('pre_connect', *args, **kwargs)
+
+            # Allow a response over-ride which forces a denied connection
+            if next((r for r in response
+                     if r is not False), None) is not False:
+
+                # call _connect()
+                status = self._connect(*args, **kwargs)
 
         except SocketRetryLimit:
             # We can not establish a connection and never will
             return False
 
-        return result
+        finally:
+            self.hooks.call(
+                'post_connect',
+                status=status,
+                conection=weakref.proxy(self)
+            )
+
+        return status
 
     def _connect(self, *args, **kwargs):
         """
@@ -546,10 +554,39 @@ class NNTPConnection(SocketBase):
         elif isinstance(payload, NNTPSegmentedPost):
             postable = iter(payload)
 
+        # Initialize a bound respose object
+        response = None
+
         for content in postable:
             if content not in results:
+
                 try:
-                    response = self._post(content, update_headers=True)
+                    weak_content = weakref.proxy(content)
+
+                except TypeError:
+                    # Some types just can't be converted into a weak reference
+                    # no problem...
+                    weak_content = content
+
+                try:
+                    # pre hook
+                    _response = self.hooks.call(
+                        'pre_post',
+                        content=weak_content,
+                    )
+
+                    # Allow a response over-ride which forces a denied
+                    # post
+                    if next((r for r in _response
+                             if r is not False), None) is not False:
+
+                        response = self._post(content, update_headers=True)
+
+                    else:
+                        response = NNTPResponse(
+                            NNTPResponseCode.HOOK_OVERRIDE,
+                            'NNTP POST action blocked by hook',
+                        )
 
                 except SocketException:
                     # Connection Lost
@@ -561,8 +598,16 @@ class NNTPConnection(SocketBase):
                         'Connection Lost',
                     )
 
-                # Point our body to our content
-                response.body = weakref.proxy(content)
+                finally:
+                    # Point our body to our content
+                    response.body = weakref.proxy(content)
+
+                    self.hooks.call(
+                        'post_post',
+                        content=weak_content,
+                        response=weakref.proxy(response),
+                        status=response in NNTPResponseCode.SUCCESS,
+                    )
 
                 if success_only:
                     if response in NNTPResponseCode.SUCCESS:
@@ -1160,18 +1205,56 @@ class NNTPConnection(SocketBase):
             ))
             return None
 
-        response = self.send(
-            'XOVER %d-%d' % (start, end),
-            decoders=[
-                CodecArticleIndex(
-                    filters=self.filters,
-                    sort=sort,
-                    encoding=self.encoding,
-                    work_dir=self.work_dir,
-                ),
-            ],
-            retries=NNTP_XOVER_RETRIES,
-        )
+        try:
+            # pre hook
+            _response = self.hooks.call(
+                'pre_xover',
+                group=group,
+                start=start,
+                end=end,
+            )
+
+            # Allow a response over-ride which forces a denied xover
+            if next((r for r in _response
+                     if r is not False), None) is not False:
+
+                response = self.send(
+                    'XOVER %d-%d' % (start, end),
+                    decoders=[
+                        CodecArticleIndex(
+                            filters=self.filters,
+                            sort=sort,
+                            encoding=self.encoding,
+                            work_dir=self.work_dir,
+                        ),
+                    ],
+                    retries=NNTP_XOVER_RETRIES,
+                )
+
+            else:
+                response = NNTPResponse(
+                    NNTPResponseCode.HOOK_OVERRIDE,
+                    'NNTP XOVER action blocked by hook',
+                )
+
+        finally:
+
+            try:
+                weak_response = weakref.proxy(response)
+
+            except TypeError:
+                # Some types just can't be converted into a weak reference
+                # no problem...
+                weak_response = response
+
+            self.hooks.call(
+                'post_xover',
+                group=group,
+                start=start,
+                end=end,
+                response=weak_response,
+                status=response in NNTPResponseCode.SUCCESS_MULTILINE,
+            )
 
         if response.code not in NNTPResponseCode.SUCCESS_MULTILINE:
             logger.error('Failed to interpret NNTP XOVER response.')
@@ -1187,16 +1270,8 @@ class NNTPConnection(SocketBase):
 
     def stat(self, id, full=None, group=None):
         """
-        A Simple check to return True of False on whether an article
-        exists or not. The function returns:
-            False:  if the article does not exist.
-            None:   if there was no way to determine the answer.
+        A wrapper to _stat that allows us to manage hooks
 
-            Otherwise the function returns a dictionary containing the
-            stats the news server had on the file in question.
-
-            if Full is left to None, then the results will be based
-            on the defaut use_head function.
         """
 
         if full is None:
@@ -1209,6 +1284,69 @@ class NNTPConnection(SocketBase):
                 # Could not select group
                 logger.error('Could not select group %s' % group)
                 return None
+
+        # Initialize a bound object
+        response = None
+
+        try:
+            _response = self.hooks.call(
+                'pre_stat',
+                content=id,
+                full=True,
+                group=self.group_name,
+            )
+
+            # Allow a response over-ride which forces a denied stat
+            if next((r for r in _response
+                     if r is not False), None) is not False:
+
+                response = self._stat(id=id, full=full)
+
+            else:
+                response = NNTPResponse(
+                    NNTPResponseCode.HOOK_OVERRIDE,
+                    'NNTP STAT action blocked by hook',
+                )
+
+        finally:
+            # Prepare our status for our hook call
+            status = False
+            if isinstance(response, NNTPHeader):
+                status = response.article_exists()
+
+            try:
+                weak_response = weakref.proxy(response)
+
+            except TypeError:
+                # Some types just can't be converted into a weak reference
+                # no problem...
+                weak_response = response
+
+            self.hooks.call(
+                'post_stat',
+                content=id,
+                full=full,
+                group=self.group_name,
+                response=weak_response,
+                status=status,
+            )
+
+        # Return our response
+        return response
+
+    def _stat(self, id, full=None):
+        """
+        A Simple check to return True of False on whether an article
+        exists or not. The function returns:
+            False:  if the article does not exist.
+            None:   if there was no way to determine the answer.
+
+            Otherwise the function returns a dictionary containing the
+            stats the news server had on the file in question.
+
+            if Full is left to None, then the results will be based
+            on the defaut use_head function.
+        """
 
         if not full:
             response = self.send('STAT <%s>' % id)
@@ -1241,9 +1379,10 @@ class NNTPConnection(SocketBase):
                 logger.warning(
                     'ARTICLE <%s> not found; checking backups.' % id,
                 )
-                return next(
-                    (b.article for b in self._backups
-                        if b.stat(id, group) not in (None, False)), False)
+                return next((
+                    b.article for b in self._backups
+                    if b.stat(id=id, full=full, group=self.group_name)
+                    not in (None, False)), False)
 
             logger.warning('ARTICLE <%s> not found.' % id)
             return False
@@ -1255,15 +1394,16 @@ class NNTPConnection(SocketBase):
             if self._backups:
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
-                return next(
-                    (b.article for b in self._backups
-                        if b.stat(id, group) not in (None, False)), None)
+                return next((
+                    b.article for b in self._backups
+                    if b.stat(id=id, full=full, group=self.group_name)
+                    not in (None, False)), None)
             return None
 
         # Return
         return True
 
-    def get(self, id, work_dir=None, group=None, max_bytes=0):
+    def get(self, id, work_dir=None, decoders=None, group=None, max_bytes=0):
         """
         A wrapper to the _get call allowing support for more then one type
         of object (oppose to just _get() which only accepts the message id
@@ -1287,6 +1427,7 @@ class NNTPConnection(SocketBase):
             return self._get(
                 id=id,
                 work_dir=work_dir,
+                decoders=decoders,
                 group=group,
                 max_bytes=max_bytes,
             )
@@ -1300,6 +1441,7 @@ class NNTPConnection(SocketBase):
                 _results = self._get(
                     id=id.id,
                     work_dir=work_dir,
+                    decoders=decoders,
                     group=group,
                     max_bytes=max_bytes,
                 )
@@ -1313,6 +1455,7 @@ class NNTPConnection(SocketBase):
                 return self._get(
                     id=id.id,
                     work_dir=work_dir,
+                    decoders=decoders,
                     group=group,
                     max_bytes=max_bytes,
                 )
@@ -1328,6 +1471,7 @@ class NNTPConnection(SocketBase):
                         article = self._get(
                             id=_article,
                             work_dir=work_dir,
+                            decoders=decoders,
                             group=group,
                             max_bytes=max_bytes,
                         )
@@ -1353,11 +1497,11 @@ class NNTPConnection(SocketBase):
                     article = self._get(
                         id=_article,
                         work_dir=work_dir,
+                        decoders=decoders,
                         max_bytes=max_bytes,
                     )
 
                 if article:
-
                     if len(article) == 0:
                         logger.warning(
                             'No content found in segment #%.2d (%s)' % (
@@ -1407,7 +1551,75 @@ class NNTPConnection(SocketBase):
         # Return our results
         return results
 
-    def _get(self, id, work_dir, group=None, max_bytes=0):
+    def _get_wrapper(self, id, work_dir, decoders=None, group=None,
+                     max_bytes=0):
+        """
+        A wrapper to the __get() function so that we can capture it
+        with our hooks
+
+        """
+        # Initialize a bound object
+        response = None
+        try:
+            weak_content = weakref.proxy(id)
+
+        except TypeError:
+            # Some types just can't be converted into a weak reference
+            # no problem...
+            weak_content = id
+
+        try:
+            _response = self.hooks.call(
+                'pre_get',
+                work_dir=work_dir,
+                group=group,
+                max_bytes=max_bytes,
+                content=weak_content,
+            )
+
+            # Allow a response over-ride which forces a denied stat
+            if next((r for r in _response
+                     if r is not False), None) is not False:
+
+                response = self._get(
+                    id=id,
+                    work_dir=work_dir,
+                    group=group,
+                    max_bytes=max_bytes,
+                )
+
+            else:
+                response = NNTPResponse(
+                    NNTPResponseCode.HOOK_OVERRIDE,
+                    'NNTP GET action blocked by hook',
+                )
+
+        finally:
+            # Prepare our status for our hook call
+            status = False
+            if isinstance(response, NNTPArticle):
+                status = response.header.article_exists()
+
+            try:
+                weak_response = weakref.proxy(response)
+
+            except TypeError:
+                # Some types just can't be converted into a weak reference
+                # no problem...
+                weak_response = response
+
+            self.hooks.call(
+                'post_get',
+                content=id,
+                group=self.group_name,
+                response=weak_response,
+                status=status,
+            )
+
+        # Return our response
+        return response
+
+    def _get(self, id, work_dir, decoders=None, group=None, max_bytes=0):
         """
         Download a specified message to the work_dir specified. This function
         returns an NNTPArticle() object if it can.
@@ -1437,20 +1649,28 @@ class NNTPConnection(SocketBase):
             logger.error('Could not create directory %s' % work_dir)
             return None
 
-        # Prepare our Decoders
-        decoders = list()
-        if not self.use_body:
-            # BODY calls pull down header information too
-            decoders.append(
-                CodecHeader(encoding=self.encoding, work_dir=work_dir),
-            )
+        if decoders is None:
+            # Prepare a default list of decoders
+            decoders = list()
+            if not self.use_body:
+                # BODY calls pull down header information too
+                decoders.append(
+                    CodecHeader(encoding=self.encoding, work_dir=work_dir),
+                )
 
-        decoders.extend([
-            # Yenc Encoder/Decoder
-            CodecYenc(work_dir=work_dir, max_bytes=max_bytes),
-            # UUEncoder/Decoder
-            CodecUU(work_dir=work_dir, max_bytes=max_bytes),
-        ])
+            decoders.extend([
+                # Yenc Encoder/Decoder
+                CodecYenc(work_dir=work_dir, max_bytes=max_bytes),
+                # UUEncoder/Decoder
+                CodecUU(work_dir=work_dir, max_bytes=max_bytes),
+            ])
+
+        elif decoders is False:
+            # Disable all decoders
+            decoders = list()
+
+        elif isinstance(decoders, CodecBase):
+            decoders = [decoders, ]
 
         if self.use_body:
             # Body returns the contents past the header;  Hence there will be
@@ -1913,8 +2133,7 @@ class NNTPConnection(SocketBase):
                 # the last new line
 
                 # Number of characters to look back (chunk):
-                # TODO: Make this a global/configurable variable
-                chunk_size = 128
+                chunk_size = self.READBACK_CHUNK_SIZE
 
                 # Current Matched offset (<0 means no match yet)
                 offset = -1
@@ -2126,7 +2345,6 @@ class NNTPConnection(SocketBase):
                 if not isinstance(decoded, NNTPMetaContent):
                     # Print a representative string into the body to identify
                     # the content parsed out (and decoded)
-                    response.body.write(repr(decoded) + EOL)
 
                     if max_bytes > 0:
                         # We're instructed to only retrieve 'some' content and

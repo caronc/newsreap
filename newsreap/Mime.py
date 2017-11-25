@@ -466,6 +466,7 @@ class MimeResponse(object):
     """
     Our mime result
     """
+
     def __init__(self, mime_type=DEFAULT_MIME_EMTPTY_FILE,
                  mime_encoding=DEFAULT_MIME_ENCODING, extension=None):
         """
@@ -636,9 +637,10 @@ class Mime(object):
                     if n is 0:
                         _typs.append((0, _typ_re.group('mtype')))
                     else:
-                        _typs.append((
+                        _typs.append(
+                            (
                                 int(_typ_re.group('offset')),
-                                _typ_re.group('mtype')
+                                _typ_re.group('mtype'),
                             ),
                         )
 
@@ -731,7 +733,8 @@ class Mime(object):
                     if n is 0:
                         _typs.append((0, _typ_re.group('mtype')))
                     else:
-                        _typs.append((
+                        _typs.append(
+                            (
                                 int(_typ_re.group('offset')),
                                 _typ_re.group('mtype')
                             ),

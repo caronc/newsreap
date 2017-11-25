@@ -36,21 +36,25 @@ from shutil import Error as ShutilError
 from zlib import crc32
 from blist import sortedset
 from types import MethodType
-from newsreap.codecs.CodecBase import DEFAULT_TMP_DIR
-from newsreap.Utils import mkdir
-from newsreap.Utils import pushd
-from newsreap.Utils import rm
-from newsreap.Utils import bytes_to_strsize
-from newsreap.Utils import strsize_to_bytes
-from newsreap.Mime import Mime
 
-from newsreap.Utils import SEEK_SET
-from newsreap.Utils import SEEK_END
-from newsreap.NNTPSettings import DEFAULT_BLOCK_SIZE as BLOCK_SIZE
+from .codecs.CodecBase import DEFAULT_TMP_DIR
+
+from .Utils import mkdir
+from .Utils import pushd
+from .Utils import rm
+from .Utils import bytes_to_strsize
+from .Utils import strsize_to_bytes
+from .Utils import hexdump
+from .Utils import SEEK_SET
+from .Utils import SEEK_END
+
+from .Mime import Mime
+from .Mime import DEFAULT_MIME_TYPE
+from .NNTPSettings import DEFAULT_BLOCK_SIZE as BLOCK_SIZE
 
 # Logging
 import logging
-from newsreap.Logging import NEWSREAP_ENGINE
+from .Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
@@ -1139,7 +1143,7 @@ class NNTPContent(object):
         else:
             mr = None
 
-        if mr is None or mr.type() == 'application/octet-stream':
+        if mr is None or mr.type() == DEFAULT_MIME_TYPE:
             # Try one more time by the filename
             mr = m.from_filename(
                 self.filename if self.filename else self.filepath)
@@ -1213,6 +1217,9 @@ class NNTPContent(object):
         return self.stream.tell()
 
     def readline(self, *args, **kwargs):
+        """
+        Returns a single line from the stream
+        """
         if not self.stream:
             return ''
         return self.stream.readline(*args, **kwargs)
@@ -1278,6 +1285,24 @@ class NNTPContent(object):
             length = getsize(self.filepath)
 
         return length
+
+    def hexdump(self, max_bytes=128):
+        """
+        Returns a hex dump of characters up to the defined max_bytes
+        If max_bytes is 0 then all content is dumped
+
+        """
+
+        if not self.open(mode=NNTPFileMode.BINARY_RO, eof=False):
+            # Error
+            return None
+
+        # Head of data
+        self.stream.seek(0L, SEEK_SET)
+
+        if not max_bytes:
+            return hexdump(self.read())
+        return hexdump(self.read(max_bytes))
 
     def __del__(self):
         """

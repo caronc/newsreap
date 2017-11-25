@@ -14,6 +14,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import logging
 import click
 import sys
 
@@ -21,16 +22,15 @@ from os.path import abspath
 from os.path import dirname
 
 try:
-    from newsreap.NNTPPostFactory import NNTPPostFactory
+    from newsreap.Logging import NEWSREAP_CLI
 
 except ImportError:
     # Path
-    sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
-    from newsreap.NNTPPostFactory import NNTPPostFactory
+    sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
+    from newsreap.Logging import NEWSREAP_CLI
 
-# Logging
-import logging
-from newsreap.Logging import NEWSREAP_CLI
+from newsreap.NNTPPostFactory import NNTPPostFactory
+
 logger = logging.getLogger(NEWSREAP_CLI)
 
 NEWSREAP_CLI_PLUGINS = {

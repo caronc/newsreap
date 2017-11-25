@@ -16,6 +16,7 @@
 # GNU Lesser General Public License for more details.
 
 import re
+import hashlib
 from blist import sortedset
 from copy import deepcopy
 from itertools import chain
@@ -57,6 +58,10 @@ DEFAULT_NNTP_POSTER = 'newsreaper <news@reap.er>'
 
 # Used when parsing groups from a header
 GROUP_DELIMITER_RE = re.compile('[ \t,]+')
+
+# A regular expression that can be used to check if a string is a valid
+# Message-ID
+MESSAGE_ID_RE = re.compile(r'^\s*<?\s*(?P<id>[a-z0-9@!.$-]+)\s*>?\s*$', re.I)
 
 
 class NNTPArticle(object):
@@ -347,8 +352,8 @@ class NNTPArticle(object):
             # Nothing to split
             return None
 
-        content = next(
-                (c for c in self.decoded if isinstance(c, NNTPContent)), None)
+        content = next((
+            c for c in self.decoded if isinstance(c, NNTPContent)), None)
 
         if not content:
             # Well this isn't good; we have decoded entries that are not
@@ -387,7 +392,7 @@ class NNTPArticle(object):
                 poster=self.poster,
                 groups=self.groups,
                 # Increment our index #
-                no=self.no+no,
+                no=self.no + no,
                 work_dir=self.work_dir,
             )
 
@@ -510,8 +515,8 @@ class NNTPArticle(object):
             # No articles means no validity
             return False
 
-        return next(
-                (False for c in self.decoded if c.is_valid() is False), True)
+        return next((
+            False for c in self.decoded if c.is_valid() is False), True)
 
     def files(self):
         """
@@ -625,11 +630,24 @@ class NNTPArticle(object):
         else:
             partno = 1
 
+        m = hashlib.sha1()
+        reference = datetime.utcnow()
+        m.update(datetime.utcnow().strftime('%Y%m%d%H%M%S%f'))
+        key = m.hexdigest()
+
         # If we reach here an ID hasn't been generated yet; generate one
-        self.id = '%s%d@%s' % (
-            datetime.utcnow().strftime('%Y%m%d%H%M%S%f'),
+        self.id = '%s%x.%x!%x%x%x%x%x@%s%s%s' % (
+            key[0:5],
+            reference.second,
+            reference.microsecond,
+            reference.year,
+            reference.month,
+            reference.day,
+            reference.minute,
             partno,
-            host
+            reference.hour,
+            host,
+            key[5:10],
         )
 
         # Then return it

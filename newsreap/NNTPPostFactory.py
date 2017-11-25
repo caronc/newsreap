@@ -49,7 +49,6 @@ from .NNTPArticle import NNTPArticle
 from .NNTPPostDatabase import NNTPPostDatabase
 from .NNTPConnection import NNTPConnection
 from .NNTPManager import NNTPManager
-from .HookManager import HookManager
 from .NNTPHeader import NNTPHeader
 from .NNTPResponse import NNTPResponseCode
 
@@ -92,9 +91,12 @@ class NNTPPostFactory(object):
     # passed directly into zip, 7z, rar, etc
     archive_size = 'auto'
 
+    # The default hook path to load modules from if specified by name
+    default_hook_path = join(dirname(abspath(__file__)), 'hooks', 'post')
+
     def __init__(self, connection=None, hooks=None, *args, **kwargs):
         """
-        Initializes an NNTPPost object
+        Initializes an NNTPPostFactory object
 
         hooks are called if specific functions exist in the module defined by
         the hook. You can specfy as many hooks as you want.
@@ -108,12 +110,18 @@ class NNTPPostFactory(object):
         # factory depending on whether or not we loaded content successfully
         self._loaded = False
 
-        # Setup our hooks
-        self.hooks = self._load_hooks(hooks)
-
         # A link to either an NNTPManager or NNTPConnection object
         # This only referenced for the upload and verify stages
         self.connection = connection
+        if not self.connection:
+            self.connection = NNTPManager()
+
+        # Point directly at their hooks
+        self.hooks = self.connection.hooks
+
+        if hooks:
+            # load our hooks
+            self.hooks.add(hooks, ('.', self.default_hook_path))
 
         # The name (based on the directory of the original path)
         self.name = None
@@ -152,12 +160,17 @@ class NNTPPostFactory(object):
 
         """
 
-        if hooks is not True:
-            # Update our hooks
-            self.hooks = self._load_hooks(hooks)
-
         # Ensure we're not loaded
         self._loaded = False
+
+        if hooks is not True:
+            # Update our hooks
+            self.hooks.reset()
+            self.hooks.add(hooks, ('.', self.default_hook_path))
+
+            if self.connection:
+                # Set our hooks onto our conection object
+                self.connection.hooks.add(self.hooks)
 
         if not exists(path):
             # Some simple error checking
@@ -229,7 +242,8 @@ class NNTPPostFactory(object):
                 path=self.prep_path,
             )
 
-            if False not in [r for (_, r) in response.iteritems()]:
+            if next((r for r in response
+                     if r is not False), None) is not False:
                 status = self._prepare(
                     archive_size=archive_size, *args, **kwargs)
 
@@ -402,7 +416,8 @@ class NNTPPostFactory(object):
                 path=self.prep_path,
             )
 
-            if False not in [r for (_, r) in response.iteritems()]:
+            if next((r for r in response
+                     if r is not False), None) is not False:
                 status = self._stage(
                     groups=groups,
                     split_size=split_size,
@@ -539,7 +554,7 @@ class NNTPPostFactory(object):
 
         return True
 
-    def upload(self, groups=None, *args, **kwargs):
+    def upload(self, groups=None, commit_on_file=True, *args, **kwargs):
         """
         A Wrapper to _upload() as this allows us to call our post_hooks
         properly each time.
@@ -569,8 +584,13 @@ class NNTPPostFactory(object):
                 path=self.prep_path,
             )
 
-            if False not in [r for (_, r) in response.iteritems()]:
-                status = self._upload(groups=groups, *args, **kwargs)
+            if next((r for r in response
+                     if r is not False), None) is not False:
+                status = self._upload(
+                    groups=groups,
+                    commit_on_file=commit_on_file,
+                    *args,
+                    **kwargs)
 
             else:
                 logger.warning("Upload aborted by pre_upload() hook.")
@@ -588,7 +608,7 @@ class NNTPPostFactory(object):
 
         return status
 
-    def _upload(self, groups=None, *args, **kwargs):
+    def _upload(self, groups=None, commit_on_file=True, *args, **kwargs):
         """
         Uploading is only possible:
           - if content has been properly staged.
@@ -751,7 +771,8 @@ class NNTPPostFactory(object):
                     article=weakref.proxy(article),
                 )
 
-                if False not in [r for (_, r) in response.iteritems()]:
+                if next((r for r in response
+                         if r is not False), None) is not False:
                     # else response is False (this is a good thing, the message
                     # just simply does not exist on the server)
                     logger.info("Uploading '%s' to '%s'." % (
@@ -822,7 +843,10 @@ class NNTPPostFactory(object):
             if not self.save_article(article, id=article_id, commit=False):
                 logger.warning("Failed to update article details.")
 
-            pending_updates += 1
+            if commit_on_file:
+                session.commit()
+            else:
+                pending_updates += 1
 
         if pending_updates:
             session.commit()
@@ -860,7 +884,8 @@ class NNTPPostFactory(object):
                 path=self.prep_path,
             )
 
-            if False not in [r for (_, r) in response.iteritems()]:
+            if next((r for r in response
+                     if r is not False), None) is not False:
                 status = self._verify(*args, **kwargs)
 
             else:
@@ -1005,7 +1030,8 @@ class NNTPPostFactory(object):
                 path=self.prep_path,
             )
 
-            if False not in [r for (_, r) in response.iteritems()]:
+            if next((r for r in response
+                     if r is not False), None) is not False:
                 status = self._clean(*args, **kwargs)
 
             else:
@@ -1175,27 +1201,6 @@ class NNTPPostFactory(object):
             session.commit()
 
         return True
-
-    def _load_hooks(self, hooks=None):
-        """
-        Initializes any hooks and return them
-
-        """
-        if hooks is True:
-            # No change
-            return self.hooks
-
-        # Get our default path
-        default_path = join(dirname(abspath(__file__)), 'hooks', 'post')
-
-        # Load our hook manager
-        hm = HookManager()
-
-        # Load our hooks
-        hm.add(hooks, default_path)
-
-        # Return our hook manager
-        return hm
 
     def session(self, reset=False):
         """

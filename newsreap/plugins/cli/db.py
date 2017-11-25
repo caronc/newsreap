@@ -29,7 +29,7 @@ try:
 
 except ImportError:
     # Path
-    sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
+    sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.objects.nntp.Server import Server
 
 from newsreap.objects.nntp.Group import Group

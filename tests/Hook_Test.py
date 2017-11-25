@@ -144,7 +144,7 @@ class Hook_Test(TestBase):
             assert(callable(function))
 
         # Test our length
-        assert(len(hookx) == 14)
+        assert(len(hookx) == 19)
 
         # We can delete too
         del hooka['good_entry']
