@@ -35,14 +35,14 @@ Assuming you configured the file correctly, you can now start interfacing with y
 You'll want to make sure you meet all of the dependencies:
 ```bash
 # Browse to the directory you installed newsreap into
-# Then Install the nessisary dependencies like so:
+# Then Install the necessary dependencies like so:
 pip install -r requirements.txt
 ```
 
 ## Downloading
 If you know the article-id/Message-ID of the item in question, the following
 will retrieve it for you and save it based on your downloading configuration
-defined in your cofiguration file.
+defined in your configuration file.
 
 You can use the 'search' mode to get a listing of content and their associated
 Message-ID (first column).
