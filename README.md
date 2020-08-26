@@ -1,6 +1,5 @@
 [![Build Status](https://travis-ci.org/caronc/newsreap.svg?branch=master)](https://travis-ci.org/caronc/newsreap)[![Coverage Status](https://coveralls.io/repos/caronc/newsreap/badge.svg?branch=master)](https://coveralls.io/r/caronc/newsreap?branch=master)
 [![Paypal](http://repo.nuxref.com/pub/img/paypaldonate.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MHANV39UZNQ5E)
-[![Patreon](http://repo.nuxref.com/pub/img/patreondonate.svg)](https://www.patreon.com/caronc)
 
 ## Introduction
 NewsReap is a library written to wrap around the NNTP protocol. It simplifies
