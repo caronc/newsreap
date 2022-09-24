@@ -644,6 +644,7 @@ def load_pylib(module_name, filepath=None):
                 str(e),
             )
         )
+
     except IOError as e:
         # Could not load module
         logger.warning(
@@ -652,7 +653,9 @@ def load_pylib(module_name, filepath=None):
                 e[1],
             )
         )
-        return None
+
+    # We failed if we get here
+    return None
 
 
 def tidy_path(path):

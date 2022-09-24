@@ -70,6 +70,13 @@ class NZBParseMode(object):
     # Ignore any entries in the NZB-File detected as being PAR files.
     IgnorePars = 2
 
+# A list of the modes defined above
+NZB_PARSE_MODES = (
+    NZBParseMode.Simple,
+    NZBParseMode.IgnoreAttached,
+    NZBParseMode.IgnorePars,
+)
+
 
 class XMLDTDType(object):
     Public = u'PUBLIC'
@@ -197,6 +204,17 @@ class NNTPnzb(NNTPContent):
 
         elif isinstance(self._codecs, CodecBase):
             self._codecs = [self._codecs, ]
+
+    def mode(self, mode):
+        """
+        Sets the parse mode of our NNTnzb object
+
+        """
+        if mode not in NZB_PARSE_MODES:
+            return False
+
+        self._nzb_mode = mode
+        return True
 
     def save(self, nzbfile=None, pretty=True, dtd_type=XMLDTDType.Public):
         """

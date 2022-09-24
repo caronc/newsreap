@@ -16,6 +16,8 @@
 
 import re
 import weakref
+from collections import deque
+from tqdm import tqdm
 
 from os.path import isfile
 from os.path import exists
@@ -52,6 +54,8 @@ from .NNTPManager import NNTPManager
 from .NNTPHeader import NNTPHeader
 from .NNTPResponse import NNTPResponseCode
 
+from .decorators import hook
+
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
@@ -82,6 +86,9 @@ class NNTPPostFactory(object):
     server with.
     """
 
+    # The default hook path to load modules from if specified by name
+    default_hook_path = join(dirname(abspath(__file__)), 'hooks', 'post')
+
     # The default size to split our content up as.  This defines the maximum
     # size of each of the uploaded articles
     split_size = '760KB'
@@ -91,8 +98,8 @@ class NNTPPostFactory(object):
     # passed directly into zip, 7z, rar, etc
     archive_size = 'auto'
 
-    # The default hook path to load modules from if specified by name
-    default_hook_path = join(dirname(abspath(__file__)), 'hooks', 'post')
+    # Used for calculating queue sizes
+    xfer_rate_max_queue_size = 20
 
     def __init__(self, connection=None, hooks=None, *args, **kwargs):
         """
@@ -151,6 +158,54 @@ class NNTPPostFactory(object):
         # our Database object
         self._db = None
 
+        # Used for monitoring our transfer speeds
+        self.xfer_rate = deque()
+
+        # Average transfer rate
+        self.xfer_rate_avg = 0
+
+        # Total bytes transfered
+        self.xfer_tx_total = 0
+
+        # Our tqdm status bar reference
+        self.xfer_tqdm = None
+
+        # Add our internal hooks
+        self.hooks.add(self.transfer_count)
+        self.hooks.add(self.transfer_rates)
+
+    @hook(name='socket_write')
+    def transfer_rates(self, xfer_bytes, xfer_time, **kwargs):
+        """
+        calculate and monitor our transfer speeds
+
+        """
+
+        self.xfer_rate.append(xfer_bytes / xfer_time)
+        if len(self.xfer_rate) > self.xfer_rate_max_queue_size:
+            # bump oldest off of our list
+            self.xfer_rate.popleft()
+
+        # Calculate our average speed
+        self.xfer_rate_avg = sum(self.xfer_rate) / float(len(self.xfer_rate))
+
+        if self.xfer_tqdm is not None:
+            # Track the total bytes received
+            self.xfer_tx_total += xfer_bytes
+
+            # Update our progress bar
+            self.xfer_tqdm.update(xfer_bytes)
+
+    @hook(name='post_post')
+    def transfer_count(self, status, **kwargs):
+        """
+        used to track uploaded content
+
+        """
+        if status is not True:
+            # TODO: we need to adjust our health and mode
+            pass
+
     def load(self, path, hooks=True, *args, **kwargs):
         """
         Takes a path and loads it into the Post Factory
@@ -162,6 +217,18 @@ class NNTPPostFactory(object):
 
         # Ensure we're not loaded
         self._loaded = False
+
+        # Reset our transfer rate queue
+        self.xfer_rate.clear()
+
+        # Reset our transfer average rate
+        self.xfer_rate_avg = 0
+
+        # Reset the total bytes received
+        self.xfer_rx_total = 0
+
+        # Destory our tqdm object (if present)
+        self.xfer_tqdm = None
 
         if hooks is not True:
             # Update our hooks
@@ -647,6 +714,9 @@ class NNTPPostFactory(object):
 
         # A flag we'll use to track the upload status
         upload_status = True
+
+        # Load our size into our progress bar object
+        self.xfer_tqdm = tqdm(total=dirsize(self.stage_path), unit_scale=True)
 
         # Our segment
         segment = None

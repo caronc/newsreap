@@ -34,6 +34,7 @@ from .NNTPArticle import MESSAGE_ID_RE
 from .NNTPArticle import NNTPArticle
 from .NNTPSegmentedPost import NNTPSegmentedPost
 from .NNTPnzb import NNTPnzb
+from .NNTPnzb import NZBParseMode
 from .NNTPGetDatabase import NNTPGetDatabase
 from .NNTPConnection import NNTPConnection
 from .NNTPHeader import NNTPHeader
@@ -131,8 +132,17 @@ class NNTPGetFactory(object):
         # Used for monitoring our transfer speeds
         self.xfer_rate = deque()
 
+        # Average transfer rate
+        self.xfer_rate_avg = 0
+
+        # Total bytes received
+        self.xfer_rx_total = 0
+
         # Our tqdm status bar reference
         self.xfer_tqdm = None
+
+        # Reset our transfer health back to 100%
+        self.xfer_health = 100
 
         # Track our errors if and/or when they occur
         self.err_stream = StringIO()
@@ -154,32 +164,25 @@ class NNTPGetFactory(object):
             self.xfer_rate.popleft()
 
         # Calculate our average speed
-        xfer_avg = sum(self.xfer_rate) / float(len(self.xfer_rate))
-
-        # Print current speed and average
-        #sys.stdout.write("xfer={xfers / avg={avg}s\n".format(
-        #    xfer=bytes_to_strsize(self.xfer_rate[-1] / 1000.0),
-        #    avg=bytes_to_strsize(xfer_avg / 1000.0),
-        #))
+        self.xfer_rate_avg = sum(self.xfer_rate) / float(len(self.xfer_rate))
 
         if self.xfer_tqdm is not None:
+            # Track the total bytes received
+            self.xfer_rx_total += xfer_bytes
+
+            # Update our progress bar
             self.xfer_tqdm.update(xfer_bytes)
 
-        # Flush our buffer
-        # sys.stdout.flush()
-
-    @hook(name='post_stat')
     @hook(name='post_get')
     def transfer_count(self, status, **kwargs):
         """
-        used to track downloading content
+        used to track downloaded content
 
         """
-        if status is True:
-            sys.stdout.write('.')
-        else:
-            sys.stdout.write('x')
-        sys.stdout.flush()
+        if status is not True:
+            # TODO: we need to adjust our health and mode
+            pass
+
 
     def load(self, source, hooks=True, groups=None, path=None,
              *args, **kwargs):
@@ -213,6 +216,17 @@ class NNTPGetFactory(object):
 
         # Destory our tqdm object (if present)
         self.xfer_tqdm = None
+
+        # Reset our transfer average rate
+        self.xfer_rate_avg = 0
+
+        # Reset the total bytes received
+        self.xfer_rx_total = 0
+
+        # Track the transfer health; if we lose blocks
+        # we need to enable the download of parchive files
+        # to help
+        self.xfer_health = 100
 
         # Start by defining our base path
         self.base_path = path
@@ -292,7 +306,7 @@ class NNTPGetFactory(object):
                     "Invalid NZB-File '{}'.".format(basename(source)))
                 return False
 
-            # Load our size
+            # Load our size into our progress bar object
             self.xfer_tqdm = tqdm(total=self.nzb.size(), unit_scale=True)
 
         # It's safe to toggle our flag now
@@ -417,6 +431,9 @@ class NNTPGetFactory(object):
             logger.warning(
                 "Failed to load NZB-File '%s'." % (self.nzb.filename))
             return False
+
+        # Start off by ignoring par files for speed
+        self.nzb.mode(NZBParseMode.IgnorePars)
 
         # We are dealing with an NZB-File if we get here
         response = self.connection.get(self.nzb, work_dir=self.tmp_path)

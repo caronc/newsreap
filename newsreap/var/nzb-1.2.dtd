@@ -1,0 +1,99 @@
+<!--
+    This is the NZB 1.2 DTD; a simple XML format for describing
+    collections of one or more files located on Usenet.
+
+    Namespace = http://www.nuxref.com/2016/nzb
+
+    This DTD is identified by the PUBLIC and SYSTEM identifiers:
+
+      PUBLIC "-//nuxref//DTD NZB 1.2//EN"
+      SYSTEM "http://www.nuxref.com/DTD/nzb/nzb-1.2.dtd"
+
+    Clients are expected to handle extensions to this specification.
+    If you're not parsing it with a reasonable XML parser and coping
+    with elements and attributes your client doesn't know about, well,
+    your client is broken.
+-->
+
+<!-- a Uniform Resource Identifier as per [RFC2396] -->
+<!ENTITY % URI "CDATA">
+
+<!-- an integer, in this case a positive one -->
+<!ENTITY % Integer "CDATA">
+
+<!-- date and time in standard Unix timestamp format -->
+<!ENTITY % Unixtime "CDATA">
+
+
+<!ELEMENT nzb (head?,file*)>
+<!ATTLIST nzb
+  xmlns      %URI;          #FIXED 'http://nuxref.com/DTD/2003/nzb'
+  >
+
+<!-- zero or one header section per nzb, contains metadata for contents
+     -->
+<!ELEMENT head (meta)*>
+
+<!-- exactly one metadata element per item of arbitrary metadata.
+
+    type - An identifier for this metadata
+           Some types are pre-defined,
+      see http://docs.newzbin.com/index.php/Newzbin:NZB_Specs
+    -->
+<!ELEMENT meta (#PCDATA)*>
+<!ATTLIST meta
+   type      CDATA          #REQUIRED
+   >
+
+<!-- exactly one file element per file, with exactly zero or one
+     set of groups and/or segments associated with it
+
+    subject - Subject this file was posted under
+    poster - The From: header the file was posted with
+    date - A unix timestamp representing the time the file was first seen
+
+    -- v1.2 updates
+    filename - the filename otherwise placed in the yenc
+    crc32 - the 32bit cyclic redundancy check (CRC) otherwise placed in the
+            yenc head entry
+    -->
+<!ELEMENT file (groups,segments)?>
+<!ATTLIST file
+  subject    CDATA          #REQUIRED
+  poster     CDATA          #IMPLIED
+  date       %Unixtime;     #IMPLIED
+
+  filename   CDATA          #IMPLIED
+  crc32      CDATA          #IMPLIED
+  >
+
+<!-- the collection of newsgroups this file is known to be in -->
+<!ELEMENT groups (group)*>
+<!ATTLIST groups>
+
+<!-- one group element per newsgroup,
+     containing text is the group name -->
+<!ELEMENT group (#PCDATA)>
+<!ATTLIST group>
+
+<!-- the collection of Usenet articles this file is made up from -->
+<!ELEMENT segments (segment)*>
+<!ATTLIST segments>
+
+
+<!-- a Usenet article containing at least part of this file.
+
+    bytes - Byte-count of the article
+    number - Segment number
+
+    -- v1.2 updates
+    crc32 - the 32bit cyclic redundancy check (CRC) otherwise placed in the
+            =ypart entry
+    -->
+<!ELEMENT segment (#PCDATA)>
+<!ATTLIST segment
+  bytes      %Integer;      #IMPLIED
+  number     %Integer;      #IMPLIED
+
+  crc32      CDATA          #IMPLIED
+  >
