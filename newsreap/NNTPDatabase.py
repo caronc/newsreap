@@ -37,7 +37,7 @@ from .Database import Database
 #
 # TODO: When creating an error message, it might make sense to parse
 # the database path 'IF using SQLite' to make the error
-# messages more feasable
+# messages more feasible
 # configure Session class with desired options
 
 
