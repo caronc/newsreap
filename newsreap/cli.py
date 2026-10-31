@@ -65,6 +65,15 @@
 #   # Index a from/to range if you want.
 #   nr -vvv update search --date-from=2013 --date-to=2014.02 test
 #
+#   # Or just the last 7 days, or just the newest 100000 articles
+#   nr update search --days=7 test
+#   nr update search --newest=100000 test
+#
+#   # Running it again only fetches what is new (or was missed); a run that
+#   # was stopped part way picks up where it left off.  Use --force to fetch
+#   # articles you already have again.
+#   nr update search test
+#
 #   # Newsreap also maintains a watch list which is groups you just always
 #   # intend to index. It can be a conbination of aliases you set up, or
 #   # just a few individual groups. The below adds our 'test' group to
@@ -212,6 +221,10 @@ def cli(ctx, config, verbose, noprompt, statistics, init):
     ctx.obj['NNTPManager'] = NNTPManager(
         settings=ctx.obj['NNTPSettings'],
     )
+
+    # Close our connections once the command is done (even if it ends
+    # early)
+    ctx.call_on_close(ctx.obj['NNTPManager'].close)
 
     if statistics:
         # Show what our connections did once the command is done (even

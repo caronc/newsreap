@@ -326,4 +326,10 @@ class Database:
         """
         Gracefully clean up any lingering session data
         """
-        self.close()
+        try:
+            self.close()
+
+        except Exception:
+            # Python is shutting down; there is nothing left to clean up
+            # gracefully
+            pass

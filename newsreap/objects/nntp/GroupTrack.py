@@ -78,5 +78,5 @@ class GroupTrack(ObjectBase):
 
 
     def __repr__(self):
-        return "<GroupTrack(name='%s', current='%s', end='%s')>" % (
-                             self.name, self.current, self.end)
+        return "<GroupTrack(group_id=%s, server_id=%s, low=%s, high=%s)>" % (
+            self.group_id, self.server_id, self.low, self.high)

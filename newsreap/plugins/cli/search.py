@@ -197,11 +197,8 @@ def search(ctx, group, keywords, minscore, maxscore, case_insensitive):
         exit(1)
 
     for name, _id in groups.items():
-        db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
-        db_file = '%s%s' % (
-            join(db_path, name),
-            SQLITE_DATABASE_EXTENSION,
-        )
+        # Where 'nr update search' cached the group's articles
+        db_file = ctx['NNTPSettings'].group_database(name)
         if not isfile(db_file):
             logger.warning(
                 "There is no cached content for '%s'." % db_file

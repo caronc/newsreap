@@ -383,6 +383,13 @@ class NNTPManager:
 
         return total
 
+    def add_stats(self, stats):
+        """
+        Adds statistics gathered elsewhere (ie: by a connection of your own)
+        to ours, so they are part of our total
+        """
+        self._closed_stats += stats
+
     def put(self, request):
         """
         Handles the adding to the worker queue
@@ -951,4 +958,10 @@ class NNTPManager:
         """
         Gracefully clean up any lingering connections
         """
-        self.close()
+        try:
+            self.close()
+
+        except Exception:
+            # Python is shutting down (our greenlets may already be gone);
+            # there is nothing left to clean up gracefully
+            pass

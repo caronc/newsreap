@@ -27,6 +27,7 @@ from time import monotonic
 from contextlib import contextmanager
 from gevent import sleep
 from newsreap.SortedSet import sortedset
+from sortedcontainers import SortedDict as sorteddict
 import weakref
 
 from .NNTPHeader import NNTPHeader
@@ -972,14 +973,16 @@ class NNTPConnection(SocketBase):
 
         index = self._seek_by_date(refdate)
         if index < 0:
+            # Nothing was posted at (or after) our date; point just past
+            # the last article
             logger.warning(
                 'No entries found at (or after) date(%s) in group %s' % (
                     refdate.strftime('%Y.%m.%d %H:%M:%S'),
                     group,
                 ),
             )
-            self.group_index = self.group_head
-            return self.group_head
+            self.group_index = self.group_tail + 1
+            return self.group_index
 
         self.group_index = index
         logger.info('Matched index: %d' % (self.group_index))
@@ -1205,12 +1208,16 @@ class NNTPConnection(SocketBase):
             logger.error('XOVER failed due to no group selected.')
             return None
 
+        # Tracks whether a date decided our range
+        by_date = False
+
         if end is None:
             end = self.group_tail
 
         elif isinstance(end, datetime):
-            # Get the end by date
-            end = self.seek_by_date(end)
+            # Get the end by date (never past our last article)
+            end = min(self.seek_by_date(end), self.group_tail)
+            by_date = True
 
         # Default Ranges (if not otherwise specified)
         if start is None:
@@ -1219,6 +1226,11 @@ class NNTPConnection(SocketBase):
         elif isinstance(start, datetime):
             # Get the start by date
             start = self.seek_by_date(start)
+            by_date = True
+
+        if start > end and by_date:
+            # Nothing was posted within the dates asked for
+            return sorteddict()
 
         if start > end:
             # 423: Empty Range
@@ -1295,17 +1307,27 @@ class NNTPConnection(SocketBase):
                 status=response in NNTPResponseCode.SUCCESS_MULTILINE,
             )
 
+        if response.code == 423:
+            # The server has no articles in the range we asked for
+            return sorteddict()
+
         if response.code not in NNTPResponseCode.SUCCESS_MULTILINE:
             logger.error('Failed to interpret NNTP XOVER response.')
             return None
 
         try:
             # return our decoded content
-            return response.decoded.pop().content
+            content = response.decoded.pop().content
 
         except IndexError:
             # The server had no articles in the range we asked for
-            return None
+            return sorteddict()
+
+        # Track the headers we received (the command's own statistics were
+        # already added to our total, or to the action we're part of)
+        response.stats.headers += len(content)
+        (self._action or self.stats).headers += len(content)
+        return content
 
     def stat(self, id, full=None, group=None):
         """

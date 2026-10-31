@@ -18,6 +18,7 @@ gevent.monkey.patch_all()
 # Importing these libraries forces them associate themselves
 # with the ObjectBase
 from .objects.group.Article import Article
+from .objects.group.ScannedRange import ScannedRange
 
 # The ObjectBase which contains all of the data required to
 # access our table.

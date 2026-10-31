@@ -57,6 +57,9 @@ STATISTIC_COUNTERS = (
     'missing',
     'failed',
 
+    # Article headers received (ie: from XOVER when caching a group)
+    'headers',
+
     # The number of times an action was tried again
     'retries',
 
@@ -276,6 +279,10 @@ class NNTPStatistics:
             for name in ('fetched', 'posted', 'missing', 'failed')
             if getattr(self, name)]
         lines.append(('Articles', ', '.join(articles) or 'none'))
+
+        if self.headers:
+            # Only shown when headers were fetched
+            lines.append(('Headers', '{:,} received'.format(self.headers)))
 
         lines.append(('Connections', '{:,} opened'.format(self.connections)))
 

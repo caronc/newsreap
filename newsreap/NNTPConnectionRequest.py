@@ -17,6 +17,11 @@ gevent.monkey.patch_all()
 
 from newsreap.NNTPRequest import NNTPRequest
 
+# Logging
+import logging
+from newsreap.Logging import NEWSREAP_ENGINE
+logger = logging.getLogger(NEWSREAP_ENGINE)
+
 class NNTPConnectionRequest(NNTPRequest):
     """
     This is used as a direct wrapper to the NNTPConnection() class.
@@ -60,6 +65,18 @@ class NNTPConnectionRequest(NNTPRequest):
 
         """
 
+        try:
+            return self._run(connection, *args, **kwargs)
+
+        finally:
+            # Always flag our completion (even if an action failed) so
+            # nothing waiting on us waits forever
+            self.set()
+
+    def _run(self, connection, *args, **kwargs):
+        """
+        Executes our actions; see run()
+        """
         for action in self.actions:
 
             if self.is_set():
@@ -88,11 +105,14 @@ class NNTPConnectionRequest(NNTPRequest):
             except IndexError:
                 _kwargs = dict()
 
-            self.append(_func(*_args, **_kwargs))
+            try:
+                self.append(_func(*_args, **_kwargs))
 
-        # Set our completion flag; this flags any blocking
-        # services waiting for us to complete to resume
-        self.set()
+            except Exception as e:
+                # A failed action has no result; keep going with the rest
+                logger.warning('NNTP %s() request failed.' % _name)
+                logger.debug('Request exception: %s' % str(e))
+                self.append(None)
 
         # Return that we've set content okay
         return True

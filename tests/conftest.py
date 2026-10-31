@@ -16,6 +16,8 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import re
+
 import pytest
 
 from tests.FakeNNTPServer import FakeNNTPServer
@@ -59,3 +61,44 @@ def nntps_server():
     """
     with FakeNNTPServer(secure=True) as server:
         yield server
+
+
+def config_for(server, path, **processing):
+    """
+    Writes a configuration (like `nr --init` does) that points at a
+    FakeNNTPServer and returns its path.
+
+    - path: the configuration file to write
+    - processing: any processing settings to change (ie: threads=1)
+    """
+    from newsreap.NNTPSettings import create_config
+
+    path = create_config(str(path))
+    with open(path) as fp:
+        content = fp.read()
+
+    # Point our first server at the test server
+    for old, new in (
+            ('host: my.server.here', 'host: %s' % server.host),
+            ('port: 563', 'port: %d' % server.port),
+            ('username: myusername', 'username: valid'),
+            ('password: mypassword', 'password: valid'),
+            ('secure: True', 'secure: %s' % server.secure)):
+        content = content.replace(old, new, 1)
+
+    for key, value in processing.items():
+        # Change a processing setting (or add it if it isn't there)
+        setting = re.compile(r'^(\s+)%s:.*$' % key, re.MULTILINE)
+        if setting.search(content):
+            content = setting.sub(
+                r'\g<1>%s: %s' % (key, value), content, count=1)
+
+        else:
+            content = content.replace(
+                'processing:\n', 'processing:\n   %s: %s\n' % (key, value),
+                1)
+
+    with open(path, 'w') as fp:
+        fp.write(content)
+
+    return path

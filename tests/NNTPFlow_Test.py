@@ -508,8 +508,9 @@ def test_seeking_by_date(nntp_server):
         assert sock.group_index == expected
 
     # A date after every article leaves us at the start of the group
+    # Nothing posted that late points just past the last article
     assert sock.seek_by_date(
-        base + timedelta(days=365), group=group) == numbers[0]
+        base + timedelta(days=365), group=group) == numbers[-1] + 1
 
     # Each search only takes a handful of (small) requests
     xovers = [c for c in nntp_server.commands() if c.startswith('XOVER')]
@@ -550,4 +551,19 @@ def test_overview_listing(nntp_server):
     assert entry['subject'] == '"file.30" yEnc (1/1)'
     assert entry['size'] == 1000
     assert entry['lines'] == 10
+    sock.close()
+
+
+def test_empty_overview_range(nntp_server):
+    """
+    A range with no articles (423) is empty rather than an error
+    """
+    nntp_server.add_group(GROUP, 10, 1, 10)
+    nntp_server.on(r'^XOVER', '423 No articles in that range')
+
+    sock = connect_to(nntp_server, join_group=True)
+    assert sock.connect(timeout=5.0) is True
+    entries = sock.xover(group=GROUP, start=1, end=10)
+    assert entries is not None
+    assert len(entries) == 0
     sock.close()

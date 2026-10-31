@@ -224,6 +224,9 @@ DEFAULT_CLI_PLUGIN_DIRECTORIES = (
 # SQLite Database File Extension
 SQLITE_DATABASE_EXTENSION = '.db'
 
+# Characters not allowed in the filename of a group's cached database
+GROUP_FILENAME_RE = re.compile(r'[^a-z0-9.+_-]', re.ASCII)
+
 # SQLite Database Details
 SQLITE_DATABASE_ENGINE = 'sqlite:///%s%s' % (
     join(DEFAULT_BASE_DIR, 'newsreap.db'),
@@ -809,6 +812,20 @@ class NNTPSettings(NNTPDatabase):
             self.session()
 
         return self._is_valid
+
+    def group_database(self, name):
+        """
+        Returns the path of the database a group's articles are cached in
+
+        Group names come from the server, so anything that isn't safe in
+        a filename (ie: a '/' or a leading dot) is replaced with '_'.
+        """
+        # Keep the characters group names normally use
+        safe = GROUP_FILENAME_RE.sub('_', name.strip().lower()).lstrip('.')
+
+        return join(
+            self.base_dir, 'cache', 'search',
+            '%s%s' % (safe or '_', SQLITE_DATABASE_EXTENSION))
 
     def save(self, cfg_file=None):
         """
