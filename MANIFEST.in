@@ -2,7 +2,6 @@ include LICENSE
 include README.md
 include INSTALL.md
 include HISTORY.rst
-include config.yaml
 include pyproject.toml
 include tox.ini
 include requirements.txt

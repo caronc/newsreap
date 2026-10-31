@@ -146,6 +146,8 @@ import re
 import sys
 import yaml
 
+from os import chmod
+from os import makedirs
 from os import name as os_name
 from os.path import join
 from os.path import isfile
@@ -201,6 +203,9 @@ DEFAULT_CONFIG_FILE_PATHS = (
     join(ROOT, 'etc', 'newsreap', 'config.yaml'),
     join(ROOT, 'etc', 'newsreap.yaml'),
 )
+
+# The starting configuration written by create_config()
+CONFIG_TEMPLATE = join(NEWSREAP_ROOT, 'var', 'config.yaml')
 
 # Plugin Keyword mapping:
 CLI_PLUGINS_MAPPING = 'NEWSREAP_CLI_PLUGINS'
@@ -356,6 +361,63 @@ VALID_SETTINGS_ENTRY = {
 }
 
 
+def create_config(cfg_file=None):
+    """
+    Writes a starting configuration file and creates the directories it
+    refers to.
+
+    - cfg_file: where to write it (defaults to the first standard location)
+    - Everything NewsReap keeps (database, downloads) goes in the same
+      directory as the configuration file.
+    - Nothing is ever overwritten or removed; FileExistsError is raised if
+      the file (or, when no path was given, any standard configuration
+      file) already exists.
+
+    Returns the path written to.
+    """
+    if cfg_file:
+        cfg_file = abspath(expanduser(cfg_file))
+        if isfile(cfg_file):
+            raise FileExistsError(cfg_file)
+
+    else:
+        # A new file here would quietly take over from one found further
+        # down our search list, so we leave things alone if any exist
+        existing = next(
+            (path for path in DEFAULT_CONFIG_FILE_PATHS if isfile(path)), None)
+        if existing:
+            raise FileExistsError(existing)
+
+        cfg_file = DEFAULT_CONFIG_FILE_PATHS[0]
+
+    base_dir = dirname(cfg_file)
+
+    # Write paths in our home directory as ~/ so they stay readable
+    home = expanduser('~')
+    if base_dir == home or base_dir.startswith(join(home, '')):
+        display_dir = '~' + base_dir[len(home):]
+
+    else:
+        display_dir = base_dir
+
+    with open(CONFIG_TEMPLATE) as fp:
+        content = fp.read().replace('__BASE_DIR__', display_dir)
+
+    makedirs(base_dir, exist_ok=True)
+
+    # 'x' never replaces a file that showed up since we checked
+    with open(cfg_file, 'x') as fp:
+        fp.write(content)
+
+    # The file holds passwords; only its owner may read it
+    chmod(cfg_file, 0o600)
+
+    # Prepare our working directories
+    makedirs(join(base_dir, 'var', 'tmp'), exist_ok=True)
+
+    return cfg_file
+
+
 class NNTPSettings(NNTPDatabase):
     """
     An object that ties NNTP settings and statistics retrieved a
@@ -474,7 +536,7 @@ class NNTPSettings(NNTPDatabase):
             ))
             return _cfg_data
 
-        except ScannerError as e:
+        except (ScannerError, ParserError) as e:
             logger.debug('%s' % (str(e)))
             logger.error('Failed to interpret YAML configuration from %s' % (
                 cfg_file,
@@ -736,6 +798,11 @@ class NNTPSettings(NNTPDatabase):
 
         if not self._is_valid:
             return False
+
+        if isinstance(self.nntp_database['engine'], str):
+            # Allow %{base_dir} and friends in our database location
+            self.nntp_database['engine'] = \
+                self.apply_mask(self.nntp_database['engine'])
 
         # Open up our database connection if one exists
         if self.open(engine=self.nntp_database['engine'], reset=None):

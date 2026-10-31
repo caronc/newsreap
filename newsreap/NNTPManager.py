@@ -30,6 +30,7 @@ from .NNTPArticle import NNTPArticle
 from .NNTPConnection import XoverGrouping
 from .NNTPConnectionRequest import NNTPConnectionRequest
 from .NNTPSettings import NNTPSettings
+from .NNTPStatistics import NNTPStatistics
 
 # Logging
 import logging
@@ -207,6 +208,9 @@ class NNTPManager:
         # A connection pool of NNTPConnections
         self._pool = []
 
+        # Statistics of the connections we've already closed
+        self._closed_stats = NNTPStatistics()
+
         # A mapping of active worker threads
         self._workers = []
 
@@ -356,10 +360,28 @@ class NNTPManager:
             logger.info("Waiting for workers to exit.")
             worker.join()
 
+        # Keep what our connections did before letting them go
+        self._closed_stats = self.stats
+
         del self._pool
         del self._workers
         self._workers = []
         self._pool = []
+
+    @property
+    def stats(self):
+        """
+        The statistics of all of our connections (backups included)
+        added together
+        """
+        total = self._closed_stats.copy()
+        for connection in self._pool:
+            total += connection.stats
+
+            for backup in connection._backups:
+                total += backup.stats
+
+        return total
 
     def put(self, request):
         """

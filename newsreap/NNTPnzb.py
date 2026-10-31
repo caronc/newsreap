@@ -25,6 +25,7 @@ from newsreap.NNTPContent import NNTPFileMode
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPEmptyContent import NNTPEmptyContent
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+from newsreap.NNTPStatistics import NNTPStatistics
 from newsreap.Mime import Mime
 from newsreap.Mime import DEFAULT_MIME_TYPE
 from html import unescape as html_unescape
@@ -1000,6 +1001,14 @@ class NNTPnzb(NNTPContent):
 
         else:
             return sum(c.size() for c in self)
+
+    @property
+    def stats(self):
+        """
+        The statistics of every segment (and its articles) added together
+        """
+        return NNTPStatistics.combine(
+            segment.stats for segment in self.segments)
 
     def __len__(self):
         """

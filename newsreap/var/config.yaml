@@ -1,0 +1,141 @@
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#               NewsReap Configuration File
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Created by `nr --init`.  At the very least you'll want to fill in your
+# server details below (host, port, username and password).
+#
+# NewsReap looks for its configuration in these locations (in order):
+#    ~/.config/newsreap/config.yaml
+#    ~/newsreap/config.yaml
+#    ~/.newsreap/config.yaml
+#    /etc/newsreap/config.yaml
+#    /etc/newsreap.yaml
+#
+# You can also point to any file you like with: nr --config /path/to/file
+#
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Global Configuration
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+global:
+   # Everything NewsReap keeps (database, downloads, etc) goes in here. You
+   # can refer to this directory elsewhere in this file as %{base_dir}
+   base_dir: '__BASE_DIR__'
+
+   # Where content is downloaded to (and prepared) before it's processed
+   work_dir: '%{base_dir}/var/tmp'
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   NNTP Server Definitions
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# You can define as many servers as you like.  The first one is your main
+# server; any others are used as backups for content the main one is
+# missing.
+servers:
+  - host: my.server.here
+    # 563 is the usual port for secure (TLS) connections; 119 is the usual
+    # one for unsecured connections
+    port: 563
+
+    # Your login
+    username: myusername
+    password: mypassword
+
+    # Use a secure (TLS) connection; match this to the port above
+    secure: True
+
+    # Check the server's certificate is signed by a trusted authority
+    verify_cert: False
+
+    # Ask the server to compress what it sends us (if it can).  This is
+    # safe to leave on; we fall back to no compression on our own.
+    compress: True
+
+    # Older servers needed a group to be selected before you could fetch
+    # articles from it.  Most don't anymore.
+    join_group: False
+
+    # Fetch articles using BODY (just the content) instead of ARTICLE
+    # (the headers too).  The headers are handy, so this is usually off.
+    use_body: False
+
+    # Use HEAD (instead of STAT) when checking on an article
+    use_head: True
+
+    # Set to False to keep this entry but not use it
+    enabled: True
+
+    # How many times a failed download is retried before giving up, and
+    # when a connection is treated as dead:
+    #  - stall_timeout: seconds without receiving anything at all
+    #  - min_rate: bytes per second the transfer averages over slow_window
+    #    seconds (set either to 0 to turn the check off)
+    retries: 3
+    stall_timeout: 60
+    min_rate: 1024
+    slow_window: 120
+
+# A backup server; remove the leading '#' from each line to use it
+#  - host: my.backup.server.here
+#    port: 563
+#    username: myusername
+#    password: mypassword
+#    secure: True
+#    verify_cert: False
+#    compress: True
+#    join_group: False
+#    use_body: False
+#    use_head: True
+#    enabled: True
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Processing (Before and After Downloading)
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+processing:
+   # Each thread opens another connection to your provider so more work can
+   # happen at once.  Don't go higher than the number of connections your
+   # provider allows.
+   threads: 3
+
+   # How many headers are processed at a time when indexing a group.
+   # Between 25000 and 75000 works well; go higher with lots of CPU power
+   # and lower without.
+   header_batch_size: 25000
+
+   # A directory in memory (a ramdisk) speeds up indexing a lot.  On Linux
+   # you can make one like so:
+   #    sudo mkdir -p /var/newsreap/swap
+   #    sudo mount -t tmpfs -o size=4G tmpfs /var/newsreap/swap
+   #
+   # Then remove the '#' below and point it there.
+   # ramdisk: /var/newsreap/swap
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Posting to your NNTP Server
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+posting:
+    # Stamped on everything you post
+    poster: 'Newsreap <reaper@newsreap.io>'
+
+    # The subject used for each article posted
+    subject: '{{description}} (%Y-%m-%d)" - "{{filename}}" yEnc ({{index}}/{{count}})'
+
+    # Content larger than this is split into several articles.  Most
+    # providers don't allow more than 760KB, so only change this if you're
+    # sure.
+    max_article_size: 760KB
+
+    # Archives (rar, 7z, zip) larger than this are split into several
+    # files.  Use a size (ie: 25MB) or 'auto' to work it out from the
+    # content being posted.
+    max_archive_size: auto
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Database Configuration
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Where indexed groups and articles are kept.  This is an SQLAlchemy URL so
+# most databases are supported; a larger database server (PostgreSQL,
+# MySQL) is faster than SQLite for big groups.
+database:
+   engine: 'sqlite:///%{base_dir}/newsreap.db'
+#   engine: 'postgresql+psycopg2://user:pass@localhost/newsreap'
+#   engine: 'mysql+mysqldb://user:pass@hostname/newsreap'

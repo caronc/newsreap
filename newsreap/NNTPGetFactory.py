@@ -149,6 +149,13 @@ class NNTPGetFactory:
         self.hooks.add(self.transfer_count)
         self.hooks.add(self.transfer_rates)
 
+    @property
+    def stats(self):
+        """
+        The statistics of everything our connection(s) have done
+        """
+        return self.connection.stats
+
     @hook(name='socket_read')
     def transfer_rates(self, xfer_bytes, xfer_time, **kwargs):
         """

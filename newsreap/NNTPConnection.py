@@ -24,6 +24,7 @@ from os.path import expanduser
 from io import BytesIO
 from datetime import datetime
 from time import monotonic
+from contextlib import contextmanager
 from gevent import sleep
 from newsreap.SortedSet import sortedset
 import weakref
@@ -32,6 +33,7 @@ from .NNTPHeader import NNTPHeader
 from .NNTPArticle import NNTPArticle
 from .NNTPResponse import NNTPResponse
 from .NNTPResponse import NNTPResponseCode
+from .NNTPStatistics import NNTPStatistics
 from .NNTPContent import NNTPContent
 from .NNTPSegmentedPost import NNTPSegmentedPost
 from .NNTPMetaContent import NNTPMetaContent
@@ -423,6 +425,13 @@ class NNTPConnection(SocketBase):
         # NNTPConnection()
         self._backups = []
 
+        # Statistics of everything this connection has done (see
+        # NNTPStatistics); each action also returns its own on the response
+        self.stats = NNTPStatistics()
+
+        # The statistics of the action in progress (if any)
+        self._action = None
+
         # Used to cache group list responses
         self._grouplist = None
 
@@ -469,8 +478,12 @@ class NNTPConnection(SocketBase):
             if next((r for r in response
                      if r is not False), None) is not False:
 
-                # call _connect()
-                status = self._connect(*args, **kwargs)
+                # call _connect() (logging in counts towards our statistics)
+                with self._recording() as stats:
+                    status = self._connect(*args, **kwargs)
+                    if status:
+                        # Track the connections we open
+                        stats.connections += 1
 
         except SocketRetryLimit:
             # We can not establish a connection and never will
@@ -653,6 +666,34 @@ class NNTPConnection(SocketBase):
         """
         Takes an NNTPArticle() and posts it to an NNTP Server if it can
 
+        The response carries the statistics of the whole post.
+        """
+        with self._recording() as stats:
+            try:
+                response = self._post_article(
+                    article, update_headers=update_headers)
+
+            except SocketException:
+                # The connection was lost part way through
+                stats.dropped += 1
+                stats.failed += 1
+                raise
+
+            if response.code in NNTPResponseCode.SUCCESS:
+                # Track what we posted
+                stats.posted += 1
+
+            else:
+                # Track what we couldn't post
+                stats.failed += 1
+
+        # Hand back what this post took
+        response.stats = stats
+        return response
+
+    def _post_article(self, article, update_headers=True):
+        """
+        Does the work of posting an article; see _post()
         """
 
         if not self.connected:
@@ -698,6 +739,9 @@ class NNTPConnection(SocketBase):
                 # uh-oh
                 return NNTPResponse(436, 'Transfer failed.')
             xfer_total_bytes += xfer_bytes
+
+            # Track what we sent
+            self._action.tx_bytes += xfer_bytes
 
         # Send our end of data marker (a line holding just a dot) and
         # capture our response; send() adds the line ending for us
@@ -1376,9 +1420,10 @@ class NNTPConnection(SocketBase):
                     'ARTICLE <%s> not found; checking backups.' % id,
                 )
                 return next((
-                    b.article for b in self._backups
-                    if b.stat(id=id, full=full, group=self.group_name)
-                    not in (None, False)), False)
+                    result for result in (
+                        b.stat(id=id, full=full, group=self.group_name)
+                        for b in self._backups)
+                    if result not in (None, False)), False)
 
             logger.warning('ARTICLE <%s> not found.' % id)
             return False
@@ -1391,9 +1436,10 @@ class NNTPConnection(SocketBase):
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
                 return next((
-                    b.article for b in self._backups
-                    if b.stat(id=id, full=full, group=self.group_name)
-                    not in (None, False)), None)
+                    result for result in (
+                        b.stat(id=id, full=full, group=self.group_name)
+                        for b in self._backups)
+                    if result not in (None, False)), None)
             return None
 
         # Return
@@ -1618,6 +1664,30 @@ class NNTPConnection(SocketBase):
     def _get(self, id, work_dir, decoders=None, group=None, max_bytes=0):
         """
         Download a specified message to the work_dir specified. This function
+        returns an NNTPArticle() object if it can; see _get_article() for
+        details.
+
+        The article returned carries the statistics of fetching it.
+        """
+        with self._recording() as stats:
+            article = self._get_article(
+                id=id,
+                work_dir=work_dir,
+                decoders=decoders,
+                group=group,
+                max_bytes=max_bytes,
+            )
+
+        if article is not None and article.stats is not stats:
+            # A backup server found it; add what we tried to what it took
+            article.stats += stats
+
+        return article
+
+    def _get_article(self, id, work_dir, decoders=None, group=None,
+                     max_bytes=0):
+        """
+        Download a specified message to the work_dir specified. This function
         returns an NNTPArticle() object if it can.
 
         None is returned if the content could not be retrieved due to an error
@@ -1689,9 +1759,17 @@ class NNTPConnection(SocketBase):
             if self._backups:
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
-                return next(
-                    (b.article for b in self._backups
-                        if b.get(id, work_dir, group) is not None), None)
+                article = next(
+                    (result for result in (
+                        b.get(id, work_dir, group=group)
+                        for b in self._backups)
+                     if result is not None), None)
+                if article is not None:
+                    # A backup server had it (and tracked fetching it)
+                    return article
+
+            # Track the articles the server doesn't have
+            self._action.missing += 1
             return None
 
         else:  # response.code in NNTPResponseCode.SERVER_ERROR:
@@ -1703,15 +1781,28 @@ class NNTPConnection(SocketBase):
             if self._backups:
                 # Try our backup servers in the sequential order they were
                 # added in; if they all fail; then we return None
-                return next(
-                    (b.article for b in self._backups
-                        if b.get(id, work_dir, group) is not None), None)
+                article = next(
+                    (result for result in (
+                        b.get(id, work_dir, group=group)
+                        for b in self._backups)
+                     if result is not None), None)
+                if article is not None:
+                    # A backup server had it (and tracked fetching it)
+                    return article
+
+            # Track the articles we couldn't fetch
+            self._action.failed += 1
             return None
 
         # If we reach here, we have data we can work with; build our article
         # using the content retrieved.
         article = NNTPArticle(id=id, work_dir=work_dir)
         article.load(response)
+
+        # Track what we fetched; the article carries the statistics of the
+        # whole fetch (not just the command above)
+        self._action.fetched += 1
+        article.stats = self._action
 
         # Return the content retrieved
         return article
@@ -1733,6 +1824,21 @@ class NNTPConnection(SocketBase):
         retries for commands that are safe to send twice (not POST).
         """
 
+        with self._recording() as stats:
+            response = self._send(
+                command, decoders=decoders, retries=retries, stats=stats)
+
+        # Hand back what this command took
+        response.stats = stats
+        return response
+
+    def _send(self, command, decoders=None, retries=0, stats=None):
+        """
+        Sends a command (retrying it if we can) and returns the response;
+        see send() for details.
+
+        - stats: the NNTPStatistics() our retries are tracked in
+        """
         if not self.connected:
             # Attempt to establish a connection
             if not self.connect():
@@ -1773,6 +1879,10 @@ class NNTPConnection(SocketBase):
             # what is left over on this one.
             attempt += 1
             wait = self.retry_wait * (2 ** (attempt - 1))
+
+            # Track our retries and the time we spend waiting on them
+            stats.retries += 1
+            stats.retry_wait += wait
             logger.warning(
                 'Received NNTP error %d (%s); retrying in %.1fs... (%d/%d)' % (
                     response.code, response.code_str, wait, attempt, retries))
@@ -1805,22 +1915,49 @@ class NNTPConnection(SocketBase):
         self._single_line = \
             SINGLE_LINE_COMMAND_RE.match(command) is not None
 
+        if command.strip() != '.':
+            # Track the commands we send (the dot ending a post is part of
+            # the article, not a command)
+            self._action.commands += 1
+
         try:
-            if not super().send(command + EOL):
+            sent = super().send(command + EOL)
+            if not sent:
                 return NNTPResponse(
                     NNTPResponseCode.BAD_RESPONSE,
                     'Invalid Command: "%s"' % command,
                 )
 
-            return self._recv(timeout=0, decoders=decoders)
+            # Track what we sent
+            self._action.tx_bytes += sent
+
+            response = self._recv(timeout=0, decoders=decoders)
 
         except SocketException:
             # Connection Lost
             self.close()
-            return NNTPResponse(
+            response = NNTPResponse(
                 NNTPResponseCode.CONNECTION_LOST,
                 'Connection Lost',
             )
+
+        # Track why the command failed (if it did)
+        if response.code == NNTPResponseCode.CONNECTION_LOST:
+            if response.code_str == 'Connection Stalled':
+                self._action.stalled += 1
+
+            elif response.code_str == 'Connection Too Slow':
+                self._action.too_slow += 1
+
+            else:
+                self._action.dropped += 1
+
+        elif response.code in (
+                NNTPResponseCode.FETCH_ERROR,
+                NNTPResponseCode.BAD_RESPONSE):
+            self._action.bad_replies += 1
+
+        return response
 
     def _recv(self, decoders=None, timeout=None):
         """ Receive data, return #bytes, done, skip
@@ -1945,6 +2082,10 @@ class NNTPConnection(SocketBase):
                 )
 
             last_data = now
+            if self._action is not None:
+                # Track what we receive
+                self._action.rx_bytes += len(data)
+
             if self.min_rate and self.slow_window:
                 # Check our average speed once every window
                 window_bytes += len(data)
@@ -2434,6 +2575,39 @@ class NNTPConnection(SocketBase):
 
         logger.debug('Returning Response %s' % response)
         return response
+
+    @contextmanager
+    def _recording(self):
+        """
+        Records the statistics of an action (a command, a fetch, a post)
+
+        - Yields the NNTPStatistics() object the action is tracked in.
+        - An action started inside another one (the commands making up a
+          post, logging in again during a retry) is added to the outer
+          action when it finishes.
+        - Outer actions are timed and added to our running total (stats).
+        """
+        # Remember the action we're inside of (if any)
+        outer = self._action
+        stats = self._action = NNTPStatistics()
+        started = stats.start()
+
+        try:
+            yield stats
+
+        finally:
+            # Go back to the outer action
+            self._action = outer
+
+            if outer is None:
+                # Only outer actions are timed; otherwise the time spent
+                # would be counted once for each level
+                stats.stop(started)
+                self.stats += stats
+
+            else:
+                stats.stop()
+                outer += stats
 
     def close(self):
         """

@@ -22,15 +22,24 @@ Some under the hood stuff that developers should appreciate about NewsReap are:
 __Note:__ This is a work in progress; a lot of what is documented here is what the final solution will be.  But it is definitely not there yet!  The backend is in good shape, but the CLI tool is what needs to be worked on next.
 
 ## Installation
-Make sure you configure your __config.yaml__ file (sample included) and place it in anyone of the following directories:
+NewsReap needs a __config.yaml__ file; it looks for one in the following places (in order):
 
 1. ~/.config/newsreap/config.yaml
 2. ~/newsreap/config.yaml
 3. ~/.newsreap/config.yaml
 4. /etc/newsreap/config.yaml
-5. /etc/config.yaml
+5. /etc/newsreap.yaml
 
-Assuming you configured the file correctly, you can now start interfacing with you're NNTP Provider.
+The easiest way to get started is to let NewsReap write one for you:
+```bash
+# Writes ~/.config/newsreap/config.yaml and creates the directories it uses
+nr --init
+
+# Or keep everything somewhere else
+nr --config ~/usenet/config.yaml --init
+```
+
+`--init` never overwrites or removes anything; it stops if a configuration file already exists. Fill in your server details and you can start interfacing with your NNTP Provider.
 
 NewsReap requires Python 3.13 or newer. Install it (and all of its dependencies) like so:
 ```bash
@@ -42,7 +51,7 @@ pip install .
 You can also run the tool straight from the source directory without installing it:
 ```bash
 pip install -r requirements.txt
-./bin/nr.py --help
+./bin/nr --help
 ```
 
 See [INSTALL.md](INSTALL.md) for the optional archive tools (7-Zip, rar and par2).

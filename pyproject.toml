@@ -91,10 +91,6 @@ newsreap = [
     "var/*",
 ]
 
-# The sample configuration file is installed for reference
-[tool.setuptools.data-files]
-"share/newsreap" = ["config.yaml"]
-
 [tool.setuptools.packages.find]
 where = [
     ".",

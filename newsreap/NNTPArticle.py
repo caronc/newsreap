@@ -33,6 +33,7 @@ from .NNTPGroup import NNTPGroup
 from .NNTPBinaryContent import NNTPBinaryContent
 from .NNTPAsciiContent import NNTPAsciiContent
 from .NNTPHeader import NNTPHeader
+from .NNTPStatistics import NNTPStatistics
 from .NNTPSettings import NNTP_EOL
 from .NNTPSettings import DEFAULT_TMP_DIR
 from .Utils import random_str
@@ -126,6 +127,9 @@ class NNTPArticle:
         # A hash of header entries
         self.header = NNTPHeader(work_dir=self.work_dir)
 
+        # What it took to fetch or post this article (see NNTPStatistics)
+        self.stats = NNTPStatistics()
+
         if isinstance(body, NNTPAsciiContent):
             self.body = body
         else:
@@ -157,6 +161,9 @@ class NNTPArticle:
 
             # Store decoded content
             self.decoded = response.decoded
+
+            # What it took to get this response
+            self.stats = response.stats
 
             # Store Header
             self.header = next(
@@ -200,6 +207,9 @@ class NNTPArticle:
 
             # Store decoded content
             self.decoded = response.decoded
+
+            # What it took to get the other article
+            self.stats = response.stats.copy()
 
         else:
             # Unsupported

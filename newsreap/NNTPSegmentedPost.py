@@ -28,6 +28,7 @@ from .NNTPGroup import NNTPGroup
 from .NNTPArticle import NNTPArticle
 from .NNTPArticle import DEFAULT_NNTP_SUBJECT
 from .NNTPArticle import DEFAULT_NNTP_POSTER
+from .NNTPStatistics import NNTPStatistics
 from .NNTPContent import NNTPContent
 from .NNTPBinaryContent import NNTPBinaryContent
 from .NNTPAsciiContent import NNTPAsciiContent
@@ -734,6 +735,14 @@ class NNTPSegmentedPost:
         """
         # Ensure our stream is open with read
         return iter(self.articles)
+
+    @property
+    def stats(self):
+        """
+        The statistics of every article in this post added together
+        """
+        return NNTPStatistics.combine(
+            article.stats for article in self.articles)
 
     def __len__(self):
         """

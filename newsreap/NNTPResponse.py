@@ -19,6 +19,7 @@ from newsreap.SortedSet import sortedset
 from datetime import datetime
 
 from .NNTPAsciiContent import NNTPAsciiContent
+from .NNTPStatistics import NNTPStatistics
 from .NNTPContent import NNTPContent
 
 
@@ -181,6 +182,9 @@ class NNTPResponse:
 
         # Contains a list of decoded content
         self.decoded = sortedset(key=lambda x: x.key())
+
+        # What it took to get this response (see NNTPStatistics)
+        self.stats = NNTPStatistics()
 
         # For iterating over decoded items
         self._iter = None

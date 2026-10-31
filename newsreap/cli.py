@@ -15,41 +15,41 @@
 # It handles most basic functionality and offers users the ability to
 # create their own plugins to enhance it's functionality further.
 #
-# Type nr.py --help for command help.
+# Type nr --help for command help.
 #
 # Successfully executed commands always return a zero (0) to the command
 # line, otherwise a non-zero value is returned which may or may not
 # identify details on the problem that occurred.
 #
-# Drop a configuration file in your home directory:
-#    mkdir -p ~/.config/newsreap
-#    cp config.yaml ~/.config/newsreap
+# Create a starting configuration file (and the directories it uses):
+#    nr --init
 #
-# Now update the configuration to reflect your NNTP Setup
+# Now update the configuration (~/.config/newsreap/config.yaml) to reflect
+# your NNTP Setup
 #
 
 # To initialize your workable database safely you might do the following:
 #
 #   # Initialize our database (only needs to be ran the first time)
-#   nr.py db init
+#   nr db init
 #
 #   # Poll the configured NNTP Servers in your config.yaml file for
 #   # all of the usenet groups supported.
-#   nr.py update groups
+#   nr update groups
 #
 #   # You can list them all now by typing:
-#   nr.py group list --all
+#   nr group list --all
 #
 #   # Aliases allow you to simplify group reference so you don't have to type
 #   # the whole name out each time. The below creates an alias called
 #   # 'a.b.test' and assciates it with the group alt.binaries.test.
-#   nr.py alias add test alt.binaries.test
+#   nr alias add test alt.binaries.test
 #
 #   # You can list the aliases and what they're associated with by typing
-#   nr.py alias list
+#   nr alias list
 #
 #   # You can also associate more then one group with the same alias
-#   nr.py alias add test alt.binaries.testing alt.binaries.test.files
+#   nr alias add test alt.binaries.testing alt.binaries.test.files
 #
 #   # Index all the groups defined by our alias.
 #   # the below only looks back untl Jan 1st, 2014
@@ -60,43 +60,43 @@
 #   # alternatively, if you insist on using the default SQLite database, then
 #   # consider setting up a RAM drive for faster processing of the table
 #   # writes.
-#   nr.py -vvv update search --date-from=2014 test
+#   nr -vvv update search --date-from=2014 test
 #
 #   # Index a from/to range if you want.
-#   nr.py -vvv update search --date-from=2013 --date-to=2014.02 test
+#   nr -vvv update search --date-from=2013 --date-to=2014.02 test
 #
 #   # Newsreap also maintains a watch list which is groups you just always
 #   # intend to index. It can be a conbination of aliases you set up, or
 #   # just a few individual groups. The below adds our 'test' group to
 #   # a watch list.
-#   nr.py group watch test
+#   nr group watch test
 #
 #   # We can now update our search by typing this following:
-#   nr.py -vvv update search --watched
+#   nr -vvv update search --watched
 
 #   # Index the entire group (the whole retention period you have to work with)
-#   nr.py group index test
+#   nr group index test
 #
 #   # Now that you've got content indexed, you can browse for things
 #   # You must specify an alias/group as your first argument
 #   # From there, you can specify your search arguments
-#   nr.py search test "keyword or string 1" "keyword or string 2" "etc..."
+#   nr search test "keyword or string 1" "keyword or string 2" "etc..."
 #
 #   # Getting to many hits?  Filter them; the below only shows entries
 #   # that scored higher then 30
-#   nr.py search test --score=30 "keyword or string 1" \
+#   nr search test --score=30 "keyword or string 1" \
 #                                   "keyword or string 2" "etc..."
 #
 #   # You can do ranges too
 #   # The below only shows entries that have scored between -90 and 30
-#   nr.py search test --score=-90-30 "keyword or string 1" \
+#   nr search test --score=-90-30 "keyword or string 1" \
 #                                       "keyword or string 2" "etc..."
 #
 #   # Want to elminate crap from your database that you know is just
 #   # taking up useless junk (and space, and thus speed because it's indexed):
 #   # use the delete option; it takes all the same parameters and options the
 #   # search function does (--score, etc).
-#   nr.py delete "keyword or string 1" "etc"
+#   nr delete "keyword or string 1" "etc"
 #
 #  If you setup you filters right, you can download content by group or
 #  single files.  Just pay attention to the id on the left (in your search)
@@ -117,6 +117,8 @@ from newsreap.NNTPSettings import CLI_PLUGINS_MAPPING
 # Import our file based paths
 from newsreap.NNTPSettings import DEFAULT_CLI_PLUGIN_DIRECTORIES
 from newsreap.NNTPSettings import NNTPSettings
+from newsreap.NNTPSettings import create_config
+from newsreap.NNTPSettings import DEFAULT_CONFIG_FILE_PATHS
 from newsreap.NNTPManager import NNTPManager
 from newsreap.Utils import scan_pylib
 from newsreap.Utils import load_pylib
@@ -128,15 +130,21 @@ logger = logging.getLogger(NEWSREAP_CLI)
 
 
 # General Options
-@click.group()
+@click.group(invoke_without_command=True, no_args_is_help=True)
 @click.option('--config', '-c',
               help='Specify configuration file.')
 @click.option('--verbose', '-v', count=True,
               help='Verbose mode.')
 @click.option('--noprompt', '-y', is_flag=True,
               help='Assume `yes` to all prompts.')
+@click.option('--statistics', is_flag=True,
+              help='Show a summary of transfer statistics (speeds, '
+                   'articles, retries) once the command finishes.')
+@click.option('--init', is_flag=True,
+              help='Create a starting configuration file (at --config if '
+                   'given) along with the directories it uses.')
 @click.pass_context
-def cli(ctx, config, verbose, noprompt):
+def cli(ctx, config, verbose, noprompt, statistics, init):
     ctx.obj['verbose'] = verbose
 
     # Add our handlers at the parent level
@@ -147,6 +155,44 @@ def cli(ctx, config, verbose, noprompt):
     set_verbosity(verbose)
 
     ctx.obj['noprompt'] = noprompt
+
+    if init:
+        try:
+            path = create_config(config)
+
+        except FileExistsError as e:
+            # Tell the user where the configuration we found lives
+            logger.error(
+                "A configuration file already exists at '%s'; nothing was "
+                "changed." % e.args[0])
+
+            if config is None:
+                # It wasn't the file they asked for, so make it clear this
+                # is the one NewsReap is reading today
+                logger.error(
+                    'NewsReap already uses that file; edit it, or use '
+                    '--config to create one somewhere else.')
+            ctx.exit(1)
+
+        except OSError as e:
+            logger.error('Could not create the configuration: %s' % e)
+            ctx.exit(1)
+
+        # Files outside of our usual locations have to be pointed to
+        nr = 'nr' if path in DEFAULT_CONFIG_FILE_PATHS \
+            else "nr --config '%s'" % path
+
+        click.echo("Created '%s'." % path)
+        click.echo('Next steps:')
+        click.echo('  1. Edit it and fill in your server details')
+        click.echo('  2. Prepare the database:     %s db init' % nr)
+        click.echo('  3. Fetch the group listing:  %s update groups' % nr)
+        ctx.exit(0)
+
+    if ctx.invoked_subcommand is None:
+        # Nothing to do
+        click.echo(ctx.get_help())
+        ctx.exit(0)
 
     if config is not None and not isfile(config):
         logger.error(
@@ -166,6 +212,23 @@ def cli(ctx, config, verbose, noprompt):
     ctx.obj['NNTPManager'] = NNTPManager(
         settings=ctx.obj['NNTPSettings'],
     )
+
+    if statistics:
+        # Show what our connections did once the command is done (even
+        # if it ends early)
+        ctx.call_on_close(lambda: show_statistics(ctx.obj['NNTPManager']))
+
+
+def show_statistics(manager):
+    """
+    Prints a summary of the transfer statistics of all of our connections
+
+    It goes to stderr so the command's own output can still be piped.
+    """
+    click.echo('', err=True)
+    click.secho('Statistics', bold=True, err=True)
+    click.echo('-' * 40, err=True)
+    click.echo(manager.stats.summary(), err=True)
 
 # Dynamically Build CLI List; This is done by iterating through
 # plugin directories and looking for CLI_PLUGINS_MAPPING
