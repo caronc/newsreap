@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Simplifies communication to and from an NNTP Server
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -25,7 +23,7 @@ from os.path import abspath
 from os.path import expanduser
 from io import BytesIO
 from datetime import datetime
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 import weakref
 
 from .NNTPHeader import NNTPHeader
@@ -70,16 +68,18 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 # Defines the end of data delimiter
 EOL = '\r\n'
 EOD = '\r\n.'
-EOL_RE = re.compile(r'([\r]?\n)')
-EOD_RE = re.compile(r'(\.([\r]?\n))$')
+
+# These are applied to the raw (bytes) data read from the server
+EOL_RE = re.compile(br'([\r]?\n)', re.ASCII)
+EOD_RE = re.compile(br'(\.([\r]?\n))$', re.ASCII)
 
 # Splitting doesn't work well with the parenthesis
 # the below fixes this
-EOLS_RE = re.compile(r'[\r]?\n')
+EOLS_RE = re.compile(br'[\r]?\n', re.ASCII)
 
 # When data compression in in play, the following delimiter is used
 # to deliminate the chunks of compressed data
-GZIP_EOL_RE = re.compile(r'\.([\r]?\n)$')
+GZIP_EOL_RE = re.compile(br'\.([\r]?\n)$', re.ASCII)
 
 # How many consecutive misses in a row do we allow while trying to retrieve
 # historic messages (based on time) do we allow before assuming that we've
@@ -91,32 +91,32 @@ NNTP_FETCH_BY_DATE_MAX_MISSES = 20
 # All responses are handled from usenet via the following:
 NNTP_RESPONSE_RE = re.compile(
     r'^[^0-9]*(?P<code>[1-9][0-9]{2})[\s:]*(?P<desc>.*[^\s])\s*$',
-    re.MULTILINE,
+    re.MULTILINE | re.ASCII,
 )
 
 # We use this check when send() is called so that we can prevent
 # personal content from being sent to log files
 NNTP_AUTHINFO_CHECK = re.compile(
     r'^AUTHINFO[\s]+(?P<key>[^\s]+)[\s]+(?P<value>.+)[\s]*$',
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 # Group Response (when we switch to a group)
 NNTP_GROUP_RESPONSE_RE = re.compile(
     r'(?P<count>[0-9]+)\s+(?P<low>[0-9]+)\s+' +
-    r'(?P<high>[0-9]+)\s+(?P<name>.*[^\s]*[^.])(\.|\s)*$',
+    r'(?P<high>[0-9]+)\s+(?P<name>.*[^\s]*[^.])(\.|\s)*$', re.ASCII,
 )
 
 # Scans against the status message
 GZIP_COMPRESS_RE = re.compile(
     r'.*COMPRESS\s*=\s*GZIP.*',
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 # Scans against the status message to detect if posting is allowed
 POSTING_OK_RE = re.compile(
     r'.*POSTING OK.*',
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 # Ports used by NNTP Servers
@@ -162,9 +162,8 @@ class NNTPConnection(SocketBase):
           for security reasons; but can support SSLv3 too if the remote
           server can't handle TLSv1).
 
-        - It uses btree+ to store all of it's fetched results using a
-          fantastic addon called blist which never maded it into
-          python (https://www.python.org/dev/peps/pep-3128/)
+        - It stores all of it's fetched results in sorted containers
+          (sortedcontainers) so they can be searched quickly.
 
         - can seek_by_date() using a recusive binary style searching
           which can narrow in great time!
@@ -263,27 +262,20 @@ class NNTPConnection(SocketBase):
             kwargs['hooks'] = hooks
 
         # Initialize the Socket Base Class
-        super(NNTPConnection, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         # Store the default encoding
         self.encoding = encoding
         if not self.encoding:
             self.encoding = NNTP_DEFAULT_ENCODING
 
-        # SSL Does not like unicode characters, so we convert the content
-        # to a characterset so we don't get any handshaking errors
-        if isinstance(username, unicode):
-            username = username.encode(self.encoding)
+        # Credentials are kept as text; everything sent to the server is
+        # encoded using our character set
         self.username = username
-
-        # SSL Does not like unicode characters, so we convert the content
-        # to a characterset so we don't get any handshaking errors
-        if isinstance(password, unicode):
-            password = password.encode(self.encoding)
         self.password = password
 
         # Attempt to gzip the connection
-        if isinstance(iostream, basestring):
+        if isinstance(iostream, str):
             try:
                 self._iostream = iostream.lower()
                 if self._iostream not in NNTP_SUPPORTED_IO_STREAMS:
@@ -464,7 +456,7 @@ class NNTPConnection(SocketBase):
         """
 
         try:
-            if not super(NNTPConnection, self).connect(*args, **kwargs):
+            if not super().connect(*args, **kwargs):
                 # Return Fail
                 return False
 
@@ -662,7 +654,11 @@ class NNTPConnection(SocketBase):
         # If we reach here we're read to go
         xfer_total_bytes = 0
         for chunk in post_iter:
-            xfer_bytes = super(NNTPConnection, self).send(chunk)
+            if isinstance(chunk, str):
+                # Headers are text; encode them using our character set
+                chunk = chunk.encode(self.encoding)
+
+            xfer_bytes = super().send(chunk)
             if xfer_bytes != len(chunk):
                 # uh-oh
                 return NNTPResponse(436, 'Transfer failed.')
@@ -692,10 +688,6 @@ class NNTPConnection(SocketBase):
             if not self.connect():
                 logger.error('Could not establish a connetion to NNTP Server.')
                 return None
-
-        if isinstance(name, unicode):
-            # content should be byte encoded
-            name = name.encode(self.encoding)
 
         response = self.send('GROUP %s' % name)
 
@@ -766,10 +758,10 @@ class NNTPConnection(SocketBase):
         if not filters:
             filters = tuple()
 
-        elif isinstance(filters, basestring):
+        elif isinstance(filters, str):
             filters = (filters,)
 
-        elif isinstance(filters, re._pattern_type):
+        elif isinstance(filters, re.Pattern):
             filters = (filters,)
 
         elif not isinstance(filters, (tuple, list)):
@@ -778,14 +770,14 @@ class NNTPConnection(SocketBase):
         # Iterate over each item in the list and compile it now
         _filters = []
         for _filter in filters:
-            if isinstance(_filter, re._pattern_type):
+            if isinstance(_filter, re.Pattern):
                 _filters.append(_filter)
 
-            elif isinstance(_filter, basestring):
+            elif isinstance(_filter, str):
                 try:
                     _filter = r'^.*%s.*$' % re.escape(_filter)
                     _filters.append(
-                        re.compile(_filter, flags=re.IGNORECASE),
+                        re.compile(_filter, flags=re.IGNORECASE | re.ASCII),
                     )
                     logger.debug('Compiled group regex "%s"' % _filter)
 
@@ -947,7 +939,8 @@ class NNTPConnection(SocketBase):
         filter_count = tail - head
 
         # Get the middle
-        start = head + (filter_count / 2) - (NNTP_FETCH_BY_DATE_MAX_MISSES / 2)
+        start = head + (filter_count // 2) \
+            - (NNTP_FETCH_BY_DATE_MAX_MISSES // 2)
         end = start + min(NNTP_FETCH_BY_DATE_MAX_MISSES, filter_count)
 
         response = self.xover(
@@ -973,10 +966,10 @@ class NNTPConnection(SocketBase):
             _refdate = refdate.strftime('%Y%m%d%H%M%S:0000000000')
 
             # Get keys
-            # (this returns an blist.sortedset() object): Big O(n)
+            # (this returns a sorted list of keys): Big O(n)
             # This is 'very' fast operation since we're not dealing with a
             # dict()
-            _refkeys = response.keys()
+            _refkeys = list(response.keys())
 
             # logger.debug('total=%d, left=%s, right=%s, ref=%s' % (
             #    end-start,
@@ -1010,7 +1003,7 @@ class NNTPConnection(SocketBase):
                 while result < 0:
                     # SHIFT LEFT
                     logger.debug('SHIFT LEFT')
-                    tail -= ((tail - end) / 2)
+                    tail -= ((tail - end) // 2)
                     if tail - end > 0:
                         result = self._seek_by_date(refdate, end - 1, tail)
                     else:
@@ -1034,7 +1027,7 @@ class NNTPConnection(SocketBase):
                 while result < 0:
                     # SHIFT RIGHT
                     logger.debug('SHIFT RIGHT')
-                    head += ((start - head) / 2)
+                    head += ((start - head) // 2)
                     if start - head > 1:
                         result = self._seek_by_date(refdate, head, start)
                     else:
@@ -1143,7 +1136,7 @@ class NNTPConnection(SocketBase):
                   article_no: 12345678,
                   poster: u'the poster's information',
                   date: datetime() object,
-                  subject: u'a subject line in unicode',
+                  subject: 'a subject line',
                   size: 2135  // the message size in bytes
                   lines: 53   // the number of lines
                   group: u'alt.group.one'
@@ -1422,7 +1415,7 @@ class NNTPConnection(SocketBase):
             # Default
             work_dir = self.work_dir
 
-        if isinstance(id, basestring):
+        if isinstance(id, str):
             # We're dealing a Message-ID (Article-ID)
             return self._get(
                 id=id,
@@ -1755,7 +1748,7 @@ class NNTPConnection(SocketBase):
             # Soft reset in preparation for returned results
             self._soft_reset()
 
-            if not super(NNTPConnection, self).send(command + EOL):
+            if not super().send(command + EOL):
                 break
 
             try:
@@ -1928,7 +1921,8 @@ class NNTPConnection(SocketBase):
 
                 # Only the first time do we remove the first entry
                 # because this is our header
-                match = NNTP_RESPONSE_RE.match(data.strip())
+                match = NNTP_RESPONSE_RE.match(
+                    data.decode(self.encoding).strip())
                 if match:
                     # Generate Reponse code
                     self.last_resp_code = int(match.group('code'))
@@ -2156,7 +2150,7 @@ class NNTPConnection(SocketBase):
                         break
 
                     chunk_ptr = self._buffer.seek(ref_ptr, SEEK_SET)
-                    offset = self._buffer.read(chunk_size).rfind('\n')
+                    offset = self._buffer.read(chunk_size).rfind(b'\n')
                     if offset >= 0:
                         # We found the new line; safe our offset and break
                         tail_ptr = offset + chunk_ptr
@@ -2377,13 +2371,13 @@ class NNTPConnection(SocketBase):
             logger.debug('Closing Connection')
             try:
                 # Prevent Recursion by calling parent send()
-                super(NNTPConnection, self).send('QUIT' + EOL)
+                super().send('QUIT' + EOL)
             except:
                 pass
 
         # SocketBase close() tries to grab the last
         # content on the socket before closing it
-        return super(NNTPConnection, self).close()
+        return super().close()
 
     def _soft_reset(self):
         """
@@ -2438,10 +2432,6 @@ class NNTPConnection(SocketBase):
 
     def __str__(self):
         return '%s://%s@%s:%d' % (
-            self.protocol, self.username, self.host, self.port)
-
-    def __unicode__(self):
-        return u'%s://%s@%s:%d' % (
             self.protocol, self.username, self.host, self.port)
 
     def __repr__(self):

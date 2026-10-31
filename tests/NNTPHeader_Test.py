@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTP Header Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -52,7 +50,7 @@ class NNTPHeader_Test(TestBase):
         assert len(hdr) == 1
 
         # Confirm that our key is infact stored as Message-ID
-        assert hdr.keys()[0] == 'Message-ID'
+        assert list(hdr.keys())[0] == 'Message-ID'
 
         # Multiple ways of accessing the same key since each NNTP Server can
         # tend to store header information slightly different then another
@@ -66,7 +64,7 @@ class NNTPHeader_Test(TestBase):
         assert len(hdr) == 1
 
         # Confirm that our key is still 'just' Message-ID
-        assert hdr.keys()[0] == 'Message-ID'
+        assert list(hdr.keys())[0] == 'Message-ID'
 
         # Now since we actually look for -id and make sure we change it
         # to -ID, we just want to verfy different variations of this won't
@@ -86,8 +84,8 @@ class NNTPHeader_Test(TestBase):
         # gets stored with an X- infront of it
         assert ('My-Identifier' in hdr)
         assert ('X-My-Identifier' in hdr)
-        assert (hdr.keys()[0] != 'My-Identifier')
-        assert (hdr.keys()[0] == 'X-My-Identifier')
+        assert (list(hdr.keys())[0] != 'My-Identifier')
+        assert (list(hdr.keys())[0] == 'X-My-Identifier')
 
     def test_print_ordering(self):
         # Initialize Header
@@ -103,8 +101,8 @@ class NNTPHeader_Test(TestBase):
 
         # get our results
         results = str(hdr)
-        for line in re.split('[\r\n]+', results):
-            key = re.split(':', line)[0]
+        for line in re.split('[\r\n]+', results, flags=re.ASCII):
+            key = re.split(':', line, flags=re.ASCII)[0]
 
             # Get next expected entry even if it means
             # iterating a bit further down the list
@@ -133,7 +131,7 @@ class NNTPHeader_Test(TestBase):
         hdrseq = iter(HEADER_PRINT_SEQUENCE)
 
         for line in it:
-            key = re.split(':', line.strip())[0]
+            key = re.split(':', line.strip(), flags=re.ASCII)[0]
 
             if not key:
                 # we got our EOL entry
@@ -159,3 +157,21 @@ class NNTPHeader_Test(TestBase):
         except StopIteration:
             assert(True)
 
+    def test_copy_returns_a_new_header(self):
+        """
+        copy() returns an independent NNTPHeader with the same entries
+        """
+        hdr = NNTPHeader(work_dir=self.tmp_dir)
+        hdr['Subject'] = 'A subject'
+        hdr['From'] = 'l2g@nuxref.com'
+
+        copied = hdr.copy()
+        assert isinstance(copied, NNTPHeader)
+        assert copied is not hdr
+        assert copied.items() == hdr.items()
+        assert copied.key() == hdr.key()
+        assert list(copied.post_iter()) == list(hdr.post_iter())
+
+        # Changing the copy leaves the original alone
+        copied['Subject'] = 'Another subject'
+        assert hdr['Subject'] == 'A subject'

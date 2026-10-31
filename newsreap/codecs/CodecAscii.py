@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A dummy decoder to handle just raw writes used to represent a message body
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -23,13 +21,13 @@ from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Defines the new line delimiter
-EOL = '\r\n'
+EOL = b'\r\n'
 
 # The following is used to determine we're not dealing with any
 # binary characters on the line
 ASCII_CHARACTERS = bytearray([7, 8, 9, 10, 12, 13, 27]) + \
-        bytearray(range(0x20, 0x7f)) + \
-        bytearray(range(0x80, 0x100))
+        bytearray(list(range(0x20, 0x7f))) + \
+        bytearray(list(range(0x80, 0x100)))
 
 
 class CodecAscii(CodecBase):
@@ -39,7 +37,7 @@ class CodecAscii(CodecBase):
     """
 
     def __init__(self, descriptor=None, work_dir=None, *args, **kwargs):
-        super(CodecAscii, self).__init__(descriptor=descriptor,
+        super().__init__(descriptor=descriptor,
             work_dir=work_dir, *args, **kwargs)
 
         # Our Ascii Object we can reference while we store our
@@ -60,8 +58,12 @@ class CodecAscii(CodecBase):
         # from a common line
 
         """
-        is_binary = lambda bytes: bool(bytes.translate(None, line))
-        if is_binary:
+        if isinstance(line, str):
+            line = line.encode('utf-8')
+
+        # Anything left over after removing the printable characters means
+        # the line holds binary data
+        if line.translate(None, ASCII_CHARACTERS):
             # We're dealing with binary data
             return None
 
@@ -101,7 +103,7 @@ class CodecAscii(CodecBase):
         """
         Reset our decoded content
         """
-        super(CodecAscii, self).reset()
+        super().reset()
 
         # Reset our decoded content
         self.decoded = NNTPAsciiContent(

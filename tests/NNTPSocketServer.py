@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 #
 # This is a simple dumb NNTP Server that is useful for unit testing.
 #
@@ -62,52 +61,52 @@ NNTP_TEST_VAR_PATH = join(dirname(abspath(__file__)), 'var')
 DEFAULT_EMPTY_FILE = join(NNTP_TEST_VAR_PATH, 'emptyfile.msg')
 
 # Article ID
-ARTICLE_ID_RE = re.compile(r'\s*<*\s*(?P<id>[^>]+)>?.*')
+ARTICLE_ID_RE = re.compile(r'\s*<*\s*(?P<id>[^>]+)>?.*', re.ASCII)
 
 # All of the default NNTP Responses are defined here by their
 # compiled regular expression
 NNTP_DEFAULT_MAP = {
-    re.compile('AUTHINFO USER valid'): {
+    re.compile('AUTHINFO USER valid', re.ASCII): {
         'response': '381 PASS required',
     },
-    re.compile('AUTHINFO PASS valid'): {
+    re.compile('AUTHINFO PASS valid', re.ASCII): {
         'response': '281 Ok'
     },
-    re.compile('XFEATURE COMPRESS GZIP'): {
+    re.compile('XFEATURE COMPRESS GZIP', re.ASCII): {
         'response': '290 GZIP Feature enabled',
     },
-    re.compile('LIST ACTIVE'): {
+    re.compile('LIST ACTIVE', re.ASCII): {
         'response': '215 Newsgroups in form "group high low flags".',
         'file': join(NNTP_TEST_VAR_PATH, 'group.list'),
     },
-    re.compile('GROUP alt.binaries.l2g.znb'): {
+    re.compile('GROUP alt.binaries.l2g.znb', re.ASCII): {
         'response': '211 709278590 69039573 778318162 alt.binaries.l2g.znb',
     },
-    re.compile('HEAD (?P<id>[^ \t\r\n]+).*$'): {
+    re.compile('HEAD (?P<id>[^ \t\r\n]+).*$', re.ASCII): {
         'stat': 'id',
     },
-    re.compile('STAT (?P<id>[^ \t\r\n]+).*$'): {
+    re.compile('STAT (?P<id>[^ \t\r\n]+).*$', re.ASCII): {
         'stat': 'id',
     },
-    re.compile('ARTICLE (?P<id>[^ \t\r\n]+).*$'): {
+    re.compile('ARTICLE (?P<id>[^ \t\r\n]+).*$', re.ASCII): {
         'article': 'id',
     },
-    re.compile('BODY (?P<id>[^ \t\r\n]+).*$'): {
+    re.compile('BODY (?P<id>[^ \t\r\n]+).*$', re.ASCII): {
         'article': 'id',
     },
-    re.compile('GROUP (?P<id>[^ \t\r\n]+).*$'): {
+    re.compile('GROUP (?P<id>[^ \t\r\n]+).*$', re.ASCII): {
         'group': 'id',
     },
-    re.compile('^QUIT'): {
+    re.compile('^QUIT', re.ASCII): {
         'response': '200 See you later!',
         # Reset our current state of the map
         'reset': True,
     },
 }
 
-# Delimiters
-NNTP_EOL = '\r\n'
-NNTP_EOD = '.\r\n'
+# Delimiters (sent as raw bytes over the socket)
+NNTP_EOL = b'\r\n'
+NNTP_EOD = b'.\r\n'
 
 
 class NNTPClient(SocketBase):
@@ -124,7 +123,7 @@ class NNTPClient(SocketBase):
         NNTPClient initialization
         """
         # Initialize the Socket Base Class
-        super(NNTPClient, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def put(self, line, eol=True):
         """
@@ -133,6 +132,9 @@ class NNTPClient(SocketBase):
         You can directly interface through here, or you can use the
         get_client() to spin an actual a TCP/IP Client
         """
+
+        if isinstance(line, str):
+            line = line.encode('utf-8')
 
         if eol:
             line = line + NNTP_EOL
@@ -151,7 +153,7 @@ class NNTPClient(SocketBase):
         """
         try:
             # Prevent Recursion by calling parent send()
-            super(NNTPClient, self).send('QUIT' + NNTP_EOL)
+            super().send(b'QUIT' + NNTP_EOL)
         except:
             # well.. we tried at least
             pass
@@ -270,11 +272,11 @@ class NNTPSocketServer(threading.Thread):
 
         # Process over-ride map
         self._maplock.acquire()
-        override = self.override_map.items()
+        override = list(self.override_map.items())
         self._maplock.release()
 
         response = None
-        for k, v in override + NNTP_DEFAULT_MAP.items():
+        for k, v in override + list(NNTP_DEFAULT_MAP.items()):
             result = k.search(line)
             if result:
                 # we matched
@@ -363,7 +365,7 @@ class NNTPSocketServer(threading.Thread):
                             # match since there is no join_group
                             # requirement
                             found = False
-                            for g in self.fetch_map.iterkeys():
+                            for g in self.fetch_map.keys():
                                 entry = self.fetch_map[g].get(
                                     str(_result.group('id')),
                                     False,
@@ -387,7 +389,7 @@ class NNTPSocketServer(threading.Thread):
                                 response = '423 No article with that number'
                                 break
 
-                    if isinstance(entry, basestring):
+                    if isinstance(entry, str):
                         response = '230 Retrieving article.'
                         # Store our file we mapped to
                         v['file'] = entry
@@ -402,10 +404,11 @@ class NNTPSocketServer(threading.Thread):
                     try:
                         # Read in a file and send it
                         fd = open(v['file'], 'rb')
-                        response += NNTP_EOL + fd.read()
+                        response = response.encode('utf-8') + NNTP_EOL + \
+                            fd.read()
                         fd.close()
 
-                    except IOError:
+                    except OSError:
                         response = "501 file '%s' is missing." % v['file']
                         break
 
@@ -418,11 +421,12 @@ class NNTPSocketServer(threading.Thread):
                         if response is None:
                             response = '230 Retrieving article.'
 
-                        response += " [COMPRESS=GZIP]" + NNTP_EOL + \
-                            compress(fd.read())
+                        response = \
+                            (response + " [COMPRESS=GZIP]").encode('utf-8') \
+                            + NNTP_EOL + compress(fd.read())
                         fd.close()
 
-                    except IOError:
+                    except OSError:
                         response = "502 file '%s' is missing." % v['file']
                         break
 
@@ -431,6 +435,9 @@ class NNTPSocketServer(threading.Thread):
 
         if response is None:
             response = "503 No handler for the request"
+
+        if isinstance(response, str):
+            response = response.encode('utf-8')
 
         return response
 
@@ -459,7 +466,7 @@ class NNTPSocketServer(threading.Thread):
             if self._has_yenc:
                 welcome_str += " (yEnc enabled)"
             try:
-                self.socket.send(welcome_str + NNTP_EOD)
+                self.socket.send(welcome_str.encode('utf-8') + NNTP_EOD)
             except:
                 # connection lost
                 # print('DEBUG: SOCKET ERROR DURING SEND (EXITING)....')
@@ -519,8 +526,8 @@ class NNTPSocketServer(threading.Thread):
                 continue
             data.seek(d_ptr)
 
-            # Acquire our line
-            line = data.readline()
+            # Acquire our line (commands are matched as text)
+            line = data.readline().decode('latin-1')
 
             # Build our response
             response = self.put(line)
@@ -615,7 +622,7 @@ class NNTPSocketServer(threading.Thread):
         """
         Maps an article (and groups) article_id to a filepath
         """
-        if isinstance(groups, basestring):
+        if isinstance(groups, str):
             # expect a list of groups, but allow single
             # entries too; just convert them before
             # moving on

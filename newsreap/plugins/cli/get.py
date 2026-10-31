@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap NNTP Get CLI Plugin
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -52,10 +50,10 @@ NEWSREAP_CLI_PLUGINS = 'get'
 
 @click.command()
 @click.pass_obj
-@click.option('--group', type=basestring,
+@click.option('--group', type=str,
               default=None,
               help="Identify the group to reference")
-@click.option('--workdir', type=basestring, default=None,
+@click.option('--workdir', type=str, default=None,
               help="A directory we can manage our fetched content from.")
 @click.option('--headers', default=False, flag_value=True,
               help="Return header details")
@@ -125,7 +123,7 @@ def get(ctx, group, workdir, headers, inspect, sources, hooks):
                 continue
 
         # Print our response
-        print(gf.str(headers=headers, inspect=inspect))
+        print((gf.str(headers=headers, inspect=inspect)))
 
     # return our return code
     exit(return_code)

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A threaded wrapper to subprocess to prevent blocking
 #
 # Copyright (C) 2016 Chris Caron <lead2gold@gmail.com>
@@ -21,15 +19,17 @@ import signal
 import subprocess
 import re
 from os import kill
+from os import fsdecode
 from os import SEEK_SET
 
-from StringIO import StringIO
+from io import StringIO
 
 from gevent import Greenlet
 from gevent.event import Event
 
-from datetime import datetime
 from datetime import timedelta
+
+from newsreap.Utils import utcnow
 
 # Logging
 import logging
@@ -37,10 +37,10 @@ from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 # Regular Expression for the extraction of data
-NEW_LINE_RE = re.compile(r'\r*\n')
+NEW_LINE_RE = re.compile(r'\r*\n', re.ASCII)
 
 
-class ReturnCode():
+class ReturnCode:
     """
     Return codes when errors occur
     """
@@ -119,7 +119,7 @@ class SubProcess(Greenlet):
 
         else:
             # Calculate Elapsed Time
-            elapsed_time = datetime.utcnow() - self._execution_begin
+            elapsed_time = utcnow() - self._execution_begin
 
         elapsed_time = (elapsed_time.days * 86400) \
                          + elapsed_time.seconds \
@@ -144,7 +144,7 @@ class SubProcess(Greenlet):
         )
 
         # Calculate Current Time
-        self._execution_begin = datetime.utcnow()
+        self._execution_begin = utcnow()
 
         # Store some information
         self._pid = p1.pid
@@ -157,22 +157,25 @@ class SubProcess(Greenlet):
             # Head of Poll Loop
 
             if self._timeout and \
-               datetime.utcnow() >= max_wait_time:
+               utcnow() >= max_wait_time:
                 # Process aborted (took too long)
                 try:
                     kill(self._pid, signal.SIGKILL)
                 except:
                     pass
 
+                # Collect the stopped process so it isn't left behind
+                p1.wait()
+
                 # Force bad return code
                 self._returncode = ReturnCode.Timeout
 
                 # Set our elapsed time to now
-                self._execution_finish = datetime.utcnow()
+                self._execution_finish = utcnow()
 
                 # Retrieve stdout/stderr
-                self._stdout = StringIO(p1.stdout.read())
-                self._stderr = StringIO(p1.stderr.read())
+                self._stdout = StringIO(fsdecode(p1.stdout.read()))
+                self._stderr = StringIO(fsdecode(p1.stderr.read()))
 
                 # Make sure no one uses the PID anymore
                 self._pid = None
@@ -191,6 +194,9 @@ class SubProcess(Greenlet):
             except:
                 pass
 
+            # Collect the stopped process so it isn't left behind
+            p1.wait()
+
             # Force bad return code
             self._returncode = ReturnCode.Aborted
 
@@ -199,11 +205,11 @@ class SubProcess(Greenlet):
             self._returncode = p1.returncode
 
         # Execution Completion Time
-        self._execution_finish = datetime.utcnow()
+        self._execution_finish = utcnow()
 
         # Retrieve stdout/stderr
-        self._stdout = StringIO(p1.stdout.read())
-        self._stderr = StringIO(p1.stderr.read())
+        self._stdout = StringIO(fsdecode(p1.stdout.read()))
+        self._stderr = StringIO(fsdecode(p1.stderr.read()))
 
         # Make sure no one uses the PID anymore
         self._pid = None
@@ -243,7 +249,7 @@ class SubProcess(Greenlet):
         value means there was a failure.
 
         """
-        return self._returncode is 0
+        return self._returncode == 0
 
     def stdout(self, as_list=True):
         """
@@ -251,7 +257,7 @@ class SubProcess(Greenlet):
         lines into a list object
         """
         # Ensure we're at the head of our buffer
-        self._stdout.seek(0L, SEEK_SET)
+        self._stdout.seek(0, SEEK_SET)
 
         if as_list:
             return NEW_LINE_RE.split(self._stdout.read())
@@ -264,7 +270,7 @@ class SubProcess(Greenlet):
 
         """
         # Ensure we're at the head of our buffer
-        self._stderr.seek(0L, SEEK_SET)
+        self._stderr.seek(0, SEEK_SET)
 
         if as_list:
             return NEW_LINE_RE.split(self._stderr.read())

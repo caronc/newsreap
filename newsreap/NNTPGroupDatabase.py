@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A common Group Database management class used by SQLAlchemy
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -42,7 +40,7 @@ class NNTPGroupDatabase(Database):
         """
         Initialize NNTP Group/Article Database
         """
-        super(NNTPGroupDatabase, self).__init__(
+        super().__init__(
             base=ObjectBase,
             vsp=Vsp,
             engine=engine,

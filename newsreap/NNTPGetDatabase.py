@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A common NNTP Retrieval Database management class used by SQLAlchemy
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -33,7 +31,7 @@ class NNTPGetDatabase(Database):
         """
         Initialize NNTP Retrieval Database
         """
-        super(NNTPGetDatabase, self).__init__(
+        super().__init__(
             base=ObjectBase,
             vsp=Vsp,
             engine=engine,

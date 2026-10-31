@@ -2,10 +2,14 @@ include LICENSE
 include README.md
 include INSTALL.md
 include HISTORY.rst
+include config.yaml
+include pyproject.toml
+include tox.ini
 include requirements.txt
-include testing.requirements.txt
-include minimum.requirements.txt
+include dev-requirements.txt
+recursive-include bin *
 recursive-include docs *
-recursive-include test *
+recursive-include tests *
 global-exclude *.pyc
+global-exclude *.pyo
 global-exclude __pycache__

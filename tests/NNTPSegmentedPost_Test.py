@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTPSegmentedPost Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -157,12 +155,12 @@ class NNTPSegmentedPost_Test(TestBase):
                 r'^"My Test \-newsreap [0-9]{8}" - '
                 r'"(?P<fname>file\.r[0-9]{2})" yEnc '
                 r'\((?P<index>[0-9])/(?P<count>[0-9])\)$',
-                article.subject,
+                article.subject, re.ASCII,
             )
 
             poster_re = re.match(
                 re.escape('<noreply@newsreap.com>'),
-                article.poster,
+                article.poster, re.ASCII,
             )
 
             # We should have translated our content properly

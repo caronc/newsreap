@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NNTP Server I/O Streams
 #
 # Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
@@ -25,7 +23,7 @@
 # Define the default encoding to use on NNTP I/O Streams
 NNTP_DEFAULT_ENCODING = 'ISO-8859-1'
 
-class NNTPIOStream(object):
+class NNTPIOStream:
     """
     Defines the supported NNTP Input/Output Streams
 

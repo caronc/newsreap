@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to test the Utils functions
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -23,7 +21,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import abspath
 from os.path import dirname
 from os.path import basename
@@ -158,7 +156,7 @@ class Utils_Test(TestBase):
         k_iter = chain(mime_keys, filesys_keys, general_keys)
         k_len = len(mime_keys) + len(filesys_keys) + len(general_keys)
         assert isinstance(stats, dict) is True
-        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert len([k for k in k_iter if k not in list(stats.keys())]) == 0
         assert k_len == len(stats)
 
         # Filesize should actually match what we set it as
@@ -180,7 +178,7 @@ class Utils_Test(TestBase):
         k_iter = chain(mime_keys, filesys_keys, general_keys)
         k_len = len(mime_keys) + len(filesys_keys) + len(general_keys)
         assert isinstance(stats, dict) is True
-        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert len([k for k in k_iter if k not in list(stats.keys())]) == 0
         assert k_len == len(stats)
 
         # Filesize should actually match what we set it as
@@ -189,7 +187,7 @@ class Utils_Test(TestBase):
         assert re.search(
             'application/.*zip.*',
             stats['mime'],
-            re.IGNORECASE,
+            re.IGNORECASE | re.ASCII,
         ) is not None
 
         # Test different variations
@@ -200,7 +198,7 @@ class Utils_Test(TestBase):
         k_iter = chain(filesys_keys, general_keys)
         k_len = len(filesys_keys) + len(general_keys)
         assert isinstance(stats, dict) is True
-        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert len([k for k in k_iter if k not in list(stats.keys())]) == 0
         assert k_len == len(stats)
 
         # Test different variations
@@ -211,7 +209,7 @@ class Utils_Test(TestBase):
         k_iter = chain(mime_keys, general_keys)
         k_len = len(mime_keys) + len(general_keys)
         assert isinstance(stats, dict) is True
-        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert len([k for k in k_iter if k not in list(stats.keys())]) == 0
         assert k_len == len(stats)
 
         # Test different variations
@@ -222,7 +220,7 @@ class Utils_Test(TestBase):
         k_iter = chain(general_keys)
         k_len = len(general_keys)
         assert isinstance(stats, dict) is True
-        assert len([k for k in k_iter if k not in stats.keys()]) == 0
+        assert len([k for k in k_iter if k not in list(stats.keys())]) == 0
         assert k_len == len(stats)
 
     def test_mkdir(self):
@@ -270,7 +268,7 @@ class Utils_Test(TestBase):
         result = mkdir(new_work_dir)
 
         # reset the permission
-        chmod(work_dir, 0700)
+        chmod(work_dir, 0o700)
 
         # Our result should yield a failed result
         assert result is False
@@ -300,9 +298,9 @@ class Utils_Test(TestBase):
                 # assert call below; but just incase ...
                 assert False
 
-        except OSError, e:
+        except OSError as e:
             # Directory doesn't exist
-            assert e[0] is errno.ENOENT
+            assert e.errno == errno.ENOENT
             assert getcwd() == cur_dir
 
         # Now we'll make the directory
@@ -332,20 +330,21 @@ class Utils_Test(TestBase):
         results = parse_list(
             '.mkv,.avi,.divx,.xvid,.mov,.wmv,.mp4,.mpg,.mpeg,.vob,.iso')
 
-        assert results == [
+        # Duplicates are removed, but the order is not guaranteed
+        assert sorted(results) == sorted([
             '.divx', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.mpeg', '.vob',
             '.xvid', '.wmv', '.mp4',
-        ]
+        ])
 
         # Now 2 lists with lots of duplicates and other delimiters
         results = parse_list(
             '.mkv,.avi,.divx,.xvid,.mov,.wmv,.mp4,.mpg .mpeg,.vob,,; ;',
             '.mkv,.avi,.divx,.xvid,.mov        .wmv,.mp4;.mpg,.mpeg,.vob,.iso')
 
-        assert results == [
+        assert sorted(results) == sorted([
             '.divx', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.mpeg', '.vob',
             '.xvid', '.wmv', '.mp4',
-        ]
+        ])
 
         # Now a list with extras we want to add as strings
         # empty entries are removed
@@ -353,10 +352,10 @@ class Utils_Test(TestBase):
             '.divx', '.iso', '.mkv', '.mov', '', '  ', '.avi', '.mpeg',
             '.vob', '.xvid', '.mp4'], '.mov,.wmv,.mp4,.mpg')
 
-        assert results == [
+        assert sorted(results) == sorted([
             '.divx', '.wmv', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.vob',
             '.xvid', '.mpeg', '.mp4',
-        ]
+        ])
 
         # Support Sets and Sorted Sets
         results = parse_list(
@@ -365,10 +364,10 @@ class Utils_Test(TestBase):
             '.mov,.wmv,.mp4,.mpg',
             sortedset(['.vob', '.xvid']),
         )
-        assert results == [
+        assert sorted(results) == sorted([
             '.divx', '.wmv', '.iso', '.mkv', '.mov', '.mpg', '.avi', '.vob',
             '.xvid', '.mpeg', '.mp4',
-        ]
+        ])
 
     def test_find_prefix(self):
         """
@@ -528,7 +527,7 @@ class Utils_Test(TestBase):
         # Case insensitive results
         results = find(
             work_dir,
-            regex_filter='.*\.mpe?g$',
+            regex_filter='.*\\.mpe?g$',
             case_sensitive=False,
         )
         assert isinstance(results, dict)
@@ -537,7 +536,7 @@ class Utils_Test(TestBase):
         # Case sensitive results won't pick up on unknown.MPEG
         results = find(
             work_dir,
-            regex_filter='.*\.mpe?g$',
+            regex_filter='.*\\.mpe?g$',
             case_sensitive=True,
         )
         assert isinstance(results, dict)
@@ -545,7 +544,7 @@ class Utils_Test(TestBase):
 
         # You can also just compile the regular expression yourself and pass
         # that in if you'd rather
-        _regex = re.compile('.*\.TXT', re.I)
+        _regex = re.compile('.*\\.TXT', re.I | re.ASCII)
         results = find(work_dir, regex_filter=_regex)
         assert isinstance(results, dict)
         # Case insensitive re.I was passed in, so we will match on README.txt
@@ -560,8 +559,8 @@ class Utils_Test(TestBase):
         results = find(
             work_dir,
             regex_filter=[
-                '.*\.mpe?g$',
-                '.*\.txt$',
+                '.*\\.mpe?g$',
+                '.*\\.txt$',
             ],
             case_sensitive=True,
         )
@@ -572,8 +571,8 @@ class Utils_Test(TestBase):
         results = find(
             work_dir,
             regex_filter=(
-                '.*\.mpe?g$',
-                '.*\.txt$',
+                '.*\\.mpe?g$',
+                '.*\\.txt$',
                 '^unknown.*',
             ),
             case_sensitive=True,
@@ -585,9 +584,9 @@ class Utils_Test(TestBase):
         results = find(
             work_dir,
             regex_filter=(
-                '.*\.mpe?g$',
-                '.*\.nfo$',
-                '.*\.txt$',
+                '.*\\.mpe?g$',
+                '.*\\.nfo$',
+                '.*\\.txt$',
                 '^unknown.*',
             ),
             case_sensitive=True,
@@ -636,7 +635,7 @@ class Utils_Test(TestBase):
         )
         assert isinstance(results, dict)
         assert len(results) == 1
-        assert 'depth01.jpeg' == basename(results.keys()[0])
+        assert 'depth01.jpeg' == basename(list(results.keys())[0])
 
         # Search from the fifth level on
         results = find(
@@ -658,7 +657,7 @@ class Utils_Test(TestBase):
         # we expect them to be at:
         for idx in range(5, 11):
             assert 'depth%.2d.jpeg' % idx \
-                    in [basename(x) for x in results.keys()]
+                    in [basename(x) for x in list(results.keys())]
 
         # Search only the second level
         results = find(
@@ -670,7 +669,7 @@ class Utils_Test(TestBase):
         )
         assert isinstance(results, dict)
         assert len(results) == 1
-        assert 'depth02.jpeg' == basename(results.keys()[0])
+        assert 'depth02.jpeg' == basename(list(results.keys())[0])
 
         # Search the 3rd and 4th levels only
         results = find(
@@ -682,8 +681,8 @@ class Utils_Test(TestBase):
         )
         assert isinstance(results, dict)
         assert len(results) == 2
-        assert 'depth03.jpeg' in [basename(x) for x in results.keys()]
-        assert 'depth04.jpeg' in [basename(x) for x in results.keys()]
+        assert 'depth03.jpeg' in [basename(x) for x in list(results.keys())]
+        assert 'depth04.jpeg' in [basename(x) for x in list(results.keys())]
 
         # if min_depth > max_depth you'll get a None type
         assert find(
@@ -732,7 +731,7 @@ class Utils_Test(TestBase):
         # there should be 2 now
         assert len(results) == 2
 
-        for k in results.keys():
+        for k in list(results.keys()):
             # 2 directories now each with the same filename
             assert 'depth02.jpeg' == basename(k)
 
@@ -898,8 +897,8 @@ class Utils_Test(TestBase):
         hexdump_file = join(self.var_dir, 'hexdump.txt')
         assert isfile(hexdump_file)
 
-        all_characters = ''.join(map(chr, range(0, 256)))
-        with open(hexdump_file, 'r') as fd_in:
+        all_characters = ''.join(map(chr, list(range(0, 256))))
+        with open(hexdump_file) as fd_in:
             ref_data = fd_in.read()
 
         # when reading in content, there is a new line appeneded
@@ -951,7 +950,7 @@ class Utils_Test(TestBase):
         assert(dirsize(work_dir) is None)
 
         # restore our accessibility
-        chmod(work_dir, 0755)
+        chmod(work_dir, 0o755)
 
         # Back to normal
         assert(dirsize(work_dir) == strsize_to_bytes('2MB'))
@@ -1063,7 +1062,7 @@ class Utils_Test(TestBase):
         assert(scan_pylib(work_dir) is None)
 
         # Restore our permissions
-        chmod(work_dir, 0700)
+        chmod(work_dir, 0o700)
 
         # Create a proper module name that is loadable
         assert(self.touch(join(work_dir, 'test01.py')))
@@ -1144,7 +1143,7 @@ class Utils_Test(TestBase):
         assert(work_module is None)
 
         # Restore our permissions
-        chmod(work_dir, 0700)
+        chmod(work_dir, 0o700)
 
         # Protect our module
         chmod(join(work_dir, 'test01.py'), 0000)
@@ -1152,4 +1151,4 @@ class Utils_Test(TestBase):
         assert(work_module is None)
 
         # Restore our permissions
-        chmod(join(work_dir, 'test01.py'), 0600)
+        chmod(join(work_dir, 'test01.py'), 0o600)

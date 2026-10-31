@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to test the Filters
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -46,7 +44,7 @@ class NNTPSimpleFilter_Test(TestBase):
         """
         Grab a few more things from the config
         """
-        super(NNTPSimpleFilter_Test, self).setUp()
+        super().setUp()
 
         # Create a template entry we can clone from to make
         # thing easier to manipulate in each individual test

@@ -1,51 +1,37 @@
+NewsReap requires **Python 3.13** or newer.
 
 ## Linux Distribution
 If you're using a mainstream Linux distribution then there
 isn't a whole lot needed to get you all set up.
 
-### Red Hat / CentOS 6 & 7
-This is my personal favorite choice; the OS is usually always a bit outdated, but with it comes so much stability.
+### Fedora
 ```bash
-# Install the nessisary dependencies; feel free to
-# connect to the repository on nuxref for them if they
-# aren't otherwise available; see http://nuxref.com/repo/
-sudo yum --enablerepo=nuxref* install \
-           python-blist python-yenc \
-           PyYAML python-sqlalchemy \
-           python-gevent python-click \
-           python-dateutil \
-           python-cryptography pytz \
-           python-tqdm
+# Install the nessisary dependencies
+sudo dnf install \
+           python3-sortedcontainers python3-pyyaml \
+           python3-sqlalchemy python3-gevent python3-click \
+           python3-dateutil python3-cryptography python3-pytz \
+           python3-tqdm python3-lxml
 
-7zip support (add /usr/bin/7za)
-sudo yum --enablerepo=nuxref* install p7zip
+# 7zip support (add /usr/bin/7za)
+sudo dnf install p7zip
 
-rar support (add /usr/bin/rar)
-sudo yum --enablerepo=nuxref* install rar
+# par2 support (add /usr/bin/par2)
+sudo dnf install par2cmdline
 
-# Testers might want to also install the following:
-sudo yum --enablerepo=nuxref* --best install \
-           python-nose
+# rar support (add /usr/bin/rar); rar is not free software so it may need
+# to come from a third party repository such as http://nuxref.com/repo/
+sudo dnf --enablerepo=nuxref* install rar
 
 # You're done; go ahead and use the newsreap tools
 ```
-### Fedora 22
+
+### Ubuntu / Debian
 ```bash
-# Install the nessisary dependencies; feel free to
-# connect to the repository on nuxref for them if they
-# aren't otherwise available; see http://nuxref.com/repo/
-sudo dnf --enablerepo=nuxref* --best install \
-           python-blist python-yenc \
-           PyYAML python-sqlalchemy \
-           python-gevent python-click \
-           python-cryptography
+# Install the archive tools (optional)
+sudo apt-get install 7zip par2 rar unrar
 
-# Testers might want to also install the following:
-sudo dnf --enablerepo=nuxref* --best install \
-           python-nose
-
-
-# You're done; go ahead and use the newsreap tools
+# Then install NewsReap using PIP (see below)
 ```
 
 ## Other Distributions
@@ -53,8 +39,14 @@ sudo dnf --enablerepo=nuxref* --best install \
 For other distributions, you may need to go the PIP route.
 ```bash
 # Browse to the directory you installed newsreap into
-# Then Install the nessisary dependencies like so:
-pip install -r requirements.txt
+# Then install it (and the `nr` command) like so:
+pip install .
+
+# Developers can install the testing tools too:
+pip install -e ".[dev]"
 ```
 
-__Note:__ _Windows users_ will need to have access to a compiler (as pip will need to compile things such as [gevent](https://pypi.python.org/pypi/gevent/) and [cryptography](https://pypi.python.org/pypi/cryptography/). As long as the [Microsoft Visual C++ Compiler for Python 2.7](https://www.microsoft.com/en-ca/download/details.aspx?id=44266) is installed, you shouldn't have a problem.
+__Note:__ Most dependencies ship pre-built wheels for common platforms. If one
+isn't available for your system, pip will need a C compiler to build it
+(for example [gevent](https://pypi.org/project/gevent/) and
+[cryptography](https://pypi.org/project/cryptography/)).

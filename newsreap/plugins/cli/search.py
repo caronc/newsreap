@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap NNTP Search CLI Plugin
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -49,7 +47,7 @@ NEWSREAP_CLI_PLUGINS = {
 }
 
 
-class SearchOperation(object):
+class SearchOperation:
     """
     Search Operation Type
     """
@@ -60,7 +58,7 @@ class SearchOperation(object):
     EXCLUDE = '-'
 
 
-class SearchCategory(object):
+class SearchCategory:
     """
     Search Category
     """
@@ -87,7 +85,8 @@ def parse_search_keyword(keywords):
     If there is a problem then (None, None, None) is returned
     """
 
-    _parse = re.compile(r'(?P<cat>%[sp])?^(?P<op>\+|\-)?(?P<key>.+)$')
+    _parse = re.compile(r'(?P<cat>%[sp])?^(?P<op>\+|\-)?(?P<key>.+)$',
+                        re.ASCII)
 
     response = []
     for keyword in keywords:
@@ -197,7 +196,7 @@ def search(ctx, group, keywords, minscore, maxscore, case_insensitive):
         logger.error("You must specify a group/alias.")
         exit(1)
 
-    for name, _id in groups.iteritems():
+    for name, _id in groups.items():
         db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
         db_file = '%s%s' % (
             join(db_path, name),
@@ -294,10 +293,10 @@ def search(ctx, group, keywords, minscore, maxscore, case_insensitive):
         gt = gt.order_by(Article.score.desc())
 
         # Iterate through our list
-        print("%s:" % (name))
+        print(("%s:" % (name)))
         for entry in gt:
-            print("  [%.5d] %.4d %s" % (
-                entry.article_no, entry.score, entry.subject))
+            print(("  [%.5d] %.4d %s" % (
+                entry.article_no, entry.score, entry.subject)))
 
         group_session.close()
         db.close()

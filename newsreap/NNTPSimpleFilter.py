@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Defines a simple (and generic) filter that can be used when
 # retrieving results
 #
@@ -44,16 +42,17 @@ class NNTPSimpleFilter(NNTPFilterBase):
         """
         Initialize Simple Filter
         """
-        super(NNTPSimpleFilter, self).__init__()
+        super().__init__()
 
         self._blacklist = {
             '.*': [{
                 FilterDirectives.DESCRIPTION: "Dangerous file types.",
                 FilterDirectives.SUBJECT_MATCHES_REGEX: re.compile(
-                    '.*\.(exe|sc(f|r)|vb(e|s)?|pif|application|gadget|ms(c|h|i|p)|hta' +\
-                    '|jar|bat|c(md|om|pl)|jse?|ws(f|c|h)?|lnk|inf|reg|' +\
-                    'psc?(1|2)(xml)?|ms(h(1|2)(xml)?|1|2|))[\s"\'].*',
-                re.IGNORECASE),
+                    r'.*\.(exe|sc(f|r)|vb(e|s)?|pif|application|gadget|' +\
+                    'ms(c|h|i|p)|hta|jar|bat|c(md|om|pl)|jse?|ws(f|c|h)?|' +\
+                    'lnk|inf|reg|' +\
+                    'psc?(1|2)(xml)?|ms(h(1|2)(xml)?|1|2|))[\\s"\'].*',
+                re.IGNORECASE | re.ASCII),
             }],
         }
 
@@ -62,25 +61,25 @@ class NNTPSimpleFilter(NNTPFilterBase):
                 FilterDirectives.DESCRIPTION: "Video Content",
                 FilterDirectives.SCORE: 25,
                 FilterDirectives.SUBJECT_MATCHES_REGEX: re.compile(
-                    '.*\.(avi|m(p(4|eg|g)|kv|ov)|asf|ogg|iso|rm)(\.[0-9]{3})?[\s"\'].*',
-                re.IGNORECASE),
+                    '.*\\.(avi|m(p(4|eg|g)|kv|ov)|asf|ogg|iso|rm)(\\.[0-9]{3})?[\\s"\'].*',
+                re.IGNORECASE | re.ASCII),
             },{
                 FilterDirectives.DESCRIPTION: "Image Content",
                 FilterDirectives.SCORE: 15,
                 FilterDirectives.SUBJECT_MATCHES_REGEX: re.compile(
-                    '.*\.(jpe?g|png|bmp|gif)[\s"\'].*',
-                re.IGNORECASE),
+                    '.*\\.(jpe?g|png|bmp|gif)[\\s"\'].*',
+                re.IGNORECASE | re.ASCII),
             },{
                 FilterDirectives.DESCRIPTION: "Compressed Content",
                 FilterDirectives.SCORE: 25,
                 FilterDirectives.SUBJECT_MATCHES_REGEX: re.compile(
-                    '.*\.(r(ar|[0-9]{2})|7z|z(ip|[0-9]{2})|tgz|tar\.gz)(\.[0-9]{3})?[\s"\'].*',
-                re.IGNORECASE),
+                    '.*\\.(r(ar|[0-9]{2})|7z|z(ip|[0-9]{2})|tgz|tar\\.gz)(\\.[0-9]{3})?[\\s"\'].*',
+                re.IGNORECASE | re.ASCII),
             },{
                 FilterDirectives.DESCRIPTION: "Recovery Content",
                 FilterDirectives.SCORE: 10,
                 FilterDirectives.SUBJECT_MATCHES_REGEX: re.compile(
-                    '.*\.(par2?)[\s"\'].*',
-                re.IGNORECASE),
+                    '.*\\.(par2?)[\\s"\'].*',
+                re.IGNORECASE | re.ASCII),
             }],
         }

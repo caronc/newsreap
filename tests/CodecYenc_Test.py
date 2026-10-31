@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the yEnc Codec
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -28,7 +26,6 @@ from os.path import dirname
 from os.path import isfile
 from os.path import abspath
 
-from io import BytesIO
 
 try:
     from tests.TestBase import TestBase
@@ -41,6 +38,8 @@ from newsreap.codecs.CodecYenc import CodecYenc
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.NNTPArticle import NNTPArticle
+from newsreap.codecs.CodecYenc import yenc_encode
+from newsreap.codecs.CodecYenc import yenc_decode
 
 
 class CodecYENC_Test(TestBase):
@@ -206,12 +205,6 @@ class CodecYENC_Test(TestBase):
                     against.
         """
 
-        # A simple test for ensuring that the yenc
-        # library exists; otherwise we want this test
-        # to fail; the below line will handle this for
-        # us; we'll let the test fail on an import error
-        import yenc
-
         # Input File
         encoded_filepath = join(self.var_dir, '00000005.ntx')
         assert isfile(encoded_filepath)
@@ -220,48 +213,33 @@ class CodecYENC_Test(TestBase):
         decoded_filepath = join(self.var_dir, 'testfile.txt')
         assert isfile(decoded_filepath)
 
-        # Python Solution
-        fd_py = BytesIO()
-
-        # C Solution
-        fd_c = BytesIO()
-
         # Initialize Codec
         decoder = CodecYenc(work_dir=self.test_dir)
 
-        # Force to operate in python (manual/slow) mode
-        CodecYenc.FAST_YENC_SUPPORT = False
-        with open(encoded_filepath, 'r') as fd_in:
-            content_py = decoder.decode(fd_in)
+        with open(encoded_filepath, 'rb') as fd_in:
+            content = decoder.decode(fd_in)
 
         # our content should be valid
-        assert isinstance(content_py, NNTPBinaryContent)
+        assert isinstance(content, NNTPBinaryContent)
 
-        # Force to operate with the C extension yEnc
-        # This require the extensions to be installed
-        # on the system
-        CodecYenc.FAST_YENC_SUPPORT = True
-        with open(encoded_filepath, 'r') as fd_in:
-            content_c = decoder.decode(fd_in)
+        # The same codec can be used to decode the content again
+        with open(encoded_filepath, 'rb') as fd_in:
+            content_again = decoder.decode(fd_in)
 
         # our content should be valid
-        assert isinstance(content_c, NNTPBinaryContent)
+        assert isinstance(content_again, NNTPBinaryContent)
 
         # Verify the actual content itself reports itself
         # as being okay (structurally)
-        assert content_py.is_valid() is True
-        assert content_c.is_valid() is True
+        assert content.is_valid() is True
+        assert content_again.is_valid() is True
 
-        # Confirm that our output from our python implimentation
-        # matches that of our yenc C version.
-        assert fd_py.tell() == fd_c.tell()
-
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
         # Compare our processed content with the expected results
-        assert decoded == content_py.getvalue()
-        assert decoded == content_c.getvalue()
+        assert decoded == content.getvalue()
+        assert decoded == content_again.getvalue()
 
     def test_decoding_yenc_multi_part(self):
         """
@@ -288,12 +266,6 @@ class CodecYENC_Test(TestBase):
                     to test the file against.
         """
 
-        # A simple test for ensuring that the yEnc
-        # library exists; otherwise we want this test
-        # to fail; the below line will handle this for
-        # us; we'll let the test fail on an import error
-        import yenc
-
         # Input File
         encoded_filepath_1 = join(self.var_dir, '00000020.ntx')
         encoded_filepath_2 = join(self.var_dir, '00000021.ntx')
@@ -305,76 +277,38 @@ class CodecYENC_Test(TestBase):
         decoded_filepath = join(self.var_dir, 'joystick.jpg')
         assert isfile(decoded_filepath)
 
-        # Python Solution
-        fd1_py = BytesIO()
-        fd2_py = BytesIO()
-
-        # C Solution
-        fd1_c = BytesIO()
-        fd2_c = BytesIO()
-
         # Initialize Codec
         decoder = CodecYenc(work_dir=self.test_dir)
 
-        contents_py = []
-        contents_c = []
+        contents = []
+        with open(encoded_filepath_1, 'rb') as fd_in:
+            contents.append(decoder.decode(fd_in))
+        with open(encoded_filepath_2, 'rb') as fd_in:
+            contents.append(decoder.decode(fd_in))
 
-        # Force to operate in python (manual/slow) mode
-        CodecYenc.FAST_YENC_SUPPORT = False
-        with open(encoded_filepath_1, 'r') as fd_in:
-            contents_py.append(decoder.decode(fd_in))
-        with open(encoded_filepath_2, 'r') as fd_in:
-            contents_py.append(decoder.decode(fd_in))
-
-        for x in contents_py:
+        for x in contents:
             # Verify our data is good
             assert x.is_valid() is True
 
-        # Force to operate with the C extension yEnc
-        # This require the extensions to be installed
-        # on the system
-        CodecYenc.FAST_YENC_SUPPORT = True
-        with open(encoded_filepath_1, 'r') as fd_in:
-            contents_c.append(decoder.decode(fd_in))
-        with open(encoded_filepath_2, 'r') as fd_in:
-            contents_c.append(decoder.decode(fd_in))
-
-        for x in contents_c:
-            # Verify our data is good
-            assert x.is_valid() is True
-
-        # Confirm that our output from our python implimentation
-        # matches that of our yEnc C version.
-        assert fd1_py.tell() == fd1_c.tell()
-        assert fd2_py.tell() == fd2_c.tell()
-
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
         # Assemble (TODO)
-        contents_py.sort()
-        contents_c.sort()
+        contents.sort()
 
-        content_py = NNTPBinaryContent(
-            filepath=contents_py[0].filename,
-            save_dir=self.out_dir,
-        )
-        content_c = NNTPBinaryContent(
-            filepath=contents_c[0].filename,
+        content = NNTPBinaryContent(
+            filepath=contents[0].filename,
             save_dir=self.out_dir,
         )
 
         # append() takes a list or another NNTPContent
         # and appends it's content to the end of the content
-        content_py.append(contents_py)
-        content_c.append(contents_py)
+        content.append(contents)
 
-        assert len(content_py) == len(decoded)
-        assert len(content_c) == len(decoded)
+        assert len(content) == len(decoded)
 
         # Compare our processed content with the expected results
-        assert content_py.getvalue() == decoded
-        assert content_c.getvalue() == decoded
+        assert content.getvalue() == decoded
 
     def test_yenc_v1_3_encoding(self):
         """
@@ -383,44 +317,34 @@ class CodecYENC_Test(TestBase):
         Test the encoding of data; this is nessisary prior to a post
         """
 
-        # A simple test for ensuring that the yEnc
-        # library exists; otherwise we want this test
-        # to fail; the below line will handle this for
-        # us; we'll let the test fail on an import error
-        import yenc
-
         # First we take a binary file
         binary_filepath = join(self.var_dir, 'joystick.jpg')
         assert isfile(binary_filepath)
 
         # Initialize Codec
-        encoder_c = CodecYenc(work_dir=self.test_dir)
+        encoder = CodecYenc(work_dir=self.test_dir)
 
-        content_c = encoder_c.encode(binary_filepath)
-
-        # We should have gotten an ASCII Content Object
-        assert isinstance(content_c, NNTPAsciiContent) is True
-
-        # We should actually have content associated with out data
-        assert len(content_c) > 0
-
-        # Now we should be able to perform the same tasks again without
-        # using the C libraries
-        CodecYenc.FAST_YENC_SUPPORT = False
-
-        # Initialize Codec
-        encoder_py = CodecYenc(work_dir=self.test_dir)
-
-        content_py = encoder_py.encode(binary_filepath)
+        content = encoder.encode(binary_filepath)
 
         # We should have gotten an ASCII Content Object
-        assert isinstance(content_py, NNTPAsciiContent) is True
+        assert isinstance(content, NNTPAsciiContent) is True
 
         # We should actually have content associated with out data
-        assert len(content_py) > 0
+        assert len(content) > 0
+
+        # A second codec should produce the very same output
+        encoder_again = CodecYenc(work_dir=self.test_dir)
+
+        content_again = encoder_again.encode(binary_filepath)
+
+        # We should have gotten an ASCII Content Object
+        assert isinstance(content_again, NNTPAsciiContent) is True
+
+        # We should actually have content associated with out data
+        assert len(content_again) > 0
 
         # We generate the same output
-        assert content_py.crc32() == content_c.crc32()
+        assert content_again.crc32() == content.crc32()
 
     def test_yenc_v1_3_NNTPContent_encode(self):
         """
@@ -428,12 +352,6 @@ class CodecYENC_Test(TestBase):
 
         this is nessisary prior to a post
         """
-
-        # A simple test for ensuring that the yEnc
-        # library exists; otherwise we want this test
-        # to fail; the below line will handle this for
-        # us; we'll let the test fail on an import error
-        import yenc
 
         # First we take a binary file
         binary_filepath = join(self.var_dir, 'joystick.jpg')
@@ -482,12 +400,6 @@ class CodecYENC_Test(TestBase):
         """
         Test the encoding of data; this is nessisary prior to a post
         """
-
-        # A simple test for ensuring that the yEnc
-        # library exists; otherwise we want this test
-        # to fail; the below line will handle this for
-        # us; we'll let the test fail on an import error
-        import yenc
 
         # First we take a binary file
         binary_filepath = join(self.var_dir, 'joystick.jpg')
@@ -539,12 +451,6 @@ class CodecYENC_Test(TestBase):
         Test the encoding of fresh new data
         """
 
-        # A simple test for ensuring that the yEnc
-        # library exists; otherwise we want this test
-        # to fail; the below line will handle this for
-        # us; we'll let the test fail on an import error
-        import yenc
-
         # Our private Key Location
         tmp_file = join(
             self.tmp_dir,
@@ -583,11 +489,6 @@ class CodecYENC_Test(TestBase):
         This test is identicle to test_decoding_yenc_single_part defined in
         this same test file with the exception of testing the early abort.
         """
-        # A simple test for ensuring that the yEnc
-        # library exists; otherwise we want this test
-        # to fail; the below line will handle this for
-        # us; we'll let the test fail on an import error
-        import yenc
 
         # Input File
         encoded_filepath = join(self.var_dir, '00000005.ntx')
@@ -597,52 +498,37 @@ class CodecYENC_Test(TestBase):
         decoded_filepath = join(self.var_dir, 'testfile.txt')
         assert isfile(decoded_filepath)
 
-        # Python Solution
-        fd_py = BytesIO()
-
-        # C Solution
-        fd_c = BytesIO()
-
         # Initialize Codec (restrict content to be no larger then 10 bytes)
         decoder = CodecYenc(work_dir=self.test_dir, max_bytes=10)
 
-        # Force to operate in python (manual/slow) mode
-        CodecYenc.FAST_YENC_SUPPORT = False
-        with open(encoded_filepath, 'r') as fd_in:
-            content_py = decoder.decode(fd_in)
+        with open(encoded_filepath, 'rb') as fd_in:
+            content = decoder.decode(fd_in)
 
         # our content should be valid
-        assert isinstance(content_py, NNTPBinaryContent)
+        assert isinstance(content, NNTPBinaryContent)
 
-        # Force to operate with the C extension yEnc
-        # This require the extensions to be installed
-        # on the system
-        CodecYenc.FAST_YENC_SUPPORT = True
-        with open(encoded_filepath, 'r') as fd_in:
-            content_c = decoder.decode(fd_in)
+        # The same codec can be used to decode the content again
+        with open(encoded_filepath, 'rb') as fd_in:
+            content_again = decoder.decode(fd_in)
 
         # our content should be valid
-        assert isinstance(content_c, NNTPBinaryContent)
+        assert isinstance(content_again, NNTPBinaryContent)
 
         # Our content is subject to an early exit so in all cases we should
         # not have valid content
-        assert content_py.is_valid() is False
-        assert content_c.is_valid() is False
+        assert content.is_valid() is False
+        assert content_again.is_valid() is False
 
-        # Confirm that our output from our python implimentation
-        # matches that of our yEnc C version.
-        assert fd_py.tell() == fd_c.tell()
-
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
         # Compare our processed content with the expected results
-        length_py = len(content_py.getvalue())
-        length_c = len(content_c.getvalue())
+        length = len(content.getvalue())
+        length_again = len(content_again.getvalue())
 
         # Compare our processed content with the expected results
-        assert decoded[0:length_py] == content_py.getvalue()
-        assert decoded[0:length_c] == content_c.getvalue()
+        assert decoded[0:length] == content.getvalue()
+        assert decoded[0:length_again] == content_again.getvalue()
 
     def test_parse_article(self):
         """
@@ -785,3 +671,77 @@ class CodecYENC_Test(TestBase):
         assert('ycount' in matches)
         assert(matches['ycount'] == 2)
         assert('size' not in matches)
+
+    def test_yenc_escaping_rules(self):
+        """
+        Encoding matches the classic yEnc C library byte for byte
+        """
+        # These results were captured from the yenc (v0.4) C library
+        assert yenc_encode(b'\x04x') == (b'=n\xa2', 3)
+        assert yenc_encode(b'\xf6x') == (b'=`\xa2', 3)
+        assert yenc_encode(b'\xdfx') == (b'=I\xa2', 3)
+        assert yenc_encode(b'a\x04') == (b'\x8b.', 2)
+
+        # Spaces are escaped at the end of a line
+        encoded, column = yenc_encode(b'a' * 127 + b'\xf6')
+        assert encoded.endswith(b'\x8b\x8b=`\r\n') and column == 0
+
+        # ... but not just before the end
+        encoded, column = yenc_encode(b'a' * 126 + b'\xf6b')
+        assert encoded.endswith(b'\x8b \x8c\r\n') and column == 0
+
+        # Dots are only escaped at the start of a line
+        encoded, column = yenc_encode(b'a' * 127 + b'\x04')
+        assert encoded.endswith(b'\x8b.\r\n') and column == 0
+        encoded, column = yenc_encode(b'a' * 128 + b'\x04')
+        assert encoded.endswith(b'\r\n=n') and column == 2
+
+        # The column carries over between calls
+        assert yenc_encode(b'\x04', column=5) == (b'.', 6)
+
+        # Everything decodes back to what we started with
+        data = bytes(range(256)) * 4
+        encoded, _ = yenc_encode(data)
+        assert yenc_decode(encoded) == (data, False)
+
+    def test_yenc_escape_split_across_lines(self):
+        """
+        An escape character at the end of one block applies to the next
+        """
+        assert yenc_decode(b'abc=') == (b'789', True)
+        assert yenc_decode(b'}x', escape=True) == (b'\x13N', False)
+        assert yenc_decode(b'ab\r\ncd\n') == (b'789:', False)
+
+    def test_encoded_lines_have_no_gaps(self):
+        """
+        Encoded content has no blank lines and respects the line length
+        """
+        binary_filepath = join(self.var_dir, 'joystick.jpg')
+        for linelen in (128, 64):
+            encoder = CodecYenc(work_dir=self.test_dir, linelen=linelen)
+            content = encoder.encode(binary_filepath)
+
+            with open(content.path(), 'rb') as fd:
+                lines = fd.read().split(b'\r\n')
+
+            # The very last entry is what follows the final line break
+            assert lines[-1] == b''
+            lines = lines[:-1]
+
+            assert lines[0].startswith(b'=ybegin ')
+            assert b' line=%d ' % linelen in lines[0]
+            assert lines[1].startswith(b'=ypart ')
+            assert lines[-1].startswith(b'=yend ')
+
+            body = lines[2:-1]
+            assert all(body)
+            # An escape sequence can push a line one character over
+            assert max(len(line) for line in body) <= linelen + 1
+
+            # Decoding gives us our original file back
+            with open(content.path(), 'rb') as fd:
+                decoded = CodecYenc(work_dir=self.test_dir).decode(fd)
+
+            with open(binary_filepath, 'rb') as fd:
+                assert decoded.getvalue() == fd.read()
+            assert decoded.is_valid() is True

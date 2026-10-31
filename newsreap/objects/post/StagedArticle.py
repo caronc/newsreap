@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Used when Staging a NNTP Post
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -82,7 +80,7 @@ class StagedArticle(ObjectBase):
     sort_no = Column(Integer, default=0, nullable=False)
 
     def __init__(self, *args, **kwargs):
-        super(StagedArticle, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __repr__(self):
         return "<StagedArticle(localfile=%s)>" % (self.localfile)

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # An NNTPRequest Object used by the NNTPManagaer
 #
 # Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
@@ -132,17 +130,6 @@ class NNTPRequest(Event):
         Append function (emulating list)
         """
         self.response.append(result)
-
-
-    def next(self):
-        """
-        Python 2 support
-        Support stream type functions and iterations
-        """
-        if not self._iter:
-            self._iter = iter(self.response)
-
-        return next(self._iter)
 
 
     def __next__(self):

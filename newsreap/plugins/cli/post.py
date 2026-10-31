@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap NNTP Posting CLI Plugin
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>

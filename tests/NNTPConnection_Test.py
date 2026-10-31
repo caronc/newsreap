@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to test the NNTP Server and Connection class
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -61,7 +59,7 @@ class NNTPConnection_Test(TestBase):
         """
         Grab a few more things from the config
         """
-        super(NNTPConnection_Test, self).setUp()
+        super().setUp()
 
         # Secure NNTP Server
         self.nntps = NNTPSocketServer(
@@ -92,7 +90,7 @@ class NNTPConnection_Test(TestBase):
         self.nntps.shutdown()
         self.nntp.shutdown()
 
-        super(NNTPConnection_Test, self).tearDown()
+        super().tearDown()
 
     def test_authentication(self):
         sock = NNTPConnection(
@@ -179,7 +177,7 @@ class NNTPConnection_Test(TestBase):
         from dateutil.parser import parse
         import pytz
 
-        result = NNTP_XOVER_RESPONSE_RE.match(
+        result = NNTP_XOVER_RESPONSE_RE.match((
             '100\t' + 'A Package [001/001] "file.rar" yEnc (001/001)\t' +\
             'Magnum Opus <sir@john.doe>\t' +\
             '11 Aug 2014 08:33:07 GMT\t' +\
@@ -187,22 +185,24 @@ class NNTPConnection_Test(TestBase):
             '1061463\t' +\
             '8160\t' +\
             'Xref: news-big.astraweb.com alt.binaries.boneless:12929673602 ' +\
-            'alt.binaries.multimedia:100',
+            'alt.binaries.multimedia:100'
+            # The expression scans the raw data received from the server
+            ).encode('ascii'),
         )
 
         assert result is not None
         # ID (Unique)
         assert result.group('subject') == \
-            'A Package [001/001] "file.rar" yEnc (001/001)'
+            b'A Package [001/001] "file.rar" yEnc (001/001)'
         # Message-ID (Unique)
-        assert result.group('id') == 'foeVWs8FHWoKYXByTLD8_78o259@JBinUp.local'
+        assert result.group('id') == b'foeVWs8FHWoKYXByTLD8_78o259@JBinUp.local'
         # Article ID
         assert int(result.group('article_no')) == 100
         # Poster
-        assert result.group('poster') == 'Magnum Opus <sir@john.doe>'
+        assert result.group('poster') == b'Magnum Opus <sir@john.doe>'
         # Date
-        assert parse(result.group('date')) == \
-            datetime(2014, 8, 11, 8, 33, 07, tzinfo=pytz.UTC)
+        assert parse(result.group('date').decode('ascii')) == \
+            datetime(2014, 8, 11, 8, 33, 0o7, tzinfo=pytz.UTC)
         # Size (Bytes)
         assert int(result.group('size')) == 1061463
         # Lines
@@ -219,7 +219,8 @@ class NNTPConnection_Test(TestBase):
 
         for entry in entries:
             # Test Entries
-            assert NNTP_XOVER_RESPONSE_RE.match(entry) is not None
+            assert NNTP_XOVER_RESPONSE_RE.match(
+                entry.encode('ascii')) is not None
 
     def test_group_searching(self):
         """
@@ -268,20 +269,20 @@ class NNTPConnection_Test(TestBase):
         assert len(groups) == 1
 
         # You can use Regular expressions too
-        groups = sock.groups(filters=re.compile('.*\.l2g\..*'))
+        groups = sock.groups(filters=re.compile('.*\\.l2g\\..*', re.ASCII))
         # Now we should hit the 2 l2g groups defined
         assert len(groups) == 2
 
         # You can use lists of expressions too
-        groups = sock.groups(filters=re.compile('.*\.l2g\..*'))
+        groups = sock.groups(filters=re.compile('.*\\.l2g\\..*', re.ASCII))
         # Now we should hit the 2 l2g groups defined
         assert len(groups) == 2
 
         # Now fetch the content from the server with the lazy flag set; we
         # should retrieve a much larger list
         groups = sock.groups(filters=(
-                re.compile('^alt\..*\.awesome'),
-                re.compile('^alt\..*\.crap'),
+                re.compile('^alt\\..*\\.awesome', re.ASCII),
+                re.compile('^alt\\..*\\.crap', re.ASCII),
         ))
         assert len(groups) == 2
 

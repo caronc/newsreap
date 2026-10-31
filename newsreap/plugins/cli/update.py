@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap NNTP Database Caching Functions
 #
 # Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
@@ -271,7 +269,7 @@ def update_search(ctx, groups, date_from, date_to, watched):
         else:
             logger.info('Using ramdisk: %s' % (ramdisk))
 
-    for name, _id in groups.iteritems():
+    for name, _id in groups.items():
 
         db_path = join(ctx['NNTPSettings'].cfg_path, 'cache', 'search')
         db_file = '%s%s' % (
@@ -438,11 +436,12 @@ def update_search(ctx, groups, date_from, date_to, watched):
             # db_url['path'] contains the full path to the database file
             logger.info('Optimizing update for an SQLite database.')
             # SQLite Speed changes
-            db._engine.execute('PRAGMA journal_mode = MEMORY')
-            db._engine.execute("PRAGMA temp_store = MEMORY")
-            db._engine.execute('PRAGMA synchronous = OFF')
-            # 2 GB of RAM used for Caching for speed
-            db._engine.execute('PRAGMA cache_size = 2000000')
+            with db._engine.begin() as conn:
+                conn.exec_driver_sql('PRAGMA journal_mode = MEMORY')
+                conn.exec_driver_sql("PRAGMA temp_store = MEMORY")
+                conn.exec_driver_sql('PRAGMA synchronous = OFF')
+                # 2 GB of RAM used for Caching for speed
+                conn.exec_driver_sql('PRAGMA cache_size = 2000000')
 
         # we'll re-add them later
         for index in Article.__table__.indexes:
@@ -525,23 +524,24 @@ def update_search(ctx, groups, date_from, date_to, watched):
             try:
                 # Try the fast way; this will always succeed unless
                 # we're dealing with a messed up table
-                db._engine.execute(
-                    Article.__table__.insert(), [{
-                        "message_id": article['id'],
-                        "article_no": article['article_no'],
-                        "subject": article['subject'],
-                        "poster": article['poster'],
-                        "size": article['size'],
-                        "lines": article['lines'],
-                        "date": article['date'],
-                        "score": article['score'],
-                    } for article in response.itervalues()]
-                )
+                with db._engine.begin() as conn:
+                    conn.execute(
+                        Article.__table__.insert(), [{
+                            "message_id": article['id'],
+                            "article_no": article['article_no'],
+                            "subject": article['subject'],
+                            "poster": article['poster'],
+                            "size": article['size'],
+                            "lines": article['lines'],
+                            "date": article['date'],
+                            "score": article['score'],
+                        } for article in response.values()]
+                    )
 
             except (OperationalError, IntegrityError):
                 logger.debug('Preparing for a slow load of %d items' %
                              len(response))
-                for article in response.itervalues():
+                for article in response.values():
                     # Store our batch into the database and update
                     # our pointer
                     try:
@@ -556,14 +556,14 @@ def update_search(ctx, groups, date_from, date_to, watched):
                             score=article['score'],
                         ))
 
-                    except OperationalError, e:
+                    except OperationalError as e:
                         logger.error(
                             'A database operational error occured.'
                         )
                         logger.debug('Exception: %s' % str(e))
                         exit(1)
 
-                    except TypeError, e:
+                    except TypeError as e:
                         logger.error(
                             'Failed to save article: %s.' %
                             str(article),

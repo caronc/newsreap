@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Used when Retrieving content from an NNTP Server
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -61,7 +59,7 @@ class RetrievedArticle(ObjectBase):
     sort_no = Column(Integer, default=0, nullable=False)
 
     def __init__(self, *args, **kwargs):
-        super(RetrievedArticle, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __repr__(self):
         return "<RetrievedArticle(localfile=%s)>" % (self.localfile)

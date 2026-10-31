@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # The Base Library used to make imports easier for users
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -28,3 +26,5 @@ gevent.monkey.patch_all()
 from .NNTPConnection import NNTPConnection
 from .NNTPManager import NNTPManager
 from .NNTPSettings import NNTPSettings
+from .NNTPnzb import NNTPnzb
+from .NNTPArticle import NNTPArticle

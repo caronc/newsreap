@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A container for controlling content found within an article
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -29,12 +27,13 @@ from os.path import expanduser
 from os.path import isdir
 from os.path import isfile
 from io import BytesIO
+from io import IOBase
 from tempfile import mkstemp
 from shutil import move as _move
 from shutil import copy as _copy
 from shutil import Error as ShutilError
 from zlib import crc32
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from types import MethodType
 
 from .codecs.CodecBase import DEFAULT_TMP_DIR
@@ -58,7 +57,7 @@ from .Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
-class NNTPFileMode(object):
+class NNTPFileMode:
     """
     This class makes the detction of file modes easier since
     we can compare what is set to a variable/object name
@@ -72,7 +71,7 @@ class NNTPFileMode(object):
     ASCII_RW = 'w+'
 
 
-class NNTPContent(object):
+class NNTPContent:
     """
     An object for maintaining retrieved article content. There can only
     be 1 article, however that 1 article can have a lot of content
@@ -261,7 +260,7 @@ class NNTPContent(object):
             # to be created
             return
 
-        elif isinstance(filepath, file):
+        elif isinstance(filepath, IOBase):
 
             # store stream
             self.stream = filepath
@@ -269,11 +268,11 @@ class NNTPContent(object):
             # Always detach streams
             self._detached = True
 
-            if hasattr('name', self.stream):
+            if hasattr(self.stream, 'name'):
                 self.filepath = abspath(self.stream.name)
-                self.filename = basename(filepath)
+                self.filename = basename(self.stream.name)
 
-            if hasattr('mode', self.stream):
+            if hasattr(self.stream, 'mode'):
                 # Store our mode
                 self.filemode = self.stream.mode
         else:
@@ -309,7 +308,7 @@ class NNTPContent(object):
             return None
 
         # Head of data
-        self.stream.seek(0L, SEEK_SET)
+        self.stream.seek(0, SEEK_SET)
 
         return self.read()
 
@@ -361,9 +360,9 @@ class NNTPContent(object):
             if self.filemode is not None and self.filemode == mode:
                 # ensure we're at the head of the file
                 if not eof:
-                    self.stream.seek(0L, SEEK_SET)
+                    self.stream.seek(0, SEEK_SET)
                 else:
-                    self.stream.seek(0L, SEEK_END)
+                    self.stream.seek(0, SEEK_END)
 
                 return weakref.ref(self.stream)
 
@@ -391,7 +390,7 @@ class NNTPContent(object):
                     (self.filepath, mode),
                 )
 
-            except (IOError, OSError) as e:
+            except OSError as e:
                 logger.error(
                     'Could not open %s (mode=%s)' %
                     (self.filepath, mode),
@@ -403,7 +402,7 @@ class NNTPContent(object):
 
             return weakref.ref(self.stream)
 
-        if isinstance(filepath, basestring):
+        if isinstance(filepath, str):
 
             # expand our path to be absolute
             filepath = abspath(expanduser(filepath))
@@ -425,7 +424,7 @@ class NNTPContent(object):
                     (self.filepath, mode),
                 )
 
-            except (IOError, OSError) as e:
+            except OSError as e:
                 logger.error(
                     'Could not open %s (mode=%s) (flag=D)' %
                     (self.filepath, mode),
@@ -461,11 +460,11 @@ class NNTPContent(object):
 
         if not eof:
             # Ensure we're at the head of the file
-            self.stream.seek(0L, SEEK_SET)
+            self.stream.seek(0, SEEK_SET)
 
         else:
             # Ensure we're at the end of the file
-            self.stream.seek(0L, SEEK_END)
+            self.stream.seek(0, SEEK_END)
 
         return weakref.ref(self.stream)
 
@@ -484,7 +483,7 @@ class NNTPContent(object):
         if not isinstance(encoder, object):
             return None
 
-        if not isinstance(encoder, (list, tuple, sortedset, list)):
+        if not isinstance(encoder, (list, tuple, sortedset)):
             # work with a tuple for now
             encoder = (encoder, )
 
@@ -744,7 +743,7 @@ class NNTPContent(object):
                     action_str, self.filepath, filepath,
                 ))
 
-            except ShutilError, e:
+            except ShutilError as e:
                 logger.debug('%s(%s, %s) exception %s' % (
                     action_str, self.filepath, filepath, str(e),
                 ))
@@ -838,10 +837,10 @@ class NNTPContent(object):
                 data = BytesIO(self.stream.read(mem_buf-total_bytes))
 
                 # Retrieve length of our buffer
-                total_bytes = data.seek(0L, SEEK_END)
+                total_bytes = data.seek(0, SEEK_END)
 
                 # Reset our pointer to the head of our data stream
-                data.seek(0L, SEEK_SET)
+                data.seek(0, SEEK_SET)
 
                 if total_bytes == 0:
                     if f_length > 0:
@@ -883,8 +882,8 @@ class NNTPContent(object):
                 try:
                     obj.write(data.read(block_size))
 
-                except IOError, e:
-                    if e[0] is errno.ENOSPC:
+                except OSError as e:
+                    if e.errno == errno.ENOSPC:
                         # most probably a disk space issue
                         logger.error(
                             'Ran out of disk space while writing %s.' %
@@ -895,7 +894,7 @@ class NNTPContent(object):
                         logger.error(
                             'An I/O error '
                             '(%d) occured while writing %s to disk.' %
-                            (e[0], obj.filepath),
+                            (e.errno, obj.filepath),
                         )
 
                     # Tidy
@@ -927,10 +926,15 @@ class NNTPContent(object):
         and the file wasn't previously open, the pointer is automatically
         placed at the end of the stream.
 
+        Text (str) is stored as UTF-8; bytes are stored as they are.
+
         """
         if self.stream is None:
             # open the file if it's not already open
             self.open(mode=NNTPFileMode.BINARY_RW, eof=eof)
+
+        if isinstance(data, str):
+            data = data.encode('utf-8')
 
         response = self.stream.write(data)
 
@@ -1116,7 +1120,7 @@ class NNTPContent(object):
         block_size = 65536
 
         # The mask to apply to all CRC checking
-        BIN_MASK = 0xffffffffL
+        BIN_MASK = 0xffffffff
 
         # Initialize
         _crc = 0
@@ -1224,21 +1228,8 @@ class NNTPContent(object):
             return ''
         return self.stream.readline(*args, **kwargs)
 
-    def next(self):
-        """
-        Python 2 support
-        Support stream type functions and iterations
-        """
-        data = self.stream.read(self._block_size)
-        if not data:
-            self.close()
-            raise StopIteration()
-
-        return data
-
     def __next__(self):
         """
-        Python 3 support
         Support stream type functions and iterations
         """
         data = self.stream.read(self._block_size)
@@ -1268,7 +1259,7 @@ class NNTPContent(object):
                 # Advance to the end of the file
                 ptr = self.stream.tell()
                 # Advance to the end of the file and get our length
-                length = self.stream.seek(0L, SEEK_END)
+                length = self.stream.seek(0, SEEK_END)
                 if length != ptr:
                     # Return our pointer
                     self.stream.seek(ptr, SEEK_SET)
@@ -1298,7 +1289,7 @@ class NNTPContent(object):
             return None
 
         # Head of data
-        self.stream.seek(0L, SEEK_SET)
+        self.stream.seek(0, SEEK_SET)
 
         if not max_bytes:
             return hexdump(self.read())
@@ -1321,13 +1312,38 @@ class NNTPContent(object):
         """
         Support Less Than (<) operator for sorting
         """
-        return self.key() < self.key()
+        return self.key() < other.key()
 
-    def __cmp__(self, content):
+    def __eq__(self, other):
         """
-        Support comparative checks
+        Content is equal when it shares the same key()
         """
-        return cmp(self.key(), content.key())
+        if not hasattr(other, 'key'):
+            return NotImplemented
+        return self.key() == other.key()
+
+    def __le__(self, other):
+        """
+        Support Less Than or Equal (<=) operator by comparing key()
+        """
+        if not hasattr(other, 'key'):
+            return NotImplemented
+        return self.key() <= other.key()
+
+    def __ge__(self, other):
+        """
+        Support Greater Than or Equal (>=) operator by comparing key()
+        """
+        if not hasattr(other, 'key'):
+            return NotImplemented
+        return self.key() >= other.key()
+
+    def __hash__(self):
+        """
+        Hash by identity so the object can still be stored in sets and
+        used as a dictionary key
+        """
+        return id(self)
 
     def __str__(self):
         """
@@ -1351,7 +1367,7 @@ class NNTPContent(object):
             return self
 
         # Throw an exception
-        raise IOError(errno.EIO, 'Could not open NNTPContent', self.path())
+        raise OSError(errno.EIO, 'Could not open NNTPContent', self.path())
 
     def __exit__(self, type, value, traceback):
         """

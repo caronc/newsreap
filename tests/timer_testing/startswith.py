@@ -18,36 +18,36 @@ fname = 'abc.%s.123' % (''.join(choice(chars) for _ in range(10000)))
 # array slice vs startswith for checking
 #
 
-print('startswith : %s' % (Timer(
+print(('startswith : %s' % (Timer(
     'for _ in range(0, 1000000): fname.startswith("abc")',
     setup,
-).timeit(1)))
+).timeit(1))))
 
-print('slice (wlen) : %s' % (Timer(
+print(('slice (wlen) : %s' % (Timer(
     'for _ in range(0, 1000000): fname[0:len("abc")] == "abc"',
     setup,
-).timeit(1)))
+).timeit(1))))
 
-print('slice (wolen) : %s' % (Timer(
+print(('slice (wolen) : %s' % (Timer(
     'for _ in range(0, 1000000): fname[0:3] == "abc"',
     setup,
-).timeit(1)))
+).timeit(1))))
 
-print
+print()
 
 # Test Endswith
-print('endswith : %s' % (Timer(
+print(('endswith : %s' % (Timer(
     'for _ in range(0, 1000000): fname.endswith(".123")',
     setup,
-).timeit(1)))
+).timeit(1))))
 
-print('slice (wlen) : %s' % (Timer(
+print(('slice (wlen) : %s' % (Timer(
     'for _ in range(0, 1000000): fname[-len(".123"):] == ".123"',
     setup,
-).timeit(1)))
+).timeit(1))))
 
-print('slice (wolen) : %s' % (Timer(
+print(('slice (wolen) : %s' % (Timer(
     'for _ in range(0, 1000000): fname[-4:] == ".123"',
     setup,
-).timeit(1)))
+).timeit(1))))
 

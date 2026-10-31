@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # An NNTPResponse Object used by the NNTPManagaer
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -17,14 +15,14 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from datetime import datetime
 
 from .NNTPAsciiContent import NNTPAsciiContent
 from .NNTPContent import NNTPContent
 
 
-class NNTPResponseCode(object):
+class NNTPResponseCode:
     """
     A Simple lookup table that makes the error codes returned by the NNTP
     server a bit more human readable.  These codes are based on:
@@ -147,7 +145,7 @@ class NNTPResponseCode(object):
     )
 
 
-class NNTPResponse(object):
+class NNTPResponse:
     """
     This is used with the NNTPManager class; specificially the query()
     function.
@@ -204,7 +202,7 @@ class NNTPResponse(object):
 
         if multiline is None:
             # any 200 reponse is good
-            return self.code/200 == 1
+            return self.code // 200 == 1
 
         elif multiline is True:
             # Check multiline only
@@ -236,16 +234,6 @@ class NNTPResponse(object):
             lambda x : x.key()
         """
         return self.body.key()
-
-    def next(self):
-        """
-        Python 2 support
-        Support stream type functions and iterations
-        """
-        if not self._iter:
-            self._iter = iter(self.decoded)
-
-        return next(self._iter)
 
     def __next__(self):
         """

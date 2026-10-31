@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # The Group Object used to wrap NNTP Groups associated with an Article
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -48,7 +46,7 @@ class StagedArticleGroup(ObjectBase):
     )
 
     def __init__(self, *args, **kwargs):
-        super(StagedArticleGroup, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __repr__(self):
         return "<StagedArticleGroup(article_id=%ld, name='%s')>" % (

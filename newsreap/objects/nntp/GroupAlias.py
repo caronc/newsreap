@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap NNTP Group Alias Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>

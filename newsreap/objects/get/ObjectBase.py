@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # The Object NNTP Get Object Base
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -14,7 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 #
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 
 # Our common NNTP Posting Base
 ObjectBase = declarative_base()

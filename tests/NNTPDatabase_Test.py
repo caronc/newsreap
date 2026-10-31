@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to test the NNTP Server and Connection class
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NNTPSegmentedPost is an object that manages several NNTPArticles.
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -15,7 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 import re
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from datetime import datetime
 from os.path import isfile
 from os.path import abspath
@@ -35,6 +33,7 @@ from .NNTPBinaryContent import NNTPBinaryContent
 from .NNTPAsciiContent import NNTPAsciiContent
 from .Utils import bytes_to_strsize
 from .Utils import pushd
+from .Utils import utcnow
 from .Mime import Mime
 from .Mime import DEFAULT_MIME_TYPE
 
@@ -44,7 +43,7 @@ from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
-class NNTPSegmentedPost(object):
+class NNTPSegmentedPost:
     """
     An object for maintaining retrieved nzb content. Large files need
     to be split across multiple Articles in order to be posted.
@@ -88,7 +87,7 @@ class NNTPSegmentedPost(object):
                                 can be a datetime() object. This identifies the
                                 date to associate with the file.  It's mostly
                                 used for sorting.  If no time is specified
-                                then it defaults to datetime.utcnow(). If a
+                                then it defaults to the current UTC time. If a
                                 valid `filename` was specified then the utc
                                 defaults to the time associated with the files
                                 modification date.
@@ -131,7 +130,7 @@ class NNTPSegmentedPost(object):
                 # Used None, uninitialized, or Used bad value
                 # Default timezone to 'now' but make it consistent
                 # with the world, use the UTC as a common source
-                self.utc = datetime.utcnow()
+                self.utc = utcnow()
 
         # Load our Codecs
         self._codecs = codecs
@@ -169,7 +168,7 @@ class NNTPSegmentedPost(object):
         Add an NNTPArticle()
         """
 
-        if isinstance(content, basestring):
+        if isinstance(content, str):
             # A mime object we can use to detect the type of file
             m = Mime()
 
@@ -216,7 +215,7 @@ class NNTPSegmentedPost(object):
                     # At this point we fall through and the next set of
                     # if checks will catch our new content object we created
 
-        # duplicates are ignored in a blist and therefore
+        # duplicates are ignored in a sortedset and therefore
         # we just capture the length of our list before
         # and after so that we can properly return a True/False
         # value
@@ -300,7 +299,7 @@ class NNTPSegmentedPost(object):
         'now()' is used instead
 
         The following information was taken from:
-                https://docs.python.org/2/library/datetime.html
+                https://docs.python.org/3/library/datetime.html
 
         It will give you an idea of what datetime objects can be set to. Note
         that datetime.stftime() entries are 'NOT' wrapped in {{ }} objects.
@@ -398,22 +397,22 @@ class NNTPSegmentedPost(object):
 
             # Make a copy of our subject
             subject = self.subject \
-                if isinstance(self.subject, basestring) else ''
+                if isinstance(self.subject, str) else ''
 
             # Make a copy of our poster
             poster = self.poster \
-                if isinstance(self.poster, basestring) else ''
+                if isinstance(self.poster, str) else ''
 
             if custom:
                 # Apply our custom object if one is defined; first escape
                 # content
                 cmask = {re.escape(str(key)): str(value)
-                         for (key, value) in custom.items()}
+                         for (key, value) in list(custom.items())}
 
                 # Build ourselves a translation map
                 cmask_r = re.compile(
-                    r'(' + '|'.join(cmask.keys()) + r')',
-                    re.IGNORECASE,
+                    r'(' + '|'.join(list(cmask.keys())) + r')',
+                    re.IGNORECASE | re.ASCII,
                 )
 
                 # Apply our custom masks
@@ -458,8 +457,8 @@ class NNTPSegmentedPost(object):
 
             # Build ourselves a translation map
             mask_r = re.compile(
-                r'(' + '|'.join(mask.keys()) + r')',
-                re.IGNORECASE,
+                r'(' + '|'.join(list(mask.keys())) + r')',
+                re.IGNORECASE | re.ASCII,
             )
 
             # Apply our common masks
@@ -467,8 +466,8 @@ class NNTPSegmentedPost(object):
             poster = mask_r.sub(lambda x: mask[re.escape(x.group())], poster)
 
             # Final Tidy
-            subject = re.sub('{{[^}]*}}', '', subject)
-            poster = re.sub('{{[^}]*}}', '', poster)
+            subject = re.sub('{{[^}]*}}', '', subject, flags=re.ASCII)
+            poster = re.sub('{{[^}]*}}', '', poster, flags=re.ASCII)
 
             if strftime:
                 # Time reference
@@ -568,7 +567,7 @@ class NNTPSegmentedPost(object):
         articles = iter(self.articles)
 
         # Create a copy of our first object
-        head_article = articles.next().copy()
+        head_article = next(articles).copy()
 
         # Iterate over all our remaining article entries and stack their
         # content onto our head_article
@@ -652,7 +651,7 @@ class NNTPSegmentedPost(object):
 
         # Initialize our findings
         match = None
-        for _, potential in ext_map.iteritems():
+        for _, potential in ext_map.items():
             if potential[2].type() == DEFAULT_MIME_TYPE or _mime is None:
                 if match is None:
                     # We allow this match if we have to
@@ -790,6 +789,13 @@ class NNTPSegmentedPost(object):
 
         return self.__dict__ == other.__dict__
 
+    def __hash__(self):
+        """
+        Hash by identity so the object can still be stored in sets and
+        used as a dictionary key
+        """
+        return id(self)
+
     def __getitem__(self, index):
         """
         Support accessing NNTPArticle objects by index
@@ -801,12 +807,6 @@ class NNTPSegmentedPost(object):
         Return a printable version of the article
         """
         return '%s' % self.filename
-
-    def __unicode__(self):
-        """
-        Return a printable version of the article
-        """
-        return u'%s' % self.filename
 
     def __repr__(self):
         """

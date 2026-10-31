@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Centralized Settings and Configuration
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -345,7 +343,7 @@ class NNTPSettings(NNTPDatabase):
         file that is read and loaded.
         """
         # Load super class
-        super(NNTPSettings, self).__init__()
+        super().__init__()
 
         # Base Directory
         self.base_dir = DEFAULT_BASE_DIR
@@ -379,7 +377,7 @@ class NNTPSettings(NNTPDatabase):
             cfg_file = next((path for path in DEFAULT_CONFIG_FILE_PATHS
                              if isfile(path)), None)
 
-        if isinstance(cfg_file, basestring) and isfile(cfg_file):
+        if isinstance(cfg_file, str) and isfile(cfg_file):
             # A configuration path was specified
             self.read(cfg_file)
 
@@ -421,26 +419,27 @@ class NNTPSettings(NNTPDatabase):
         # Append our new data
         cfg_file = abspath(expanduser(cfg_file))
         try:
-            cfg_data = yaml.load(file(cfg_file, 'r'))
+            with open(cfg_file) as fp:
+                cfg_data = yaml.safe_load(fp)
             logger.debug('Successfully parsed YAML configuration from %s' % (
                 cfg_file,
             ))
 
-        except ParserError, e:
+        except ParserError as e:
             logger.debug('%s' % (str(e)))
             logger.error('Failed to parse YAML configuration from %s' % (
                 cfg_file,
             ))
             return _cfg_data
 
-        except IOError, e:
+        except OSError as e:
             logger.debug('%s' % (str(e)))
             logger.error('Failed to access YAML configuration from %s' % (
                 cfg_file,
             ))
             return _cfg_data
 
-        except ScannerError, e:
+        except ScannerError as e:
             logger.debug('%s' % (str(e)))
             logger.error('Failed to interpret YAML configuration from %s' % (
                 cfg_file,
@@ -548,7 +547,7 @@ class NNTPSettings(NNTPDatabase):
         if cfg_file is None:
             cfg_file = self.cfg_file
 
-        elif isinstance(cfg_file, basestring) and isfile(cfg_file):
+        elif isinstance(cfg_file, str) and isfile(cfg_file):
             self.cfg_file = cfg_file
 
         else:
@@ -591,17 +590,17 @@ class NNTPSettings(NNTPDatabase):
         # Strip out only the information we're not interested in
         self.nntp_processing.update({
             k: self.cfg_data[PROCESSING_KEY][k]
-            for k in DEFAULT_PROCESSING_VARIABLES.keys()
+            for k in list(DEFAULT_PROCESSING_VARIABLES.keys())
             if k in self.cfg_data[PROCESSING_KEY]})
 
         self.nntp_database.update({
             k: self.cfg_data[DATABASE_KEY][k]
-            for k in DEFAULT_DATABASE_VARIABLES.keys()
+            for k in list(DEFAULT_DATABASE_VARIABLES.keys())
             if k in self.cfg_data[DATABASE_KEY]})
 
         self.nntp_posting.update({
             k: self.cfg_data[POSTING_KEY][k]
-            for k in DEFAULT_POSTING_VARIABLES.keys()
+            for k in list(DEFAULT_POSTING_VARIABLES.keys())
             if k in self.cfg_data[POSTING_KEY]})
 
         # Parse our content
@@ -622,10 +621,10 @@ class NNTPSettings(NNTPDatabase):
 
             # First we strip out only the inforation we're interested in
             results.update({
-                k: s[k] for k in DEFAULT_SERVER_VARIABLES.keys() if k in s})
+                k: s[k] for k in DEFAULT_SERVER_VARIABLES if k in s})
 
             # Purge any entries from our list that are set to 'None'
-            results = {k: v for k, v in results.iteritems() if v is not None}
+            results = {k: v for k, v in results.items() if v is not None}
 
             # our database (server) key is always the hostname
             try:
@@ -689,7 +688,7 @@ class NNTPSettings(NNTPDatabase):
         # the enabled flag as being enabled. We also convert our _nntp_servers
         # dictionary back into a simple list
         self.nntp_servers = sorted(
-            [v for v in _nntp_servers.itervalues()
+            [v for v in _nntp_servers.values()
              if v.get('enabled', True)],
             key=itemgetter("priority"),
         )
@@ -725,7 +724,7 @@ class NNTPSettings(NNTPDatabase):
             with open(cfg_file, 'w') as fp:
                 yaml.dump(self.cfg_data, fp, default_flow_style=False)
 
-        except IOError, e:
+        except OSError as e:
             logger.debug('%s' % (str(e)))
             logger.error('Failed to write configuration file %s' % (
                 cfg_file,
@@ -765,12 +764,12 @@ class NNTPSettings(NNTPDatabase):
             }
 
             # A checking script for handling entries not supported
-            self._mask_check_re = re.compile('(%{([^}]r+)?}?)+')
+            self._mask_check_re = re.compile('(%{([^}]r+)?}?)+', re.ASCII)
 
             # we build our mask once for speed
             self._mask_re = re.compile(
-                r'(' + '|'.join(self._mask_map.keys()) + r')',
-                re.IGNORECASE,
+                r'(' + '|'.join(list(self._mask_map.keys())) + r')',
+                re.IGNORECASE | re.ASCII,
             )
 
         # extra mask is created if an additional mask was provided
@@ -779,8 +778,8 @@ class NNTPSettings(NNTPDatabase):
         if mask_map:
             # a mask map was provided as input too
             extra_mask_re = re.compile(
-                r'(' + '|'.join(mask_map.keys()) + r')',
-                re.IGNORECASE,
+                r'(' + '|'.join(list(mask_map.keys())) + r')',
+                re.IGNORECASE | re.ASCII,
             )
 
         # Apply our lookups

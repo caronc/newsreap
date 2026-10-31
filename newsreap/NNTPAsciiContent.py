@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A NNTP Ascii File Representation
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -25,14 +23,13 @@ class NNTPAsciiContent(NNTPContent):
     """
     def __init__(self, filepath=None, part=None, total_parts=None,
                  work_dir=None, sort_no=20000, *args, **kwargs):
-        super(NNTPAsciiContent, self).__init__(
+        super().__init__(
             filepath=filepath,
             part=part, total_parts=total_parts, work_dir=work_dir,
             sort_no=sort_no, *args, **kwargs)
 
     def __next__(self):
         """
-        Python 3 support
         Support stream type functions and iterations
         """
         data = self.stream.readline()
@@ -48,25 +45,17 @@ class NNTPAsciiContent(NNTPContent):
         """
         return (self._isdir is False) and exists(self.filepath)
 
-    def next(self):
-        """
-        Python 2 support
-        Support stream type functions and iterations
-        """
-        data = self.stream.readline()
-        if not data:
-            self.close()
-            raise StopIteration()
-
-        return data
-
     def __str__(self):
-        """ Returns content """
-        return self.getvalue()
+        """ Returns content (as text) """
+        value = self.getvalue()
+        if value is None:
+            # Nothing could be read
+            return ''
 
-    def __unicode__(self):
-        """ Returns content """
-        return unicode(self.getvalue())
+        if isinstance(value, bytes):
+            # Text is stored as UTF-8; anything else is replaced
+            value = value.decode('utf-8', 'replace')
+        return value
 
     def __repr__(self):
         """

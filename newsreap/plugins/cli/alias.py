@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap NNTP Group Alias CLI Plugin
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -115,7 +113,7 @@ def alias_add(ctx, alias, groups):
     # Track our database updates
     pending_commits = 0
 
-    for name, _id in groups.iteritems():
+    for name, _id in groups.items():
         if session.merge(GroupAlias(group_id=_id, name=_alias)):
             logger.debug(
                 "Adding alias '%s' to group '%s'." % (_alias, name),
@@ -222,7 +220,7 @@ def alias_del(ctx, alias, groups):
             # Add our group to our removal list
             remove_groups.append(a_groups[group[0]])
 
-            if remove_groups == a_groups.values():
+            if remove_groups == list(a_groups.values()):
                 # We can make an early exit if this ever equates to True
                 early_exit = True
                 break
@@ -259,10 +257,10 @@ def alias_list(ctx):
         if last != entry[1]:
             if last is not None:
                 # New line
-                print
+                print()
 
             # Store new group
             last = entry[1]
-            print '%s:' % last
+            print('%s:' % last)
 
-        print '  - %s' % entry[0]
+        print('  - %s' % entry[0])

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 #  The Variable System Parameter Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -47,7 +45,7 @@ class Vsp(ObjectBase):
     __mapper_args__ = {"primary_key": (group, key)}
 
     def __init__(self, group, key, value=None, order=0, *args, **kwargs):
-        super(Vsp, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.group = group
         self.key = key
         self.value = value

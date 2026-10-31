@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTPResponse Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -23,7 +21,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 
 from os.path import dirname
 from os.path import abspath

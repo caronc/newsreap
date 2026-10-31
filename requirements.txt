@@ -1,11 +1,16 @@
+#
+# Note: This file is being kept for backwards compatibility with
+#       legacy systems that point here.  All future changes should
+#       occur in pyproject.toml.  Contents of this file can be found
+#       in project.dependencies
+
 click >= 5.1
 pytz
-blist
-pyyaml
-sqlalchemy >= 1.0
-gevent >= 1.1.2
+sortedcontainers
+PyYAML
+SQLAlchemy >= 1.4
+gevent >= 1.5
 python-dateutil
-cryptography >= 0.7
-yenc >= 0.4
+cryptography
 lxml >= 3.0
 tqdm

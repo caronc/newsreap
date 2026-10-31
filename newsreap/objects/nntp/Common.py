@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A common set of database queries
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -67,7 +65,7 @@ def get_groups(session, lookup=None, watched=False):
         results = dict(session.query(Group.name, Group.id)
                        .filter(Group.watch == pep8_e712).all())
 
-    if isinstance(lookup, (basestring, int)):
+    if isinstance(lookup, (str, int)):
         lookup = [lookup, ]
 
     elif lookup is None:
@@ -92,7 +90,7 @@ def get_groups(session, lookup=None, watched=False):
                     "The group '%s' does not exist." % str(group_id),
                 )
 
-        elif isinstance(group_id, basestring):
+        elif isinstance(group_id, str):
             _id = group_id.lower().strip()
             if not _id:
                 continue
@@ -146,6 +144,6 @@ def get_groups(session, lookup=None, watched=False):
                 results = groups
             else:
                 # append to our existing results
-                results = dict(results.items() + groups.items())
+                results = dict(list(results.items()) + list(groups.items()))
 
     return results

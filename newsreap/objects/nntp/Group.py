@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # The Group Object used to wrap NNTP Groups
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -59,7 +57,7 @@ class Group(ObjectBase):
     last_updated = Column(DateTime, server_default=func.now())
 
     def __init__(self, *args, **kwargs):
-        super(Group, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __repr__(self):
         return "<Group(id='%d', name='%s', flag=%s', watch='%s')>" % (

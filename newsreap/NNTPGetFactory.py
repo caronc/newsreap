@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NNTPGetFactory is an object that manages NNTP articles retrievals
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -27,7 +25,7 @@ from os.path import expanduser
 from os.path import basename
 from os.path import dirname
 from os.path import splitext
-from StringIO import StringIO
+from io import StringIO
 
 from .NNTPGroup import NNTPGroup
 from .NNTPArticle import MESSAGE_ID_RE
@@ -50,7 +48,7 @@ from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
-class NNTPGetFactory(object):
+class NNTPGetFactory:
     """
     Simplifies the retrieval of items from an NNTP Server
 
@@ -237,16 +235,18 @@ class NNTPGetFactory(object):
 
         if hooks is not True:
             # Update our hooks
+            # Our hooks are shared with our connection object, so this
+            # updates the connection too
             self.hooks.reset()
             self.hooks.add(hooks, ('.', self.default_hook_path))
 
-            if self.connection:
-                # Set our hooks onto our conection object
-                self.connection.hooks(self.hooks)
+            # Put back our internal hooks
+            self.hooks.add(self.transfer_count)
+            self.hooks.add(self.transfer_rates)
 
         if self.base_path:
             # Tidy it up
-            self.base_path = abspath(expanduser(abspath))
+            self.base_path = abspath(expanduser(self.base_path))
 
         if isfile(source):
             if not self.base_path:
@@ -590,7 +590,7 @@ class NNTPGetFactory(object):
         # Used to track multi-header fetches
         header_list = []
 
-        if isinstance(source, basestring):
+        if isinstance(source, str):
             # We are dealing with a Message-ID
             # return our NNTPHeader object
             logger.debug("Handling Message-ID '%s'." % (self.name))
@@ -837,7 +837,7 @@ class NNTPGetFactory(object):
         if size <= 0:
             return False
 
-        if isinstance(source, basestring):
+        if isinstance(source, str):
             # We are dealing with a Message-ID
             # return our NNTPHeader object
             logger.debug("Handling Message-ID '%s'." % (self.name))
@@ -974,7 +974,7 @@ class NNTPGetFactory(object):
                 prep_header(entry)
 
         # Return our stream object(s)
-        response = str()
+        response = ''
         if self.headers:
             response += hdr_stream.getvalue()
 

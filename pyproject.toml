@@ -1,0 +1,194 @@
+[build-system]
+requires = [
+    "setuptools>=69",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "newsreap"
+description = "Usenet Indexer and Framework"
+readme = "README.md"
+authors = [
+    { name = "Chris Caron", email = "lead2gold@gmail.com" },
+]
+dynamic = ["version"]
+
+# Not supported yet for all Distributions
+license = { text = "GPLv3" }
+
+requires-python = ">=3.13"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Natural Language :: English",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Communications :: Usenet News",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+]
+
+dependencies = [
+    "click>=5.1",
+    "pytz",
+    "sortedcontainers",
+    "PyYAML",
+    "SQLAlchemy>=1.4",
+    "gevent>=1.5",
+    "python-dateutil",
+    "cryptography",
+    "lxml>=3.0",
+    "tqdm",
+]
+
+keywords = [
+    "usenet",
+    "nntp",
+    "index",
+    "framework",
+    "yEnc",
+    "nzb",
+]
+
+[project.optional-dependencies]
+
+# All packages required to test/build against
+dev = [
+    "coverage",
+    "tox",
+    "pytest",
+    "pytest-cov",
+    "pytest-timeout",
+    "ruff==0.15.8",
+    "validate-pyproject",
+]
+
+[dependency-groups]
+# Development environment for uv; "uv sync" installs this group by default.
+# Dependency groups are never published, so PyPI users are unaffected.
+dev = [
+    "newsreap[dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/caronc/newsreap"
+Source = "https://github.com/caronc/newsreap"
+Tracker = "https://github.com/caronc/newsreap/issues"
+
+[project.scripts]
+nr = "newsreap.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+newsreap = [
+    "var/*",
+]
+
+# The sample configuration file is installed for reference
+[tool.setuptools.data-files]
+"share/newsreap" = ["config.yaml"]
+
+[tool.setuptools.packages.find]
+where = [
+    ".",
+]
+exclude = [
+    "tests*",
+]
+include = ["newsreap*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "newsreap.__version__"}
+
+[tool.ruff]
+line-length = 79
+target-version = "py313"
+exclude = [
+  "tests/var",
+  "tests/timer_testing",
+  "build",
+  "dist",
+  ".eggs",
+  ".tox",
+  ".local",
+  ".venv",
+  "venv",
+]
+
+[tool.ruff.lint]
+# Keep to the checks this code base already passes; more can be enabled
+# as the code is tidied up.
+select = [
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "W",    # pycodestyle warnings
+  "UP",   # pyupgrade (keeps Python 2 idioms from coming back)
+]
+
+ignore = [
+  "E402",    # gevent must monkey patch before other imports
+  "E722",    # bare except
+  "E741",    # Ambiguous variable name (e.g., l, O, I)
+  "F401",    # imported but unused
+  "F403",    # `from x import *` used
+  "F405",    # name may be undefined, or defined from star imports
+  "F841",    # local variable assigned but never used
+
+  # Found throughout the original code; fix these as the code is touched
+  "E501",    # line too long
+  "E711",    # comparison to None
+  "E712",    # comparison to True/False
+  "E713",    # not-in test
+  "E731",    # lambda assignment
+  "F507",    # %-format placeholder count mismatch
+  "F811",    # redefinition of an unused name
+
+  # The following are style choices rather than Python 2 left-overs
+  "UP031",   # printf string formatting
+  "UP032",   # f-string
+  "UP030",   # format literals
+  "UP034",   # extraneous parentheses
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+python_files = ["*_Test.py"]
+# Network tests talk to a local test server; never let one hang the run
+timeout = 300
+norecursedirs = ["tests/var", "tests/timer_testing"]
+
+[tool.coverage.run]
+branch = true
+parallel = false
+data_file = ".coverage"
+source = ["newsreap"]
+relative_files = true
+
+[tool.coverage.paths]
+# Normalise .tox and site-packages layouts back to 'newsreap'
+source = [
+    "newsreap",
+    ".tox/*/lib/python*/site-packages/newsreap",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+skip_empty = true
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"

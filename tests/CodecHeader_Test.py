@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTP Header Codec
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -85,20 +83,20 @@ class CodecUU_Header(TestBase):
         assert isfile(encoded_filepath)
 
         # Read data and decode it
-        with open(encoded_filepath, 'r') as fd_in:
+        with open(encoded_filepath, 'rb') as fd_in:
             # Decodes content and stops when complete
             assert isinstance(ch_py.decode(fd_in), NNTPHeader)
 
             # Ensure that the next line of code we read is actually
             # the first line of text after the white space separater
             # after the headers
-            assert fd_in.readline().strip() == 'First Line'
+            assert fd_in.readline().strip() == b'First Line'
 
             # Calling decode again is futile because headers have already
             # been set
             ch_py.decode(fd_in)
             # Test that the next line read returns the next line of data
-            assert fd_in.readline().strip() == 'Second Line'
+            assert fd_in.readline().strip() == b'Second Line'
 
         assert len(ch_py) == 16
 
@@ -107,8 +105,8 @@ class CodecUU_Header(TestBase):
         assert ch_py._total_lines == 17
         assert ch_py._lines == len(ch_py)
 
-        # print '\n'.join(["assert ch_py['%s'] == '%s'" % (k,v) \
-        #        for k,v in ch_py.items()])
+        # print('\n'.join(["assert ch_py['%s'] == '%s'" % (k,v) \
+        #        for k, v in ch_py.items()]))
 
         # 01
         assert ch_py['From'] == 'Spyder McGurk <Smcgurk@veration.edu>'
@@ -157,22 +155,22 @@ class CodecUU_Header(TestBase):
         assert isfile(encoded_filepath)
 
         # Read data and decode it
-        with open(encoded_filepath, 'r') as fd_in:
+        with open(encoded_filepath, 'rb') as fd_in:
             # Decodes content and stops when complete
             assert isinstance(ch_py.decode(fd_in), NNTPHeader)
 
             # Read in the white space since it is actually the first line
             # after the end of headers delimiter
-            assert fd_in.readline().strip() == ''
+            assert fd_in.readline().strip() == b''
 
             # Ensure that the next line of code we read is actually
             # the first line of text after the white space separater
             # after the headers
-            assert fd_in.readline().strip() == 'Second Line'
+            assert fd_in.readline().strip() == b'Second Line'
 
 
-        # print '\n'.join(["assert ch_py['%s'] == '%s'" % (k, v) \
-        #                 for k, v in ch_py.items()])
+        # print('\n'.join(["assert ch_py['%s'] == '%s'" % (k, v) \
+        #                 for k, v in ch_py.items()]))
 
         assert len(ch_py) == 10
 
@@ -219,16 +217,16 @@ class CodecUU_Header(TestBase):
         assert isfile(encoded_filepath)
 
         # Read data and decode it
-        with open(encoded_filepath, 'r') as fd_in:
+        with open(encoded_filepath, 'rb') as fd_in:
             # Decodes content and stops when complete
             assert isinstance(ch_py.decode(fd_in), NNTPHeader)
 
             # Read in the white space since it is actually the first line
             # after the end of headers delimiter
-            assert fd_in.readline().strip() == 'First Line without spaces'
+            assert fd_in.readline().strip() == b'First Line without spaces'
 
-        #print '\n'.join(["assert ch_py['%s'] == '%s'" % (k, v) \
-        #                 for k, v in ch_py.items()])
+        #print('\n'.join(["assert ch_py['%s'] == '%s'" % (k, v) \
+        #                 for k, v in ch_py.items()]))
 
         assert len(ch_py) == 10
 
@@ -262,22 +260,22 @@ class CodecUU_Header(TestBase):
         assert isfile(encoded_filepath_b)
 
         # Read data and decode it
-        with open(encoded_filepath_a, 'r') as fd_in:
+        with open(encoded_filepath_a, 'rb') as fd_in:
             # Returns true because we processed all we had found
             # and no end of header delimiter detected (or not header type)
             assert ch_py.decode(fd_in) is True
 
         # use our second file to finish the message
-        with open(encoded_filepath_b, 'r') as fd_in:
+        with open(encoded_filepath_b, 'rb') as fd_in:
             # Decodes content and stops when complete
             assert isinstance(ch_py.decode(fd_in), NNTPHeader)
 
             # Read in the white space since it is actually the first line
             # after the end of headers delimiter
-            assert fd_in.readline().strip() == 'First Line without spaces'
+            assert fd_in.readline().strip() == b'First Line without spaces'
 
-        #print '\n'.join(["assert ch_py['%s'] == '%s'" % (k, v) \
-        #                 for k, v in ch_py.items()])
+        #print('\n'.join(["assert ch_py['%s'] == '%s'" % (k, v) \
+        #                 for k, v in ch_py.items()]))
 
         assert len(ch_py) == 10
 
@@ -305,7 +303,7 @@ class CodecUU_Header(TestBase):
         assert ch_py.is_valid() is None
 
         # Populate ourselves with some keys
-        with open(encoded_filepath, 'r') as fd_in:
+        with open(encoded_filepath, 'rb') as fd_in:
             # Decodes content and stops when complete
             assert isinstance(ch_py.decode(fd_in), NNTPHeader)
 

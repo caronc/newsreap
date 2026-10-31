@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # The Header Object used to wrap NNTP Headers associated with an Article
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -51,7 +49,7 @@ class StagedArticleHeader(ObjectBase):
     )
 
     def __init__(self, *args, **kwargs):
-        super(StagedArticleHeader, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __repr__(self):
         return "<StagedArticleHeader(key=%s, value='%s')>" % (

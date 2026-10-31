@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A decoder to handle for handling xover (article indexes) fetches
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -15,7 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 import re
-from blist import sorteddict
+from sortedcontainers import SortedDict as sorteddict
 from datetime import datetime
 from pytz import UTC
 from dateutil.tz import tzutc
@@ -35,27 +33,27 @@ NNTP_XOVER_RESPONSE_RE = re.compile(
     # Article Number (entry 1)
     # This is unique to the Usenet/NNTP Service Provider only and will vary
     # when tested across different providers.
-    r'^[ ]*(?P<article_no>[0-9]+)[ ]*\t' + \
+    br'^[ ]*(?P<article_no>[0-9]+)[ ]*\t' + \
     # Subject (entry 2)
-    r'[ ]*(?P<subject>[^\t]+)[ ]*\t' + \
+    br'[ ]*(?P<subject>[^\t]+)[ ]*\t' + \
     # Poster (entry 3)
-    r'[ ]*(?P<poster>[^\t]+)[ ]*\t' + \
+    br'[ ]*(?P<poster>[^\t]+)[ ]*\t' + \
     # Date/Time (entry 4)
-    r'[ ]*(?P<date>[^\t]+)[ ]*\t' + \
+    br'[ ]*(?P<date>[^\t]+)[ ]*\t' + \
     # Unique Message-ID (entry 5)
-    r'[ ]*<?[ ]*(?P<id>[^\t>]+)[ ]*>?[ ]*\t' + \
+    br'[ ]*<?[ ]*(?P<id>[^\t>]+)[ ]*>?[ ]*\t' + \
     # unknown? (entry 6)
-    r'[ ]*(?P<ignored>[^\t]*)[ ]*\t' + \
+    br'[ ]*(?P<ignored>[^\t]*)[ ]*\t' + \
     # Message Size (in Bytes) (entry 7)
-    r'[ ]*(?P<size>[0-9]+)[ ]*\t' + \
+    br'[ ]*(?P<size>[0-9]+)[ ]*\t' + \
     # Lines (entry 8)
-    r'[ ]*(?P<lines>[0-9]+)?[ ]*\t' + \
+    br'[ ]*(?P<lines>[0-9]+)?[ ]*\t' + \
     # Groups (entry 9)
-    r'[ ]*(?P<xref>Xref[ ]*:)?(?P<group>[ ]*([^\t]+))+\s*',
-    re.IGNORECASE,
+    br'[ ]*(?P<xref>Xref[ ]*:)?(?P<group>[ ]*([^\t]+))+\s*',
+    re.IGNORECASE | re.ASCII,
 )
 
-class XoverGrouping(object):
+class XoverGrouping:
     """
     Defines the xover grouping
     """
@@ -84,7 +82,7 @@ class CodecArticleIndex(CodecBase):
 
     def __init__(self, descriptor=None, filters=None, sort=None,
                  encoding=None, work_dir=None, *args, **kwargs):
-        super(CodecArticleIndex, self).__init__(descriptor=descriptor,
+        super().__init__(descriptor=descriptor,
             work_dir=work_dir, *args, **kwargs)
 
         # Our Meta Content
@@ -118,24 +116,28 @@ class CodecArticleIndex(CodecBase):
         it returns a dictionary of the keys and their mapped values.
 
         """
+        if isinstance(line, str):
+            line = line.encode(self.encoding)
+
         result = NNTP_XOVER_RESPONSE_RE.match(line)
         if not result:
             return None
 
+        date = result.group('date').decode(self.encoding)
         try:
             # handle datetime
-            article_date = parse(result.group('date'))
+            article_date = parse(date)
 
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             try:
                 # We weren't able to parse the date
-                article_date = parse(result.group('date'), fuzzy=True)
+                article_date = parse(date, fuzzy=True)
 
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 # It would be great if users of the product would email
                 # us these errors so we can work on making them better
                 logger.warning(
-                    "Unparsable XOVER date '%s'" % (result.group('date')),
+                    "Unparsable XOVER date '%s'" % (date),
                 )
                 article_date = datetime.fromtimestamp(0)
 
@@ -153,7 +155,7 @@ class CodecArticleIndex(CodecBase):
             lines = -1
 
         entry = {
-            'id': result.group('id'),
+            'id': result.group('id').decode(self.encoding),
             'article_no': int(result.group('article_no')),
             'poster': result.group('poster').decode(self.encoding),
             'date': article_date,
@@ -166,7 +168,9 @@ class CodecArticleIndex(CodecBase):
         }
 
         # Split results
-        results = re.split('\s+', result.group('group').strip())
+        results = re.split(
+            '\\s+', result.group('group').decode(self.encoding).strip(),
+            flags=re.ASCII)
 
         # Append remaining groups
         for x in results:
@@ -277,7 +281,7 @@ class CodecArticleIndex(CodecBase):
         """
         Reset our decoded content
         """
-        super(CodecArticleIndex, self).reset()
+        super().reset()
 
         # Our Meta Content
         self.decoded = NNTPMetaContent(work_dir=self.work_dir)

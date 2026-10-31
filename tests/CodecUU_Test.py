@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the UU Codec
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -39,6 +37,7 @@ from newsreap.codecs.CodecUU import CodecUU
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.NNTPArticle import NNTPArticle
+from zlib import crc32
 
 
 class CodecUU_Test(TestBase):
@@ -73,7 +72,7 @@ class CodecUU_Test(TestBase):
         assert uu_meta is not None
         assert len(uu_meta) == 3
         assert uu_meta['key'] == 'begin'
-        assert uu_meta['perm'] == 0775
+        assert uu_meta['perm'] == 0o775
         assert uu_meta['name'] == 'mybinary.dat'
 
         # Whitespace has no bearing
@@ -81,7 +80,7 @@ class CodecUU_Test(TestBase):
         assert uu_meta is not None
         assert len(uu_meta) == 3
         assert uu_meta['key'] == 'begin'
-        assert uu_meta['perm'] == 0775
+        assert uu_meta['perm'] == 0o775
         assert uu_meta['name'] == 'mybinary.dat'
 
         # End fails because we're processing content relative
@@ -120,7 +119,7 @@ class CodecUU_Test(TestBase):
         ud_py = CodecUU(work_dir=self.test_dir)
 
         # Read data and decode it
-        with open(encoded_filepath, 'r') as fd_in:
+        with open(encoded_filepath, 'rb') as fd_in:
             article = ud_py.decode(fd_in)
 
         # our content should be valid
@@ -130,7 +129,7 @@ class CodecUU_Test(TestBase):
         # as being okay (structurally)
         assert article.is_valid() is True
 
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
         # Compare our processed content with the expected results
@@ -307,7 +306,7 @@ class CodecUU_Test(TestBase):
         ud_py = CodecUU(work_dir=self.test_dir, max_bytes=10)
 
         # Read data and decode it
-        with open(encoded_filepath, 'r') as fd_in:
+        with open(encoded_filepath, 'rb') as fd_in:
             article = ud_py.decode(fd_in)
 
         # our content should be valid
@@ -317,7 +316,7 @@ class CodecUU_Test(TestBase):
         # early exit
         assert article.is_valid() is False
 
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
         # Compare our processed content with the expected results
@@ -327,3 +326,15 @@ class CodecUU_Test(TestBase):
         # still the same as the expected result up to what has been
         # processed.
         assert decoded[0:length] == article.getvalue()
+
+    def test_decoded_content_crc(self):
+        """
+        The codec's crc32 matches the content it decoded
+        """
+        encoded_filepath = join(self.var_dir, 'uuencoded.tax.jpg.msg')
+        decoder = CodecUU(work_dir=self.test_dir)
+        with open(encoded_filepath, 'rb') as fd_in:
+            content = decoder.decode(fd_in)
+
+        assert decoder.crc32() == '%08x' % crc32(content.getvalue())
+        assert decoder.crc32() == content.crc32()

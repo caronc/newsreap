@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Common Logging Parameters and Defaults
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -103,7 +101,7 @@ def add_handler(logger, sendto=True, backupCount=5):
         if logger.level != logging.NOTSET:
             logger.setLevel(logging.NOTSET)
 
-    elif isinstance(sendto, basestring):
+    elif isinstance(sendto, str):
         if backupCount is None:
             handler = logging.FileHandler(filename=sendto)
 

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap NNTP Group CLI Plugin
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -78,7 +76,7 @@ def group_watch(ctx, groups):
     # to True and then we can compare to it
     pep8_e712 = False
 
-    for name, _id in groups.items():
+    for name, _id in list(groups.items()):
         # Remove the entry if we can otherwise we just gracefully move on
         if session.query(Group).filter(Group.id == _id)\
                 .filter(Group.watch == pep8_e712)\
@@ -122,7 +120,7 @@ def group_unwatch(ctx, groups):
     # to True and then we can compare to it
     pep8_e712 = True
 
-    for name, _id in groups.items():
+    for name, _id in list(groups.items()):
         # Remove the entry if we can otherwise we just gracefully move on
         if session.query(Group).filter(Group.id == _id)\
                 .filter(Group.watch == pep8_e712)\
@@ -185,11 +183,11 @@ def group_list(ctx, all):
         if results is not None:
             # Display result fetched from the database
             for r in results:
-                print('%-65s %10s %s' % (
+                print(('%-65s %10s %s' % (
                     r.name,
                     r.count,
                     r.flags,
-                ))
+                )))
             return
 
     if all:
@@ -201,9 +199,9 @@ def group_list(ctx, all):
         if results:
             results = sorted(results, key=lambda k: k['group'])
             for r in results:
-                print('%-65s %10s %s' % (
+                print(('%-65s %10s %s' % (
                     r['group'],
                     r['count'],
                     r['flags'],
-                ))
+                )))
     return

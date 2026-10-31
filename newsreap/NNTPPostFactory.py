@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NNTPPostFactory is an object that generates NNTP postable articles
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -71,13 +69,13 @@ PREP_DIR = 'prep'
 # Defines the auto keyword we accept to which we detect our archive split
 # size based on the size of the content we're archiving.
 # See detect_split_size() below for details
-PREP_AUTO_ARCHIVE_RE = re.compile('\s*auto\s*', re.I)
+PREP_AUTO_ARCHIVE_RE = re.compile('\\s*auto\\s*', re.I | re.ASCII)
 
 # Staging
 STAGE_DIR = 'staged'
 
 
-class NNTPPostFactory(object):
+class NNTPPostFactory:
     """
     Simplifies posting content to an NNTP Server
 
@@ -231,13 +229,14 @@ class NNTPPostFactory(object):
         self.xfer_tqdm = None
 
         if hooks is not True:
-            # Update our hooks
+            # Our hooks are shared with our connection object, so this
+            # updates the connection too
             self.hooks.reset()
             self.hooks.add(hooks, ('.', self.default_hook_path))
 
-            if self.connection:
-                # Set our hooks onto our conection object
-                self.connection.hooks.add(self.hooks)
+            # Put back our internal hooks
+            self.hooks.add(self.transfer_count)
+            self.hooks.add(self.transfer_rates)
 
         if not exists(path):
             # Some simple error checking
@@ -379,7 +378,7 @@ class NNTPPostFactory(object):
                 self.stage_path)
             return False
 
-        if isinstance(archive_size, basestring) and \
+        if isinstance(archive_size, str) and \
                 PREP_AUTO_ARCHIVE_RE.search(archive_size):
 
             # Automatically detect our archive split size
@@ -575,7 +574,7 @@ class NNTPPostFactory(object):
                 fullpath=entry,
                 filename=basename(entry),
             )
-            if isinstance(response, basestring):
+            if isinstance(response, str):
                 # Set the provided filename
                 post.filename = basename(response.strip())
 
@@ -778,7 +777,7 @@ class NNTPPostFactory(object):
             )
 
             # Store our headers
-            for key, value in headers.iteritems():
+            for key, value in headers.items():
                 article.header[key] = value
 
             if not article.add(path):
@@ -885,7 +884,7 @@ class NNTPPostFactory(object):
             return False
 
         # Block until our uploads have finished and report them accordingly
-        for article_id, _connection in upload_map.iteritems():
+        for article_id, _connection in upload_map.items():
             # Ensure we're done
             _connection.wait()
 
@@ -1048,7 +1047,7 @@ class NNTPPostFactory(object):
                 }
 
         # Update our verification map
-        for key, meta in verification_map.items():
+        for key, meta in list(verification_map.items()):
             # Ensure we're done
             meta['response'].wait()
 
@@ -1185,7 +1184,7 @@ class NNTPPostFactory(object):
         if id:
             # get our id
             sa = session.query(StagedArticle)\
-                .filter(StagedArticle.id == id).one()
+                .filter(StagedArticle.id == id).first()
             if not sa:
                 # Does not exist
                 return None
@@ -1212,7 +1211,7 @@ class NNTPPostFactory(object):
                     # Include it in our update
                     StagedArticle.message_id: article.msgid(),
                     StagedArticle.subject: article.subject,
-                    StagedArticle.body: unicode(article.body),
+                    StagedArticle.body: str(article.body),
                     StagedArticle.poster: article.poster,
                     StagedArticle.remotefile: article[0].filename,
                     StagedArticle.size: article.size(),
@@ -1234,7 +1233,7 @@ class NNTPPostFactory(object):
                 # a post to adjust where content is sent to
                 message_id=article.msgid(),
                 subject=article.subject,
-                body=unicode(article.body),
+                body=str(article.body),
                 poster=article.poster,
                 remotefile=article[0].filename,
                 size=article.size(),
@@ -1258,7 +1257,7 @@ class NNTPPostFactory(object):
             )
 
         # Store our header(s) associated with the article now
-        for _key, _value in article.header.items():
+        for _key, _value in list(article.header.items()):
             session.add(
                 StagedArticleHeader(
                     key=str(_key),

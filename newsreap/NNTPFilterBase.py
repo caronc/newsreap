@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Defines a global filter list that can be applied to results
 # retrieved by a group on usenet
 #
@@ -49,17 +47,17 @@ FILTER_LINE_RE = re.compile(
     r'\s+(?P<group>[^\s]+)' +\
     r'(\s+(?P<regex>.+))?' +\
     r')\s*$',
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 # Newsreap Filter Files
 FILTER_FILE_RE = re.compile(
     r'.*\.nrf$',
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 
-class FilterListCode(object):
+class FilterListCode:
     """
     Maps the filter code read from a parsed .nrf (newsreap filter file)
     """
@@ -80,7 +78,7 @@ FILTER_LIST_CODES = (
 )
 
 
-class FilterMatchCode(object):
+class FilterMatchCode:
     # Scan against the subject (Default)
     BY_SUBJECT = 'S'
 
@@ -88,7 +86,7 @@ class FilterMatchCode(object):
     BY_POSTER = 'P'
 
 
-class FilterDirectives(object):
+class FilterDirectives:
     # An optional human readable description that can get
     # prepended to logging if the matached filter is applied
     # This is useful for debugging, but otherwise not nessisary
@@ -138,7 +136,7 @@ class FilterDirectives(object):
     XPOST_COUNT_LESS_THAN = '_xc_lt'
 
 
-class NNTPFilterBase(object):
+class NNTPFilterBase:
     """
     A class that can be applied to an NNTPConnection to additionaly apply a
     pre-determined number of filters to the content as it's fetched
@@ -204,7 +202,7 @@ class NNTPFilterBase(object):
             # Nothing more to do
             return
 
-        if isinstance(paths, basestring):
+        if isinstance(paths, str):
             # Convert to list
             paths = [paths, ]
 
@@ -352,7 +350,7 @@ class NNTPFilterBase(object):
                             elif l_code == FilterListCode.SCORELIST:
                                 self.scorelist_append(group, _filter)
 
-                        except ValueError, e:
+                        except ValueError as e:
                             # Internal Parse Error Occured
                             logger.warning(
                                 "%s[:%d] %s." % (
@@ -371,7 +369,7 @@ class NNTPFilterBase(object):
         """
         Add a scoring entry to list
         """
-        if not isinstance(group_regex, basestring):
+        if not isinstance(group_regex, str):
             raise ValueError(
                 "Invalid group regex specified; (expecting a string)",
             )
@@ -388,12 +386,12 @@ class NNTPFilterBase(object):
         # Compile Subject and/or Poster if necessary
         if FilterDirectives.SUBJECT_MATCHES_REGEX in entry:
             if isinstance(entry[FilterDirectives.SUBJECT_MATCHES_REGEX],
-                    basestring):
+                    str):
                 try:
                     entry[FilterDirectives.SUBJECT_MATCHES_REGEX] = \
                         re.compile(
                             entry[FilterDirectives.SUBJECT_MATCHES_REGEX],
-                            re.IGNORECASE,
+                            re.IGNORECASE | re.ASCII,
                         )
                 except:
                     raise ValueError(
@@ -403,12 +401,12 @@ class NNTPFilterBase(object):
 
         if FilterDirectives.POSTER_MATCHES_REGEX in entry:
             if isinstance(entry[FilterDirectives.POSTER_MATCHES_REGEX],
-                    basestring):
+                    str):
                 try:
                     entry[FilterDirectives.POSTER_MATCHES_REGEX] = \
                         re.compile(
                             entry[FilterDirectives.POSTER_MATCHES_REGEX],
-                            re.IGNORECASE,
+                            re.IGNORECASE | re.ASCII,
                         )
                 except:
                     raise ValueError(
@@ -425,7 +423,8 @@ class NNTPFilterBase(object):
             try:
                 # pre-compile regular expression for both hashing
                 # and a way of preforming some early validation
-                self._regex_map[group_regex] = re.compile(group_regex)
+                self._regex_map[group_regex] = re.compile(group_regex,
+                                                          re.ASCII)
 
             except:
                 raise ValueError(
@@ -445,7 +444,7 @@ class NNTPFilterBase(object):
         """
         Add a blacklist entry to list
         """
-        if not isinstance(group_regex, basestring):
+        if not isinstance(group_regex, str):
             raise ValueError(
                 "Invalid group regex specified; (expecting a string)",
             )
@@ -462,12 +461,12 @@ class NNTPFilterBase(object):
         # Compile Subject and/or Poster if necessary
         if FilterDirectives.SUBJECT_MATCHES_REGEX in entry:
             if isinstance(entry[FilterDirectives.SUBJECT_MATCHES_REGEX],
-                    basestring):
+                    str):
                 try:
                     entry[FilterDirectives.SUBJECT_MATCHES_REGEX] = \
                         re.compile(
                             entry[FilterDirectives.SUBJECT_MATCHES_REGEX],
-                            re.IGNORECASE,
+                            re.IGNORECASE | re.ASCII,
                         )
                 except:
                     raise ValueError(
@@ -477,12 +476,12 @@ class NNTPFilterBase(object):
 
         if FilterDirectives.POSTER_MATCHES_REGEX in entry:
             if isinstance(entry[FilterDirectives.POSTER_MATCHES_REGEX],
-                    basestring):
+                    str):
                 try:
                     entry[FilterDirectives.POSTER_MATCHES_REGEX] = \
                         re.compile(
                             entry[FilterDirectives.POSTER_MATCHES_REGEX],
-                            re.IGNORECASE,
+                            re.IGNORECASE | re.ASCII,
                         )
                 except:
                     raise ValueError(
@@ -494,7 +493,8 @@ class NNTPFilterBase(object):
             try:
                 # pre-compile regular expression for both hashing
                 # and a way of preforming some early validation
-                self._regex_map[group_regex] = re.compile(group_regex)
+                self._regex_map[group_regex] = re.compile(group_regex,
+                                                          re.ASCII)
 
             except:
                 raise ValueError(
@@ -514,7 +514,7 @@ class NNTPFilterBase(object):
         """
         Add a whitelist entry to list
         """
-        if not isinstance(group_regex, basestring):
+        if not isinstance(group_regex, str):
             raise ValueError(
                 "Invalid group regex specified; (expecting a string)",
             )
@@ -531,12 +531,12 @@ class NNTPFilterBase(object):
         # Compile Subject and/or Poster if necessary
         if FilterDirectives.SUBJECT_MATCHES_REGEX in entry:
             if isinstance(entry[FilterDirectives.SUBJECT_MATCHES_REGEX],
-                    basestring):
+                    str):
                 try:
                     entry[FilterDirectives.SUBJECT_MATCHES_REGEX] = \
                         re.compile(
                             entry[FilterDirectives.SUBJECT_MATCHES_REGEX],
-                            re.IGNORECASE,
+                            re.IGNORECASE | re.ASCII,
                         )
                 except:
                     raise ValueError(
@@ -546,12 +546,12 @@ class NNTPFilterBase(object):
 
         if FilterDirectives.POSTER_MATCHES_REGEX in entry:
             if isinstance(entry[FilterDirectives.POSTER_MATCHES_REGEX],
-                    basestring):
+                    str):
                 try:
                     entry[FilterDirectives.POSTER_MATCHES_REGEX] = \
                         re.compile(
                             entry[FilterDirectives.POSTER_MATCHES_REGEX],
-                            re.IGNORECASE,
+                            re.IGNORECASE | re.ASCII,
                         )
                 except:
                     raise ValueError(
@@ -563,7 +563,8 @@ class NNTPFilterBase(object):
             try:
                 # pre-compile regular expression for both hashing
                 # and a way of preforming some early validation
-                self._regex_map[group_regex] = re.compile(group_regex)
+                self._regex_map[group_regex] = re.compile(group_regex,
+                                                          re.ASCII)
 
             except:
                 raise ValueError(
@@ -593,8 +594,8 @@ class NNTPFilterBase(object):
             }
 
             # Build Groups Black List
-            for _k, _v in self._blacklist.iteritems():
-                k = self._regex_map.get(_k, re.compile(_k))
+            for _k, _v in self._blacklist.items():
+                k = self._regex_map.get(_k, re.compile(_k, re.ASCII))
                 if k.match(group):
                     # Keys are prefixed with (underscore); a count makes it
                     # easier later to apply multiple filters and not trying
@@ -607,8 +608,8 @@ class NNTPFilterBase(object):
                         self._regex_hash[group][FilterListCode.BLACKLIST].append(v)
 
             # Build Groups White List
-            for _k, _v in self._whitelist.iteritems():
-                k = self._regex_map.get(_k, re.compile(_k))
+            for _k, _v in self._whitelist.items():
+                k = self._regex_map.get(_k, re.compile(_k, re.ASCII))
                 if k.match(group):
                     # Keys are prefixed with (underscore); a count makes it
                     # easier later to apply multiple filters and not trying
@@ -621,8 +622,8 @@ class NNTPFilterBase(object):
                         self._regex_hash[group][FilterListCode.WHITELIST].append(v)
 
             # Build Groups Score List
-            for _k, _v in self._scorelist.iteritems():
-                k = self._regex_map.get(_k, re.compile(_k))
+            for _k, _v in self._scorelist.items():
+                k = self._regex_map.get(_k, re.compile(_k, re.ASCII))
                 if k.match(group):
                     # Keys are prefixed with (underscore); a count makes it
                     # easier later to apply multiple filters and not trying

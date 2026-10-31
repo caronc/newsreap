@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # An example post processing hook file
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>

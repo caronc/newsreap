@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A NNTP Article Header Representation
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -59,7 +57,7 @@ UNKNOWN_PREFIX = "X-"
 # Common Details detected from the message Header
 NNTP_NUKED_MSG = re.compile(
     r'^x-(dmca|removed|cancel?(led)?|blocked)',
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 
@@ -68,7 +66,7 @@ class NNTPHeader(NNTPMetaContent):
     A Header representation of an NNTP Article
     """
     def __init__(self, work_dir=None, *args, **kwargs):
-        super(NNTPHeader, self).__init__(
+        super().__init__(
             work_dir=work_dir, sort_no=100, *args, **kwargs)
 
         # Initialize our header
@@ -96,7 +94,7 @@ class NNTPHeader(NNTPMetaContent):
             if k in self.content:
                 yield '%s: %s%s' % (k, self.content[k], NNTP_EOL)
 
-        for k, v in self.content.iteritems():
+        for k, v in self.content.items():
             if k not in HEADER_PRINT_SEQUENCE:
                 yield '%s: %s%s' % (k, v, NNTP_EOL)
 
@@ -111,9 +109,12 @@ class NNTPHeader(NNTPMetaContent):
 
     def copy(self):
         """
-        Mimic Dictionary:  dict.copy()
+        Returns a new NNTPHeader holding the same header entries
         """
-        return self.content.copy()
+        header = NNTPHeader(work_dir=self.work_dir)
+        header.sort_no = self.sort_no
+        header.content = self.content.copy()
+        return header
 
     def update(self, *args, **kwargs):
         """
@@ -125,19 +126,7 @@ class NNTPHeader(NNTPMetaContent):
         """
         Mimic Dictionary:  dict.keys()
         """
-        return self.content.keys()
-
-    def iterkeys(self):
-        """
-        Mimic Dictionary:  dict.iterkeys()
-        """
-        return self.content.iterkeys()
-
-    def itervalues(self):
-        """
-        Mimic Dictionary:  dict.itervalues()
-        """
-        return self.content.itervalues()
+        return list(self.content.keys())
 
     def key(self):
         """
@@ -150,19 +139,13 @@ class NNTPHeader(NNTPMetaContent):
         """
         Mimic Dictionary:  dict.values()
         """
-        return self.content.values()
+        return list(self.content.values())
 
     def items(self):
         """
         Mimic Dictionary:  dict.items()
         """
-        return self.content.items()
-
-    def iteritems(self):
-        """
-        Mimic Dictionary:  dict.items()
-        """
-        return self.content.iteritems()
+        return list(self.content.items())
 
     def pop(self, key, d=None):
         """
@@ -186,7 +169,7 @@ class NNTPHeader(NNTPMetaContent):
             if k in self.content:
                 response.append('%s%s%s' % (k, delimiter, self.content[k]))
 
-        for k, v in self.content.iteritems():
+        for k, v in self.content.items():
             if k not in HEADER_PRINT_SEQUENCE:
                 response.append('%s%s%s' % (k, delimiter, v))
 
@@ -205,7 +188,7 @@ class NNTPHeader(NNTPMetaContent):
         def _fmt(_k):
             return _k.group(1) + _k.group(2).upper()
 
-        if not isinstance(key, basestring):
+        if not isinstance(key, str):
             # Handle invalid key entries types
             key = str(key)
 
@@ -214,8 +197,9 @@ class NNTPHeader(NNTPMetaContent):
             # Flip -crc to CRC (short for Cyclic Redundancy Check)
             r'([_-])((id|crc)([^a-z0-9]|$))',
             _fmt,
-            re.sub(r'(^|\s|[_-])(\S)', _fmt, key.strip().lower()),
-            flags=re.IGNORECASE,
+            re.sub(r'(^|\s|[_-])(\S)', _fmt, key.strip().lower(),
+                   flags=re.ASCII),
+            flags=re.IGNORECASE | re.ASCII,
         )
         if key in VALID_HEADER_ENTRIES or key.startswith(UNKNOWN_PREFIX):
             return key
@@ -234,7 +218,7 @@ class NNTPHeader(NNTPMetaContent):
         # we need to do is check for some common entries that
         # would oherwise have made it so it's not valid
         return next((
-            False for k in self.iterkeys()
+            False for k in self.keys()
             if NNTP_NUKED_MSG.match(k) is not None), True)
 
     def __len__(self):

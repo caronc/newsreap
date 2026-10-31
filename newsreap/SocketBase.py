@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Low Level Socket Manager
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -51,30 +49,22 @@ DEFAULT_BIND_ADDR = '0.0.0.0'
 # or fail to connect before failing out right
 socket.setdefaulttimeout(10.0)
 
-try:
-    SECURE_PROTOCOL_PRIORITY = (
-        # The first element is the default priority
-        # the remainders are tried next
-        (ssl.PROTOCOL_TLSv1_2, u'TLS v1.2'),
-        (ssl.PROTOCOL_TLSv1_1, u'TLS v1.1'),
-        (ssl.PROTOCOL_TLSv1, u'TLS v1.0'),
+# Each entry is made up of:
+#   - the protocol identifier you can pass in as the `secure` argument
+#   - a human readable name
+#   - the TLS version the connection is locked to (None lets the client and
+#     server agree on the best version they both support)
+SECURE_PROTOCOL_PRIORITY = (
+    # The first element is the default priority
+    # the remainders are tried next
+    (ssl.PROTOCOL_TLSv1_2, 'TLS v1.2', ssl.TLSVersion.TLSv1_2),
+    (ssl.PROTOCOL_TLSv1_1, 'TLS v1.1', ssl.TLSVersion.TLSv1_1),
+    (ssl.PROTOCOL_TLSv1, 'TLS v1.0', ssl.TLSVersion.TLSv1),
 
-        # The following are not 100% secure but are sometimes
-        # the only option
-        (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
-    )
-
-except AttributeError:
-    # Python v2.7.8 or less
-    SECURE_PROTOCOL_PRIORITY = (
-        # The first element is the default priority
-        # the remainders are tried next
-        (ssl.PROTOCOL_TLSv1, u'TLS v1.0'),
-
-        # The following are not 100% secure but are sometimes
-        # the only option
-        (ssl.PROTOCOL_SSLv23, u'SSL v2.0/3.0'),
-    )
+    # The following are not 100% secure but are sometimes
+    # the only option
+    (ssl.PROTOCOL_SSLv23, 'SSL v2.0/3.0', None),
+)
 
 
 class SignalCaughtException(Exception):
@@ -95,7 +85,7 @@ class SocketRetryLimit(Exception):
     pass
 
 
-class SocketBase(object):
+class SocketBase:
     """
        Abstract class with all the functionalist needed for a socket manager.
        methods raising an exception must be implemented in derived classes.
@@ -124,6 +114,10 @@ class SocketBase(object):
                             the man-in-the-middle attacks.
 
     """
+
+    # Text passed into send() is encoded using this character set
+    encoding = 'utf-8'
+
     def __init__(self, host=None, port=0, bindaddr=None, bindport=0,
                  secure=False, verify_cert=True, hooks=None, *args, **kwargs):
 
@@ -190,24 +184,25 @@ class SocketBase(object):
         # Define our hooks (if any)
         self.hooks = HookManager()
         if hooks:
-            self.hooks.add(hooks=hooks)
+            self.hooks.add(hooks)
 
-    def hooks(self, hooks, reset=True):
+    def set_hooks(self, hooks, reset=True):
         """
         Sets hooks into our connection object(s)
 
+        - hooks can be a HookManager, a Hook, a function or the name/path
+          of a hook module.
+        - reset removes any hooks already loaded first.
         """
+        if hooks is self.hooks:
+            # These are already our hooks
+            return
+
         if reset:
             # Reset our loaded hooks
             self.hooks.reset()
 
-        if isinstance(hooks, HookManager):
-            # update our hooks
-            for key in hooks.iterkeys():
-                self.hooks.add(hooks[key])
-
-        else:
-            self.hooks.add(hooks)
+        self.hooks.add(hooks)
 
         return
 
@@ -227,8 +222,8 @@ class SocketBase(object):
         if self.socket is not None:
             try:
                 rs, _, es = select([self.socket], [], [], timeout)
-            except (SelectError, socket.error), e:
-                if e[0] == errno.EBADF:
+            except (SelectError, socket.error) as e:
+                if e.errno == errno.EBADF:
                     # Bad File Descriptor... hmm
                     self.close()
                     return None
@@ -259,8 +254,8 @@ class SocketBase(object):
         if self.socket is not None:
             try:
                 _, ws, es = select([], [self.socket], [], timeout)
-            except (SelectError, socket.error), e:
-                if e[0] == errno.EBADF:
+            except (SelectError, socket.error) as e:
+                if e.errno == errno.EBADF:
                     # Bad File Descriptor... hmm
                     self.close()
                     return None
@@ -279,7 +274,7 @@ class SocketBase(object):
         """ Socket Wrapper for people using this class as if it were just
             a python socket class
             """
-        data = ''
+        data = b''
 
         # Close socket and exit gracefully as retry count was met
         if self.socket is not None:
@@ -287,7 +282,7 @@ class SocketBase(object):
             try:
                 data = self.socket.recv()
                 if data is None:
-                    data = ''
+                    data = b''
 
             except Exception:
                 pass
@@ -332,7 +327,7 @@ class SocketBase(object):
         # return any lingering data in buffer
         if data:
             return data
-        return ''
+        return b''
 
     def bind(self, timeout=None, retries=3, retry_wait=10.0):
         """
@@ -371,15 +366,15 @@ class SocketBase(object):
                 # Store local connection details
                 return True
 
-            except socket.error, e:
+            except socket.error as e:
                 logger.debug("Socket binding error: %s" % str(e))
 
-                if e[0] == errno.EINTR:
+                if e.errno == errno.EINTR:
                     # A Signal was caught, we aren't far enough in the
                     # listening process to continue; break so that we
                     # can handle this
                     raise SignalCaughtException('Signal received')
-                # elif e[0] == errno.EADDRINUSE:
+                # elif e.errno == errno.EADDRINUSE:
 
             # Close socket
             self.close()
@@ -485,13 +480,13 @@ class SocketBase(object):
                 # connectino loop
                 break
 
-            except ssl.SSLError, e:
+            except ssl.SSLError as e:
                 # Secure Connection Failed
                 self.close()
                 logger.debug(
-                    "Failed to secure connection using %s / errno=%d" % (
+                    "Failed to secure connection using %s / errno=%s" % (
                         SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
-                        e[0],
+                        e.errno,
                     ),
                 )
 
@@ -509,9 +504,9 @@ class SocketBase(object):
                 # upstream
                 raise SocketRetryLimit('There are no protocols left to try.')
 
-            except socket.error, e:
+            except socket.error as e:
                 logger.debug("Socket exception received: %s" % (e))
-                if e[0] == errno.EINTR:
+                if e.errno == errno.EINTR:
                     # Ensure socket is closed
                     self.close()
                     # A Signal was caught,
@@ -612,23 +607,23 @@ class SocketBase(object):
                 # If we get here, we've got a connection
                 break
 
-            except TypeError, e:
+            except TypeError as e:
                 # Timeout occurred
                 pass
 
-            except AttributeError, e:
+            except AttributeError as e:
                 # Usually means someone called close() while accept() was
                 # blocked. Happens when using this class with threads.
                 # No problem... we'll just finish up here
                 self.close()
                 raise SocketException('Connection broken abruptly')
 
-            except socket.error, e:
-                if e[0] == errno.EAGAIN:
+            except socket.error as e:
+                if e.errno == errno.EAGAIN:
                     # Timeout occurred
                     pass
 
-                elif e[0] == errno.EINTR:
+                elif e.errno == errno.EINTR:
                     # A Signal was caught,
                     # return so we can handle this
                     raise
@@ -696,12 +691,12 @@ class SocketBase(object):
             # If we get here, we were successful in encrypting the connection;
             # so let's go ahead and break out of our connection loop
 
-        except ssl.SSLError, e:
+        except ssl.SSLError as e:
             # Secure Connection Failed
             logger.debug(
-                "Failed to secure connection using %s / errno=%d" % (
+                "Failed to secure connection using %s / errno=%s" % (
                     SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
-                    e[0],
+                    e.errno,
                 ),
             )
             self.close()
@@ -719,9 +714,9 @@ class SocketBase(object):
             # a SocketRetryLimit() so it can be handled differently upstream
             raise SocketRetryLimit('There are no protocols left to try.')
 
-        except socket.error, e:
+        except socket.error as e:
             # logger.debug("Exception received: %s " % (e));
-            if e[0] == errno.EINTR:
+            if e.errno == errno.EINTR:
                 # Ensure socket is closed
                 self.close()
                 # A Signal was caught,
@@ -775,7 +770,7 @@ class SocketBase(object):
 
         if not self.connected:
             # No connection
-            return ''
+            return b''
 
         if retry_wait:
             # Make sure we're not blocking
@@ -865,7 +860,7 @@ class SocketBase(object):
 
                 continue
 
-            except ssl.SSLWantReadError, e:
+            except ssl.SSLWantReadError as e:
                 # Raised by SSL Socket; This is okay data was received, but not
                 # all of it. Be patient and try again.
                 if retry_wait and self.can_read(retry_wait) is None:
@@ -873,20 +868,20 @@ class SocketBase(object):
                     raise SocketException('Connection broken')
                 continue
 
-            except ssl.SSLZeroReturnError, e:
+            except ssl.SSLZeroReturnError as e:
                 # Raised by SSL Socket
                 self.close()
                 raise SocketException('Connection broken')
 
-            except socket.error, e:
-                if e[0] == errno.EAGAIN:
+            except socket.error as e:
+                if e.errno == errno.EAGAIN:
                     # Timeout occurred; Sleep for a little bit
                     if retry_wait and self.can_read(retry_wait) is None:
                         self.close()
                         raise SocketException('Connection broken')
                     continue
 
-                elif e[0] == errno.EINTR:
+                elif e.errno == errno.EINTR:
                     # A Signal was caught return early
                     raise SignalCaughtException('Signal received')
 
@@ -902,13 +897,16 @@ class SocketBase(object):
                     raise SocketException('Connection broken')
 
         # Return Buffer
-        return ''.join(total_data)
+        return b''.join(total_data)
 
     def send(self, data, max_bytes=None, retry_wait=0.25):
         """ Socket Wrapper for people using this class as if it were just
             a python socket class; always ignore EINTR flags to finish
             sending the data
         """
+
+        if isinstance(data, str):
+            data = data.encode(self.encoding)
 
         # track bytes written
         tot_bytes = 0
@@ -991,15 +989,15 @@ class SocketBase(object):
                     self.close()
                     raise SocketException('Connection broken due to timeout')
 
-            except socket.error, e:
-                if e[0] == errno.EAGAIN:
+            except socket.error as e:
+                if e.errno == errno.EAGAIN:
                     # Timeout occurred; Sleep for a little bit
                     sleep(retry_wait)
                     if self.can_write() is None:
                         self.close()
                         raise SocketException('Connection broken')
 
-                elif e[0] == errno.EINTR:
+                elif e.errno == errno.EINTR:
                     # A Signal was caught, resend this data before
                     # raising the signal higher.  signals can wait when
                     # there is data flowing
@@ -1008,7 +1006,7 @@ class SocketBase(object):
                     # errno.EPIPE (Broken Pipe) usually at this point
                     self.close()
                     raise SocketException('Connection lost')
-            except Exception, e:
+            except Exception as e:
                 self.close()
                 raise
             finally:
@@ -1098,19 +1096,25 @@ class SocketBase(object):
             # Nothing to do if we have no socket to work with
             raise SocketException("No connection")
 
-        # Define our default keyword arguments
-        kwargs = {
-            'ssl_version': self.__ssl_version(),
-            'do_handshake_on_connect': False,
-            'suppress_ragged_eofs': True,
-        }
+        # Make sure we still have a protocol left to try
+        self.__ssl_version()
+        version = SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][2]
 
-        kwargs['server_side'] = server_side
+        context = ssl.SSLContext(
+            ssl.PROTOCOL_TLS_SERVER if server_side
+            else ssl.PROTOCOL_TLS_CLIENT)
+
+        # Certificates are checked by our own verification process below;
+        # by default the connection itself does not require one
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        if version is not None:
+            # Lock the connection to a specific TLS version
+            context.minimum_version = version
+            context.maximum_version = version
+
         if server_side:
-            # We need to add a few more parameters
-            kwargs['keyfile'] = self._keyfile
-            kwargs['certfile'] = self._certfile
-
             # Verify our certificates/keys exist or abort
             # These checks are nessisary otherwise you'll get strange errors
             # like:
@@ -1129,20 +1133,27 @@ class SocketBase(object):
                 raise ValueError(
                     'Could not locate Private Key: %s' % self._keyfile)
 
+            context.load_cert_chain(self._certfile, self._keyfile)
+
         elif self._ca_certs:
             # if we have a ca_certs reference, then let's store them now
-            kwargs['ca_certs'] = self._ca_certs
             if not isfile(self._ca_certs):
                 raise ValueError(
                     'Could not locate CA Certificates: %s' %
                     self._ca_certs,
                 )
+            context.load_verify_locations(self._ca_certs)
 
             # Store our Certificate Requirements
-            kwargs['cert_reqs'] = cert_reqs
+            context.verify_mode = cert_reqs
 
         # Wrap our socket with the SSLSocket Object
-        self.socket = ssl.wrap_socket(self.socket, **kwargs)
+        self.socket = context.wrap_socket(
+            self.socket,
+            server_side=server_side,
+            do_handshake_on_connect=False,
+            suppress_ragged_eofs=True,
+        )
 
         # Get reference time
         cur_time = datetime.now()
@@ -1222,7 +1233,7 @@ class SocketBase(object):
                             # If we get here, we've got a hostname to work with
                             host_match_re = re.compile(
                                 cert_host,
-                                re.IGNORECASE,
+                                re.IGNORECASE | re.ASCII,
                             )
 
                             matched_host = next(
@@ -1237,8 +1248,8 @@ class SocketBase(object):
                                     )
                                 )
 
-                        except socket.herror, e:
-                            if e[0] == 2:
+                        except socket.herror as e:
+                            if e.errno == 2:
                                 raise SocketRetryLimit(
                                     "Certificate for '%s' could not be "
                                     "resolved." % (
@@ -1305,13 +1316,9 @@ class SocketBase(object):
         self.close()
 
     def __str__(self):
-        if self.secure is False:
-            return 'tcp%s:%d' % (self._remote_addr, self._remote_port)
-        # else
-        return 'tcps://%s:%d' % (self._remote_addr, self._remote_port)
+        # Use the details of our connection, otherwise what we were given
+        host = self._remote_addr if self._remote_addr else self.host
+        port = self._remote_port if self._remote_port else self.port
+        schema = 'tcp' if self.secure is False else 'tcps'
+        return '%s://%s:%s' % (schema, host, port)
 
-    def __unicode__(self):
-        if self.secure is False:
-            return u'tcp%s:%d' % (self._remote_addr, self._remote_port)
-        # else
-        return u'tcps://%s:%d' % (self._remote_addr, self._remote_port)

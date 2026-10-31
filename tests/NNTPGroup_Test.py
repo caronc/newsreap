@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A testing class/library for the NNTPGroup Object
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>

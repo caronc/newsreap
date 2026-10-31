@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 #  The Server Object used to track NNTP Servers
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -40,7 +38,7 @@ class Server(ObjectBase):
                   nullable=False, unique=True)
 
     def __init__(self, *args, **kwargs):
-        super(Server, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __repr__(self):
         """

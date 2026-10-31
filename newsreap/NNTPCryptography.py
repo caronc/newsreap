@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Used for NNTP Encoding/Decoding of Ecrypted Content
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -30,7 +28,7 @@ from os.path import isfile
 
 from base64 import b64encode
 from base64 import b64decode
-from StringIO import StringIO
+from io import BytesIO
 from gzip import GzipFile
 
 from newsreap.Utils import SEEK_SET
@@ -50,7 +48,7 @@ SSL_WRITE_BLOCKSIZE = 16384
 DEFAULT_KEYFILE = "~/newsreap-rsa_id"
 
 
-class KeySize(object):
+class KeySize:
     """
     The KeySize is used when generating a new private/public key pair.
     It plays a signifigant role in the security of the data that will
@@ -86,7 +84,7 @@ class KeySize(object):
     SECURE = 8192
 
 
-class HashType(object):
+class HashType:
     """
     This just spells it out for people so they know what is available to them
 
@@ -140,7 +138,17 @@ CRYPTOGRAPHY_HASH_MAP = {
 CRYPTOGRAPHY_DEFAULT_HASH = HashType.SHA256
 
 
-class NNTPCryptography(object):
+def _to_bytes(value):
+    """
+    The cryptography library works with bytes; text (such as a password or a
+    PEM string) is used in its UTF-8 form.
+    """
+    if isinstance(value, str):
+        return value.encode('utf-8')
+    return value
+
+
+class NNTPCryptography:
     def __init__(self, private_key=None, public_key=None, password=None,
                  alg=HashType.SHA256, mgf1=HashType.SHA256):
         """
@@ -175,7 +183,7 @@ class NNTPCryptography(object):
         return it.
 
         """
-        fileobj = StringIO()
+        fileobj = BytesIO()
         with GzipFile(fileobj=fileobj, mode="wb") as f:
             try:
                 f.write(self.public_pem())
@@ -192,7 +200,7 @@ class NNTPCryptography(object):
         return it.
 
         """
-        fileobj = StringIO()
+        fileobj = BytesIO()
         with GzipFile(fileobj=fileobj, mode="wb") as f:
             try:
                 f.write(self.private_pem())
@@ -208,13 +216,14 @@ class NNTPCryptography(object):
 
         """
 
-        fileobj = StringIO()
+        fileobj = BytesIO()
         try:
             fileobj.write(b64decode(encoded))
-        except TypeError:
+        except (TypeError, ValueError):
+            # Not valid base64 content
             return False
 
-        fileobj.seek(0L, SEEK_SET)
+        fileobj.seek(0, SEEK_SET)
         private_key = None
         with GzipFile(fileobj=fileobj, mode="rb") as f:
             private_key = f.read()
@@ -234,13 +243,14 @@ class NNTPCryptography(object):
         with base64 applied to it.  We decode it and load it.
 
         """
-        fileobj = StringIO()
+        fileobj = BytesIO()
         try:
             fileobj.write(b64decode(encoded))
-        except TypeError:
+        except (TypeError, ValueError):
+            # Not valid base64 content
             return False
 
-        fileobj.seek(0L, SEEK_SET)
+        fileobj.seek(0, SEEK_SET)
         self.public_key = None
         with GzipFile(fileobj=fileobj, mode="rb") as f:
             try:
@@ -265,10 +275,13 @@ class NNTPCryptography(object):
 
         if not payload:
             # Nothing more to do
-            return ''
+            return b''
 
         if not self.public_key:
             return None
+
+        # Text is encrypted in its UTF-8 form
+        payload = _to_bytes(payload)
 
         if alg is None:
             # Assign default algorithm
@@ -330,7 +343,7 @@ class NNTPCryptography(object):
         """
         if not payload:
             # Nothing more to do
-            return ''
+            return b''
 
         if not self.private_key:
             return None
@@ -453,7 +466,7 @@ class NNTPCryptography(object):
                encoding=serialization.Encoding.PEM,
                format=serialization.PrivateFormat.PKCS8,
                encryption_algorithm=serialization
-                       .BestAvailableEncryption(password)
+                       .BestAvailableEncryption(_to_bytes(password))
             )
 
         return self.private_key.private_bytes(
@@ -503,7 +516,7 @@ class NNTPCryptography(object):
                 with open(private_key, "rb") as key_file:
                     self.private_key = serialization.load_pem_private_key(
                         key_file.read(),
-                        password=password,
+                        password=_to_bytes(password),
                         backend=default_backend()
                     )
 
@@ -521,22 +534,19 @@ class NNTPCryptography(object):
                 )
                 return False
 
-        elif isinstance(private_key, basestring):
+        elif isinstance(private_key, (str, bytes)):
             try:
                 # Treat our content as a private key in a serialized form
                 self.private_key = serialization.load_pem_private_key(
-                    private_key,
-                    password=password,
+                    _to_bytes(private_key),
+                    password=_to_bytes(password),
                     backend=default_backend()
                 )
 
             except ValueError as e:
                 # specified password was inevitably bad
                 logger.error(
-                    'Cryptography / Could not load specified private key.' % (
-                        private_key,
-                    )
-                )
+                    'Cryptography / Could not load specified private key.')
                 logger.debug(
                     'Cryptography / private key load exception: %s' % (
                         str(e),
@@ -591,19 +601,17 @@ class NNTPCryptography(object):
                     )
                     return False
 
-        elif isinstance(public_key, basestring):
+        elif isinstance(public_key, (str, bytes)):
             # Treat our content as a public key in a serialized form
             try:
                 self.public_key = serialization.load_pem_public_key(
-                    public_key,
+                    _to_bytes(public_key),
                     backend=default_backend()
                 )
             except ValueError as e:
                 # We could not load the public key
                 logger.error(
-                    'Cryptography / Public Key string could not be loaded.' % (
-                    )
-                )
+                    'Cryptography / Public Key string could not be loaded.')
                 logger.debug(
                     'Cryptography / Public Key loading exception: %s' % (
                         str(e),
@@ -656,7 +664,7 @@ class NNTPCryptography(object):
             with open(private_keyfile, "wb") as key_file:
                 key_file.write(self.private_pem(password=password))
 
-        except (OSError, IOError) as e:
+        except OSError as e:
             logger.error(
                 'Cryptography / Private Key %s could not be written.' % (
                     key_file,
@@ -677,7 +685,7 @@ class NNTPCryptography(object):
             with open(public_keyfile, "wb") as key_file:
                 key_file.write(self.public_pem())
 
-        except (OSError, IOError) as e:
+        except OSError as e:
             logger.error(
                 'Cryptography / Public Key %s could not be written.' % (
                     key_file,
@@ -710,20 +718,24 @@ class NNTPCryptography(object):
 
     def __eq__(self, other):
         """
-        Handles equality
+        Objects are equal when they share the same public key
 
         """
-        return str(self) == str(self)
+        if not isinstance(other, NNTPCryptography):
+            return NotImplemented
+        return str(self) == str(other)
+
+    def __hash__(self):
+        """
+        Objects with the same public key share the same hash
+        """
+        return hash(str(self))
 
     def __str__(self):
         """
         Print the public pem information
 
         """
-        return self.public_pem()
+        pem = self.public_pem()
+        return pem.decode('ascii') if pem else ''
 
-    def __unicode__(self):
-        """
-        Return the public pem information
-        """
-        return unicode(self.public_pem())

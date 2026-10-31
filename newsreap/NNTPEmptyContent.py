@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A NNTP Empty File Representation
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -31,7 +29,7 @@ class NNTPEmptyContent(NNTPContent):
                  work_dir=None, *args, **kwargs):
         """ Intitialize NNTPEmptyContent
         """
-        super(NNTPEmptyContent, self).__init__(
+        super().__init__(
             filepath=filepath,
             part=part, total_parts=total_parts,
             begin=begin, end=end, total_size=total_size,
@@ -113,14 +111,6 @@ class NNTPEmptyContent(NNTPContent):
         """
         return False
 
-    def next(self):
-        """
-        Python 2 support
-        Support stream type functions and iterations
-        Do nothing in an EmptyContent object
-        """
-        raise StopIteration()
-
     def mime(self):
         """
         Returns the mime of the object
@@ -161,7 +151,7 @@ class NNTPEmptyContent(NNTPContent):
         """
         always 0L
         """
-        return 0L
+        return 0
 
     def readline(self, *args, **kwargs):
         """
@@ -171,7 +161,6 @@ class NNTPEmptyContent(NNTPContent):
 
     def __next__(self):
         """
-        Python 3 support
         Support stream type functions and iterations
         Do nothing in an EmptyContent object
         """

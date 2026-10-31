@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Codec for handling UU encoded messages
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -15,6 +13,8 @@
 # GNU Lesser General Public License for more details.
 
 import re
+from os import fsdecode
+from os import fsencode
 from os.path import basename
 from binascii import a2b_uu
 from binascii import b2a_uu
@@ -33,15 +33,16 @@ from ..Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Defines the new line delimiter
-EOL = '\r\n'
+EOL = b'\r\n'
 
 # Check for begin and end
 UUENCODE_RE = re.compile(
-    r'^\s*((?P<key_1>begin)\s+(?P<perm>[0-9]{3,4})?[\s\'"]*(?P<name>.+)[\'"]*|' +
-    r'(?P<key_2>end)|' +
-    r'(?P<key_3>`)' +
-    ')\s*$',
-    re.IGNORECASE,
+    br'^\s*((?P<key_1>begin)\s+(?P<perm>[0-9]{3,4})?' +
+    br'[\s\'"]*(?P<name>.+)[\'"]*|' +
+    br'(?P<key_2>end)|' +
+    br'(?P<key_3>`)' +
+    b')\\s*$',
+    re.IGNORECASE | re.ASCII,
 )
 
 # UUEncode has a fixed size of not being able to encode more than 45 bytes at
@@ -60,8 +61,9 @@ class CodecUU(CodecBase):
     """
     This codec is used to manage all UUEncoded content found on an NNTP Server.
     """
-    def __init__(self, work_dir=None, perm=0664, linelen=128, *args, **kwargs):
-        super(CodecUU, self).__init__(work_dir=work_dir, *args, **kwargs)
+    def __init__(self, work_dir=None, perm=0o664, linelen=128,
+                 *args, **kwargs):
+        super().__init__(work_dir=work_dir, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
         self._meta = {}
@@ -119,14 +121,14 @@ class CodecUU(CodecBase):
             mem_buf = UUENCODE_BLOCK_SIZE
 
         # Header/Footer
-        fmt_ubegin = 'begin %o %s' % (self.perm, content.filename)
-        fmt_uend = '`' + EOL + 'end'
+        fmt_ubegin = b'begin %o %s' % (self.perm, fsencode(content.filename))
+        fmt_uend = b'`' + EOL + b'end'
 
         # Write ubegin line
         _encoded.write(fmt_ubegin + EOL)
 
         # Prepare our result set
-        results = ""
+        results = b''
 
         # We need to parse the content until we either reach
         # the end of the file or get to an 'end' tag
@@ -153,7 +155,7 @@ class CodecUU(CodecBase):
 
             else:
                 # reset string
-                results = ''
+                results = b''
 
         # We're done reading our data
         content.close()
@@ -186,13 +188,16 @@ class CodecUU(CodecBase):
         it returns a dictionary of the keys and their mapped values.
 
         """
+        if isinstance(line, str):
+            line = fsencode(line)
+
         uuencode_re = UUENCODE_RE.match(line)
         if not uuencode_re:
             return None
 
         # Merge Results
-        f_map = dict((UUENCODE_KEY_MAP[k], v) \
-                    for k, v in uuencode_re.groupdict().iteritems() if v)
+        f_map = dict((UUENCODE_KEY_MAP[k], fsdecode(v)) \
+                    for k, v in uuencode_re.groupdict().items() if v)
 
         if relative:
             # detect() relative to what has been decoded
@@ -297,7 +302,7 @@ class CodecUU(CodecBase):
             except BinAsciiError:
                 # Workaround for broken uuencoders by
                 # Fredrik Lundh (taken from uu.py code)
-                nbytes = (((ord(data[0])-32) & 63) * 4 + 5) / 3
+                nbytes = (((data[0]-32) & 63) * 4 + 5) // 3
 
                 try:
                     decoded = a2b_uu(data[:nbytes])
@@ -315,8 +320,8 @@ class CodecUU(CodecBase):
                     # keep storing our data
                     continue
 
-                # CRC Calculations
-                self._calc_crc(decoded)
+            # CRC Calculations
+            self._calc_crc(decoded)
 
             # Line Tracking
             self._lines += 1
@@ -348,7 +353,7 @@ class CodecUU(CodecBase):
         """
         Reset our decoded content
         """
-        super(CodecUU, self).reset()
+        super().reset()
 
         # Used for internal meta tracking when using the decode()
         self._meta = {}

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Base Codec Class for deciphering data that is requiring an external file
 #
 # Copyright (C) 2016 Chris Caron <lead2gold@gmail.com>
@@ -15,7 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 import errno
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 
 from os.path import isdir
 from os.path import isfile
@@ -46,7 +44,7 @@ from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 
-class CompressionLevel(object):
+class CompressionLevel:
     """
     Support general compression level settings so that the calling user doesn't
     have to be aware of the different types supported by the actual executable.
@@ -54,17 +52,17 @@ class CompressionLevel(object):
 
     # Maximum Compression will be slower to use and generate the most i/o
     # but will overall save the most disk space.
-    Maximum = u'+++'
+    Maximum = '+++'
 
     # The average setting is what the actual executable being called would
     # have otherwise defaulted to.  It's not nessisarily the highest
     # compression level, but it's not the worst either.
-    Average = u'~'
+    Average = '~'
 
     # This will cause larger files to be generated (thus taking up more disk
     # space and posting space/time).  However the file generation itself will
     # be very fast (with respect to the other levels)
-    Minimum = u'---'
+    Minimum = '---'
 
 # Tuple of supported Compression Levels
 COMPRESSION_LEVELS = (
@@ -74,7 +72,7 @@ COMPRESSION_LEVELS = (
 )
 
 
-class CodecFile(object):
+class CodecFile:
     """
     CodecFile compliments CodecBase by wrapping the codecs that can only
     be accessed through an outside binary file located on the system.
@@ -133,7 +131,7 @@ class CodecFile(object):
             else:
                 logger.error('Failed to created directory: %s' % self.work_dir)
                 # Should not continue under this circumstance
-                raise IOError((
+                raise OSError((
                     errno.EACCES,
                     'Failed to create directory: %s' % self.work_dir,
                 ))
@@ -191,7 +189,7 @@ class CodecFile(object):
         """
         Can test if path exists and is executable
         """
-        if isinstance(fpath, basestring):
+        if isinstance(fpath, str):
             return isfile(fpath) and access(fpath, X_OK)
         return False
 
@@ -216,7 +214,7 @@ class CodecFile(object):
         tmp_path = mkdtemp(prefix='_nr.codec-', dir=self.work_dir)
         tmp_file = None
 
-        if isinstance(content, basestring):
+        if isinstance(content, str):
             tmp_file = join(
                 tmp_path,
                 '%s%s' % (basename(content), suffix,
@@ -277,7 +275,7 @@ class CodecFile(object):
             for v in content:
                 results |= self.get_paths(v)
 
-        elif isinstance(content, basestring):
+        elif isinstance(content, str):
             content = abspath(expanduser(content))
             if exists(content):
                 results.add(content)
@@ -367,7 +365,7 @@ class CodecFile(object):
 
         findings = [
             (p, f['size'], f['created'], f['modified'])
-                for p, f in findings.items()
+                for p, f in list(findings.items())
                   if (f['modified'] - f['created']).total_seconds() >= seconds
                     and f['basename'] not in ignore
         ]

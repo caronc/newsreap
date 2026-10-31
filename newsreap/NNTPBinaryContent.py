@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A NNTP Binary File Representation
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -27,7 +25,7 @@ class NNTPBinaryContent(NNTPContent):
         """ Intitialize NNTPBinaryContent
         """
 
-        super(NNTPBinaryContent, self).__init__(
+        super().__init__(
             filepath=filepath,
             part=part, total_parts=total_parts,
             begin=begin, end=end, total_size=total_size,

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to test the workings of an NNTPArticle
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -28,7 +26,7 @@ gevent.monkey.patch_all()
 #        keyerror-in-module-threading-after-a-successful-py-test-run
 
 import re
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import dirname
 from os.path import abspath
 from os.path import join
@@ -46,6 +44,7 @@ from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPHeader import NNTPHeader
 from newsreap.NNTPResponse import NNTPResponse
 from newsreap.Utils import strsize_to_bytes
+from newsreap.codecs.CodecYenc import CodecYenc
 
 
 class NNTPArticle_Test(TestBase):
@@ -71,17 +70,19 @@ class NNTPArticle_Test(TestBase):
         assert(len(article.decoded) == 1)
         assert(len(article.decoded) == len(article.files()))
         assert(str(article) == 'random-id')
-        assert(unicode(article) == u'random-id')
+        assert(str(article) == 'random-id')
         assert(article.size() == 0)
 
         # Now there is data, but it's an empty Object so it can't be valid
         assert(article.is_valid() is False)
 
-        result = re.search(' Message-ID=\"(?P<id>[^\"]+)\"', repr(article))
+        result = re.search(' Message-ID=\"(?P<id>[^\"]+)\"', repr(article),
+                           re.ASCII)
         assert(result is not None)
         assert(result.group('id') == str(article))
 
-        result = re.search(' attachments=\"(?P<no>[^\"]+)\"', repr(article))
+        result = re.search(' attachments=\"(?P<no>[^\"]+)\"', repr(article),
+                           re.ASCII)
         assert(result is not None)
         assert(int(result.group('no')) == len(article))
 
@@ -650,5 +651,50 @@ class NNTPArticle_Test(TestBase):
         it = article.post_iter()
         assert(it is not None)
         for entry in it:
-            assert(isinstance(entry, basestring) is True)
+            assert(isinstance(entry, (str, bytes)) is True)
 
+    def test_copy_keeps_the_header(self):
+        """
+        A copied article keeps its header, body and attachments
+        """
+        article = NNTPArticle(
+            subject='Subject',
+            poster='l2g@nuxref.com',
+            groups='alt.binaries.test',
+            body='hello world',
+            work_dir=self.tmp_dir,
+        )
+        article.header['X-Custom'] = 'value'
+        article.add(join(self.var_dir, 'joystick.jpg'))
+
+        copied = article.copy()
+        assert isinstance(copied.header, NNTPHeader)
+        assert copied.header['X-Custom'] == 'value'
+        assert copied.body.getvalue() == b'hello world'
+        assert len(copied) == 1
+        assert copied.work_dir == article.work_dir
+
+        # Without attachments
+        assert len(article.copy(include_attachments=False)) == 0
+
+    def test_encoded_article_can_be_posted(self):
+        """
+        An encoded article is complete and ready to post
+        """
+        article = NNTPArticle(
+            subject='Subject',
+            poster='l2g@nuxref.com',
+            groups='alt.binaries.test',
+            work_dir=self.tmp_dir,
+        )
+        article.add(join(self.var_dir, 'joystick.jpg'))
+
+        encoded = article.encode(CodecYenc(work_dir=self.tmp_dir))
+        assert isinstance(encoded, NNTPArticle)
+        assert isinstance(encoded.header, NNTPHeader)
+
+        payload = b''.join(
+            c.encode('utf-8') if isinstance(c, str) else c
+            for c in encoded.post_iter())
+        assert b'Subject: Subject\r\n' in payload
+        assert b'\r\n=ybegin part=1 total=1 line=128 size=19338' in payload

@@ -1,4 +1,0 @@
-pylint
-pep8
-pyflakes
-pytest

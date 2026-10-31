@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A testing class/library for the Mime Object
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -59,7 +57,7 @@ class Mime_Test(TestBase):
         assert(isinstance(response, MimeResponse))
         response = m.from_content("")
         assert(isinstance(response, MimeResponse))
-        response = m.from_content(u"")
+        response = m.from_content("")
         assert(isinstance(response, MimeResponse))
 
         # First we take a binary file
@@ -87,7 +85,7 @@ class Mime_Test(TestBase):
         assert(response is None)
         response = m.from_file("")
         assert(response is None)
-        response = m.from_file(u"")
+        response = m.from_file("")
         assert(response is None)
 
         # First we take a binary file
@@ -116,7 +114,7 @@ class Mime_Test(TestBase):
         assert(response is None)
         response = m.from_filename("")
         assert(response is None)
-        response = m.from_filename(u"")
+        response = m.from_filename("")
         assert(response is None)
 
         # Find RAR Files
@@ -237,7 +235,7 @@ class Mime_Test(TestBase):
         # Empty content just gives us an empty response
         assert(m.extension_from_mime(None) == '')
         assert(m.extension_from_mime("") == '')
-        assert(m.extension_from_mime(u"") == '')
+        assert(m.extension_from_mime("") == '')
 
         # there is no lookkup either if the mime simply doesn't exist
         assert(m.extension_from_mime("invalid/mime") == '')
@@ -258,7 +256,7 @@ class Mime_Test(TestBase):
         # Empty content just gives us an empty response
         assert(m.extension_from_filename(None) == '')
         assert(m.extension_from_filename("") == '')
-        assert(m.extension_from_filename(u"") == '')
+        assert(m.extension_from_filename("") == '')
 
         # NZB File
         assert(m.extension_from_filename("a.longer.name.test.nzb") == '.nzb')
@@ -326,7 +324,7 @@ class Mime_Test(TestBase):
         # Empty content just gives us an empty response
         assert(m.from_bestguess(None) is None)
         assert(m.from_bestguess("") is None)
-        assert(m.from_bestguess(u"") is None)
+        assert(m.from_bestguess("") is None)
 
         # First we take a binary file
         image = join(self.var_dir, 'joystick.jpg')

@@ -1,0 +1,63 @@
+name: Run Tests
+
+on:
+  push:
+    branches: [main, master]
+  # Always test on pull requests targeting our long-lived branches
+  pull_request:
+    branches: [main, master]
+  # Allow manual triggering via GitHub UI
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} – ${{ matrix.tox_env }}
+    runs-on: ubuntu-latest
+
+    # Allow selected matrix jobs to fail without failing the workflow
+    continue-on-error: ${{ matrix.continue-on-error || false }}
+
+    strategy:
+      fail-fast: false  # Let all jobs run, even if one fails
+      matrix:
+        include:
+          - python-version: "3.13"
+            tox_env: qa
+          - python-version: "3.14"
+            tox_env: qa
+
+          # The newest Python may lack dependency wheels, so this is optional
+          - python-version: "3.15"
+            tox_env: qa
+            continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # The archive codecs wrap these command line tools; without them the
+      # related tests are skipped
+      - name: Install archive tools (7-Zip, par2, rar)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq 7zip par2 rar unrar
+
+      # Install tox for isolated environment and test orchestration
+      - name: Install tox
+        run: python -m pip install tox
+
+      - name: Run tox for ${{ matrix.tox_env }}
+        run: tox -e ${{ matrix.tox_env }}
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.python-version }}-${{ matrix.tox_env }}
+          path: .coverage
+          include-hidden-files: true
+          retention-days: 7

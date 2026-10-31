@@ -16,6 +16,6 @@ q=dict((str(R(0,1000000)),R(0,1000000)) for i in range(Q))
 print("looking for %s items in %s"%(len(q),len(d)))
 '''
 
-print Timer('set(q) <= set(d)', 'D=1000000;Q=100;'+setup).timeit(1)
-print Timer('set(q) <= set(d.keys())', 'D=1000000;Q=100;'+setup).timeit(1)
-print Timer('all(k in d for k in q)', 'D=1000000;Q=100;'+setup).timeit(1)
+print(Timer('set(q) <= set(d)', 'D=1000000;Q=100;'+setup).timeit(1))
+print(Timer('set(q) <= set(d.keys())', 'D=1000000;Q=100;'+setup).timeit(1))
+print(Timer('all(k in d for k in q)', 'D=1000000;Q=100;'+setup).timeit(1))

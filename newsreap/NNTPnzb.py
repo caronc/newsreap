@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A wrapper to greatly simplify manipulation of NZB Files
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -14,7 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import join
 from os.path import dirname
 from os.path import basename
@@ -29,7 +27,7 @@ from newsreap.NNTPEmptyContent import NNTPEmptyContent
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
 from newsreap.Mime import Mime
 from newsreap.Mime import DEFAULT_MIME_TYPE
-from HTMLParser import HTMLParser
+from html import unescape as html_unescape
 from xml.sax.saxutils import escape as sax_escape
 
 # Logging
@@ -54,7 +52,7 @@ from newsreap import __version__
 from newsreap import __title__
 
 
-class NZBParseMode(object):
+class NZBParseMode:
     """
     Parsing modes for our NZB-File
     """
@@ -78,9 +76,9 @@ NZB_PARSE_MODES = (
 )
 
 
-class XMLDTDType(object):
-    Public = u'PUBLIC'
-    System = u'SYSTEM'
+class XMLDTDType:
+    Public = 'PUBLIC'
+    System = 'SYSTEM'
 
 
 NZB_XML_DTD_MAP = {
@@ -106,7 +104,8 @@ NZB_XML_STANDALONE = True
 NZB_LXML_NAMESPACES = {'ns': NZB_XML_NAMESPACE}
 
 # NZB-Filename
-NZB_EXTENSION_RE = re.compile(r'(?P<fname>).nzb$', re.IGNORECASE)
+NZB_EXTENSION_RE = re.compile(
+    r'^(?P<fname>.+)\.nzb$', re.IGNORECASE | re.ASCII)
 
 
 class NNTPnzb(NNTPContent):
@@ -159,10 +158,7 @@ class NNTPnzb(NNTPContent):
         self._nzb_mode = mode
 
         # Initialize our parent
-        super(NNTPnzb, self).__init__(work_dir=work_dir, *args, **kwargs)
-
-        # Used for it's ability to convert to and
-        self._htmlparser = None
+        super().__init__(work_dir=work_dir, *args, **kwargs)
 
         # NNTPContent Object
         self._detached = True
@@ -268,11 +264,11 @@ class NNTPnzb(NNTPContent):
                 if pretty:
                     indent = ''.ljust(self.padding_multiplier*2, self.padding)
 
-                for k, v in self.meta.items():
+                for k, v in list(self.meta.items()):
                     self.write('%s<meta type="%s">%s</meta>%s' % (
                         indent,
-                        self.escape_xml(k.encode(self.encoding)),
-                        self.escape_xml(v.encode(self.encoding)),
+                        self.escape_xml(k),
+                        self.escape_xml(v),
                         eol,
                     ))
 
@@ -419,7 +415,8 @@ class NNTPnzb(NNTPContent):
                         # Use the md5 hash of the first message-id of the
                         # first segment
                         _md5sum = hashlib.md5()
-                        _md5sum.update(self.segments[0][0].msgid())
+                        _md5sum.update(
+                            self.segments[0][0].msgid().encode(self.encoding))
 
                         # Store our data
                         self._lazy_gid = _md5sum.hexdigest()
@@ -445,7 +442,7 @@ class NNTPnzb(NNTPContent):
 
             # get the root element
             try:
-                _, self.xml_root = self.xml_iter.next()
+                _, self.xml_root = next(self.xml_iter)
 
                 segment = self.xml_root.xpath(
                     '/ns:nzb/ns:file[1]/ns:segments/ns:segment[1]',
@@ -481,7 +478,7 @@ class NNTPnzb(NNTPContent):
                 # constructed.
                 return None
 
-            except IOError:
+            except OSError:
                 logger.warning('NZB-File is missing: %s' % self.filepath)
                 self.xml_root = None
                 self.xml_itr_count = 0
@@ -494,7 +491,7 @@ class NNTPnzb(NNTPContent):
                 # Mark situation
                 self._lazy_is_valid = False
 
-            except Exception:
+            except Exception as e:
                 logger.error("NZB-File '%s' is corrupt" % self.filepath)
                 logger.debug('NZB-File Exception %s' % str(e))
                 # Mark situation
@@ -505,7 +502,7 @@ class NNTPnzb(NNTPContent):
                 # Use the md5 hash of the first message-id of the
                 # first segment
                 _md5sum = hashlib.md5()
-                _md5sum.update(segment.text.strip())
+                _md5sum.update(segment.text.strip().encode(self.encoding))
 
                 # Store our data
                 self._lazy_gid = _md5sum.hexdigest()
@@ -534,7 +531,7 @@ class NNTPnzb(NNTPContent):
             self._lazy_gid = None
             self.close()
 
-            if not super(NNTPnzb, self).load(filepath=filepath):
+            if not super().load(filepath=filepath):
                 self._segments_loaded = False
                 return False
 
@@ -567,7 +564,7 @@ class NNTPnzb(NNTPContent):
                     nzb = etree.parse(self.filepath)
 
                 except XMLSyntaxError as e:
-                    if e[0] is not None:
+                    if e.args and e.args[0] is not None:
                         # We have corruption
                         logger.error(
                             "NZB-File '%s' is corrupt" % self.filepath)
@@ -582,16 +579,26 @@ class NNTPnzb(NNTPContent):
 
         return self._lazy_is_valid is True
 
+    def write(self, data, *args, **kwargs):
+        """
+        Writes to the NZB-File; text is stored using the encoding declared in
+        the XML header
+        """
+        if isinstance(data, str):
+            data = data.encode(self.encoding)
+
+        return super().write(data, *args, **kwargs)
+
     def escape_xml(self, unescaped_xml, encoding=None):
         """
         A Simple wrapper to Escape XML charaters from a string
         """
 
-        if isinstance(unescaped_xml, unicode):
-            # Encode content as per defined in our XML
+        if isinstance(unescaped_xml, bytes):
+            # Decode content as per defined in our XML
             if encoding is None:
                 encoding = self.encoding
-            unescaped_xml = unescaped_xml.encode(encoding)
+            unescaped_xml = unescaped_xml.decode(encoding)
 
         return sax_escape(unescaped_xml, {"'": "&apos;", "\"": "&quot;"})
 
@@ -603,7 +610,7 @@ class NNTPnzb(NNTPContent):
         if not isinstance(obj, NNTPSegmentedPost):
             return False
 
-        # duplicates are ignored in a blist and therefore
+        # duplicates are ignored in a sortedset and therefore
         # we just capture the length of our list before
         # and after so that we can properly return a True/False
         # value
@@ -626,14 +633,13 @@ class NNTPnzb(NNTPContent):
         A Simple wrapper to UnEscape XML characters from a string
         """
 
-        if encoding is None:
-            encoding = self.encoding
+        if isinstance(escaped_xml, bytes):
+            # Decode content as per defined in our XML
+            if encoding is None:
+                encoding = self.encoding
+            escaped_xml = escaped_xml.decode(encoding)
 
-        if self._htmlparser is None:
-            # Define on first use
-            self._htmlparser = HTMLParser()
-
-        return self._htmlparser.unescape(escaped_xml).decode(encoding)
+        return html_unescape(escaped_xml)
 
     def segcount(self):
         """
@@ -655,7 +661,7 @@ class NNTPnzb(NNTPContent):
 
         """
         # The name from the meta tag
-        _name = self.meta.get('name', '').decode(self.encoding).strip()
+        _name = self.meta.get('name', '').strip()
         if not _name:
             if filebase:
                 # Use base provided as a base
@@ -672,9 +678,65 @@ class NNTPnzb(NNTPContent):
                 # Update
                 segment.filename = filename
 
-    def next(self):
+    def _valid_by_mode(self, segmented):
         """
-        Python 2 support
+        Internally called function that takes a segmented object and matches
+        it against the mode defined by this class. We return True if the mode
+        would otherwise accept this entry, otherwise we return False.
+        """
+
+        if self._nzb_mode == NZBParseMode.Simple:
+            # We accept everything
+            return True
+
+        # Our Mime Response
+        mr = None
+
+        # Check our segmented content to see if it's a par-file
+        if segmented.filename:
+            # use filename
+            mr = self._mime.from_filename(segmented.filename)
+
+        if mr is None or mr == DEFAULT_MIME_TYPE:
+            try:
+                for article in segmented:
+                    for content in article:
+                        if content.filename:
+                            mr = self._mime.from_filename(content.filename)
+
+                        if mr is None or mr == DEFAULT_MIME_TYPE:
+                            mr = self._mime.from_file(content.path())
+
+                        if not (mr is None or mr == DEFAULT_MIME_TYPE):
+                            raise StopIteration()
+
+            except StopIteration:
+                # we're done
+                pass
+
+        if mr is None or mr == DEFAULT_MIME_TYPE:
+            # We don't know the type, so we can't do much here
+            return True
+
+        if (self._nzb_mode & NZBParseMode.IgnorePars):
+            # our mime type is going to be one of the following
+            #  - application/par2
+            #  - application/x-par2
+            #
+            # it wil always be in lower case, so the following should
+            # get our match for us:
+            if mr.type().endswith('par2'):
+                return False
+
+        if (self._nzb_mode & NZBParseMode.IgnoreAttached):
+            if segmented[0][0].is_attached():
+                return False
+
+        # If we get here, we can go ahead and process our file
+        return True
+
+    def __next__(self):
+        """
         Support stream type functions and iterations
         """
 
@@ -688,13 +750,13 @@ class NNTPnzb(NNTPContent):
 
         if self._segment_iter:
             while 1:
-                _iter = self._segment_iter.next()
+                _iter = next(self._segment_iter)
                 if self._valid_by_mode(_iter):
                     return _iter
 
         # get the root element
         try:
-            _, self.xml_root = self.xml_iter.next()
+            _, self.xml_root = next(self.xml_iter)
 
             # Increment our iterator
             self.xml_itr_count += 1
@@ -704,7 +766,7 @@ class NNTPnzb(NNTPContent):
             self.xml_root = None
             self.xml_itr_count = 0
 
-        except IOError:
+        except OSError:
             logger.warning('NZB-File is missing: %s' % self.filepath)
             self.xml_root = None
             self.xml_itr_count = 0
@@ -712,7 +774,7 @@ class NNTPnzb(NNTPContent):
             self._lazy_is_valid = False
 
         except XMLSyntaxError as e:
-            if e[0] is not None:
+            if e.args and e.args[0] is not None:
                 # We have corruption
                 logger.error("NZB-File '%s' is corrupt" % self.filepath)
                 logger.debug('NZB-File XMLSyntaxError Exception %s' % str(e))
@@ -750,12 +812,12 @@ class NNTPnzb(NNTPContent):
             for meta in self.xml_root.xpath('/ns:nzb/ns:head[1]/ns:meta',
                                             namespaces=NZB_LXML_NAMESPACES):
                 # Store the Meta Information Detected
-                self.meta[meta.attrib['type'].decode(self.encoding)] = \
+                self.meta[meta.attrib['type']] = \
                     self.unescape_xml(meta.text.strip())
 
         # Acquire the Segments Groups
         groups = [
-            group.text.strip().decode(self.encoding)
+            group.text.strip()
             for group in self.xml_root.xpath(
                 'ns:groups/ns:group',
                 namespaces=NZB_LXML_NAMESPACES,
@@ -766,25 +828,25 @@ class NNTPnzb(NNTPContent):
         _filename = ''
 
         # The name from the meta tag
-        _name = self.meta.get('name', '').decode(self.encoding).strip()
+        _name = self.meta.get('name', '').strip()
 
         if not _name and self.filepath is not None:
             # Lets try to generate a name frome our NZB-File
             tmpfname = basename(self.filepath)
 
             # Strip our extension off the end (if present)
-            result = NZB_EXTENSION_RE(tmpfname)
+            result = NZB_EXTENSION_RE.match(tmpfname)
             if result and result.group('fname'):
                 # Store our new filename as our name
                 _name = result.group('fname')
 
         # Subject
         _subject = self.unescape_xml(
-                self.xml_root.attrib.get('subject', '')).decode(self.encoding)
+                self.xml_root.attrib.get('subject', ''))
 
         # Poster
         _poster = self.unescape_xml(
-                self.xml_root.attrib.get('poster', '')).decode(self.encoding)
+                self.xml_root.attrib.get('poster', ''))
 
         # Use our Codec(s) to extract our Yenc Subject
         matched = None
@@ -862,74 +924,10 @@ class NNTPnzb(NNTPContent):
 
         if not self._valid_by_mode(_file):
             # Not used; recursively move along
-            return self.next()
+            return next(self)
 
         # Return our object
         return _file
-
-    def _valid_by_mode(self, segmented):
-        """
-        Internally called function that takes a segmented object and matches
-        it against the mode defined by this class. We return True if the mode
-        would otherwise accept this entry, otherwise we return False.
-        """
-
-        if self._nzb_mode == NZBParseMode.Simple:
-            # We accept everything
-            return True
-
-        # Our Mime Response
-        mr = None
-
-        # Check our segmented content to see if it's a par-file
-        if segmented.filename:
-            # use filename
-            mr = self._mime.from_filename(segmented.filename)
-
-        if mr is None or mr == DEFAULT_MIME_TYPE:
-            try:
-                for article in segmented:
-                    for content in article:
-                        if content.filename:
-                            mr = self._mime.from_filename(content.filename)
-
-                        if mr is None or mr == DEFAULT_MIME_TYPE:
-                            mr = self._mime.from_file(content.path())
-
-                        if not (mr is None or mr == DEFAULT_MIME_TYPE):
-                            raise StopIteration()
-
-            except StopIteration:
-                # we're done
-                pass
-
-        if mr is None or mr == DEFAULT_MIME_TYPE:
-            # We don't know the type, so we can't do much here
-            return True
-
-        if (self._nzb_mode & NZBParseMode.IgnorePars):
-            # our mime type is going to be one of the following
-            #  - application/par2
-            #  - application/x-par2
-            #
-            # it wil always be in lower case, so the following should
-            # get our match for us:
-            if mr.type().endswith('par2'):
-                return False
-
-        if (self._nzb_mode & NZBParseMode.IgnoreAttached):
-            if segmented[0][0].is_attached():
-                return False
-
-        # If we get here, we can go ahead and process our file
-        return True
-
-    def __next__(self):
-        """
-        Python 3 support
-        Support stream type functions and iterations
-        """
-        return self.next()
 
     def __iter__(self):
         """
@@ -937,7 +935,7 @@ class NNTPnzb(NNTPContent):
         """
 
         # First get a ptr to the head of our data
-        super(NNTPnzb, self).__iter__()
+        super().__iter__()
 
         if self._segments_loaded is True:
             self._segment_iter = iter(self.segments)
@@ -960,13 +958,13 @@ class NNTPnzb(NNTPContent):
                 tag="{%s}file" % NZB_XML_NAMESPACE,
             ))
 
-        except IOError:
+        except OSError:
             logger.warning('NZB-File is missing: %s' % self.filepath)
             # Mark situation
             self._lazy_is_valid = False
 
         except XMLSyntaxError as e:
-            if e[0] is not None:
+            if e.args and e.args[0] is not None:
                 # We have corruption
                 logger.error("NZB-File '%s' is corrupt" % self.filepath)
                 logger.debug('NZB-File Exception %s' % str(e))

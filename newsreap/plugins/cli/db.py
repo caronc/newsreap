@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NewsReap Database CLI Plugin
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -177,14 +175,14 @@ def database_status(ctx):
         logger.info('There are no groups configured to be watched.')
         exit(0)
 
-    for _, meta in results.iteritems():
+    for _, meta in results.items():
         # Open up the database
         flags = ''
         if meta['filename'] in groups:
             flags += 'W'
 
-        print('%-65s %-10s %s' % (
+        print(('%-65s %-10s %s' % (
             meta['filename'],
             bytes_to_strsize(meta['size']),
             flags,
-        ))
+        )))

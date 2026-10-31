@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the HookManager Object
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -36,6 +34,7 @@ except ImportError:
 
 from newsreap.Hook import Hook
 from newsreap.HookManager import HookManager
+from newsreap.decorators import hook
 
 
 class HookManager_Test(TestBase):
@@ -137,7 +136,7 @@ class HookManager_Test(TestBase):
 
         assert('debug' in hookm)
 
-        it = next(hookm.iterkeys())
+        it = next(iter(hookm.keys()))
         assert('debug' == it)
 
         hookm.call('pre_upload')
@@ -146,3 +145,66 @@ class HookManager_Test(TestBase):
 
         hookm.reset()
         assert(len(hookm) == 0)
+
+    def test_managers_can_be_merged(self):
+        """
+        Adding one HookManager to another merges their hooks
+        """
+        @hook(name='my_hook')
+        def first(**kwargs):
+            return 'first'
+
+        @hook(name='my_hook', priority=5)
+        def second(**kwargs):
+            return 'second'
+
+        hookm = HookManager()
+        assert hookm.add(first) is True
+
+        hookn = HookManager()
+        assert hookn.add(second) is True
+
+        # Merge; both functions now live in our second manager
+        assert hookn.add(hookm) is True
+        assert [r['result'] for r in hookn.call('my_hook')] == \
+            ['second', 'first']
+
+        # Merging again adds nothing new
+        assert hookn.add(hookm) is False
+
+        # The first manager is left as it was
+        assert [r['result'] for r in hookm.call('my_hook')] == ['first']
+
+        # Brand new hooks are added as they are
+        hooko = HookManager()
+        assert hooko.add(Hook(name='other')) is True
+        assert hookn.add(hooko) is True
+        assert 'other' in hookn
+
+    def test_calling_leaves_hooks_unchanged(self):
+        """
+        Calling a hook spread across several modules doesn't change them
+        """
+        @hook(name='my_hook')
+        def first(**kwargs):
+            return 'first'
+
+        @hook(name='my_hook')
+        def second(**kwargs):
+            return 'second'
+
+        hook_a = Hook(name='a')
+        hook_a.add(first)
+        hook_b = Hook(name='b')
+        hook_b.add(second)
+
+        hookm = HookManager()
+        hookm.add(hook_a)
+        hookm.add(hook_b)
+
+        assert len(hookm.call('my_hook')) == 2
+        assert len(hookm.call('my_hook')) == 2
+
+        # Each hook still only holds its own function
+        assert len(hook_a['my_hook']) == 1
+        assert len(hook_b['my_hook']) == 1

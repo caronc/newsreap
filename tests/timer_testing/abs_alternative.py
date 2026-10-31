@@ -9,14 +9,14 @@ for v in x:
     max(v, -v)
 """
 t = Timer(test, setup="""x = (1, 0, -1)""")
-print '%-25s: %.12f' % ('max(v, -v); comparrison', t.timeit())
+print('%-25s: %.12f' % ('max(v, -v); comparrison', t.timeit()))
 
 test = """
 for v in x:
     abs(v)
 """
 t = Timer(test, setup="""x = (1, 0, -1)""")
-print '%-25s: %.12f' % ('abs(v); comparrison', t.timeit())
+print('%-25s: %.12f' % ('abs(v); comparrison', t.timeit()))
 
 test = """
 for v in x:
@@ -24,7 +24,7 @@ for v in x:
         v *= -1
 """
 t = Timer(test, setup="""x = (1, 0, -1)""")
-print '%-25s: %.12f' % ('v *= -1; comparrison', t.timeit())
+print('%-25s: %.12f' % ('v *= -1; comparrison', t.timeit()))
 
 test = """
 for v in x:
@@ -32,4 +32,4 @@ for v in x:
         v = -v
 """
 t = Timer(test, setup="""x = (1, 0, -1)""")
-print '%-25s: %.12f' % ('v = -v; comparrison', t.timeit())
+print('%-25s: %.12f' % ('v = -v; comparrison', t.timeit()))

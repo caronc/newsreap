@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A manager that can control multiple NNTP connections and
 # orchastrate them together in a single class
 #
@@ -18,7 +16,6 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
-import signal
 from gevent import Greenlet
 from gevent.event import Event
 from gevent.lock import Semaphore
@@ -40,7 +37,7 @@ from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 
-class WorkTracker(object):
+class WorkTracker:
     """
     Our Work Tracking object we use to determine who's working and who isn't.
 
@@ -62,7 +59,7 @@ class WorkTracker(object):
         """
         Initialize our object
         """
-        super(WorkTracker, self).__init__()
+        super().__init__()
 
         self.lock = Semaphore(value=1)
 
@@ -150,7 +147,7 @@ class Worker(Greenlet):
         Read from the work_queue, process it using an NNTPRequest object.
         """
         # block until we have an event to handle.
-        # print "Worker %s ready!" % self
+        # print("Worker %s ready!" % self)
         while not self._exit.is_set():
             # Begin our loop
             try:
@@ -191,7 +188,7 @@ class Worker(Greenlet):
         self._connection.close()
 
 
-class NNTPManager(object):
+class NNTPManager:
     """
     Used to manage multiple NNTPConnections via worker threads.
 
@@ -201,11 +198,6 @@ class NNTPManager(object):
     NNTPManager() requires an NNTPSettings() object to work correctly
 
     """
-    # Defines hook(s) allowing us to over-ride sections of the process.
-    # This grants the user to ability to manipulate content prior to it
-    # being posted and/or staged
-    hooks = None
-
     def __init__(self, settings=None, hooks=None, *args, **kwargs):
         """
         Initialize the NNTPManager() based on the provided settings.
@@ -226,13 +218,12 @@ class NNTPManager(object):
         # Queue Control
         self._work_queue = Queue()
 
-        # Map signal
-        gevent.signal(signal.SIGQUIT, gevent.kill)
-
-        # Define our hooks (if any)
+        # Define hook(s) allowing us to over-ride sections of the process.
+        # This grants the user to ability to manipulate content prior to it
+        # being posted and/or staged
         self.hooks = HookManager()
         if hooks:
-            self.hooks.add(hooks=hooks)
+            self.hooks.add(hooks)
 
         if settings is None:
             # Use defaults
@@ -247,22 +238,23 @@ class NNTPManager(object):
 
         return
 
-    def hooks(self, hooks, reset=True):
+    def set_hooks(self, hooks, reset=True):
         """
         Sets hooks into our connection object(s)
 
+        - hooks can be a HookManager, a Hook, a function or the name/path
+          of a hook module.
+        - reset removes any hooks already loaded first.
         """
+        if hooks is self.hooks:
+            # These are already our hooks
+            return
+
         if reset:
             # Reset our loaded hooks
             self.hooks.reset()
 
-        if isinstance(hooks, HookManager):
-            # update our hooks
-            for key in hooks.iterkeys():
-                self.hooks.add(hooks[key])
-
-        else:
-            self.hooks.add(hooks)
+        self.hooks.add(hooks)
 
     def spawn_workers(self, count=1):
         """
@@ -747,7 +739,7 @@ class NNTPManager(object):
             # Store our request
             requests.append(request)
 
-        if isinstance(id, basestring):
+        if isinstance(id, str):
             # We're dealing a Message-ID (Article-ID)
 
             # Push request to the queue
@@ -791,7 +783,7 @@ class NNTPManager(object):
                 # Iterate over our Segmented Post Entries
                 for article in iter(segpost):
                     # For each segment in our list
-                    resp = resp_iter.next()
+                    resp = next(resp_iter)
 
                     # This should always equate since our response list
                     # was generated from our post
@@ -807,7 +799,7 @@ class NNTPManager(object):
             # Iterate over our Segmented Post Entries
             for article in iter(segpost):
                 # For each segment in our list
-                resp = resp_iter.next()
+                resp = next(resp_iter)
 
                 # This should always equate since our response list
                 # was generated from our post
@@ -827,7 +819,7 @@ class NNTPManager(object):
             # Return our single article
             return responses[0]
 
-        elif isinstance(id, basestring):
+        elif isinstance(id, str):
             # Message-ID: Just return our response directly
             return responses[0]
 
@@ -852,7 +844,7 @@ class NNTPManager(object):
                   article_no: 12345678,
                   poster: u'the poster's information',
                   date: datetime() object,
-                  subject: u'a subject line in unicode',
+                  subject: 'a subject line',
                   size: 2135  // the message size in bytes
                   lines: 53   // the number of lines
                   group: u'alt.group.one'

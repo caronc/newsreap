@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the SubProcess Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -59,13 +57,13 @@ class SubProcess_Test(TestBase):
         sp.join()
 
         assert sp.is_complete() is True
-        assert sp.response_code() is 0
+        assert sp.response_code() == 0
         assert sp.successful() is True
         assert sp.elapsed() > 0.0
         assert isinstance(sp.stdout(), list)
         assert isinstance(sp.stderr(), list)
-        assert isinstance(sp.stdout(as_list=False), basestring)
-        assert isinstance(sp.stderr(as_list=False), basestring)
+        assert isinstance(sp.stdout(as_list=False), str)
+        assert isinstance(sp.stderr(as_list=False), str)
 
         # Because under the hood stdout and stderr are stored into
         # Stream objects, we need to be able to check that multple
@@ -88,7 +86,7 @@ class SubProcess_Test(TestBase):
         sp.join()
 
         assert sp.is_complete() is True
-        assert sp.response_code() is not 0
+        assert sp.response_code() != 0
         assert sp.successful() is False
         assert sp.elapsed() > 0.0
 

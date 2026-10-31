@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the PAR Codec
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -26,7 +24,7 @@ gevent.monkey.patch_all()
 import unittest
 import os
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import join
 from os.path import dirname
 from os.path import isdir
@@ -40,7 +38,13 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.codecs.CodecPar import CodecPar
+from newsreap.codecs.CodecPar import DEFAULT_PAR2_PATH
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
+
+
+# Some tests need the par2 tool installed on the system
+requires_par2 = unittest.skipUnless(
+    DEFAULT_PAR2_PATH, 'par2 is not installed')
 
 
 class CodecPar_Test(TestBase):
@@ -67,6 +71,7 @@ class CodecPar_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_par2
     def test_par_single_file(self):
         """
         Test that we can par content
@@ -103,6 +108,7 @@ class CodecPar_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_par2
     def test_par_repair(self):
         """
         Test that we can repair a file

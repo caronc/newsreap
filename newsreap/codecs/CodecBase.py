@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Base Codec Class for deciphering data read from the an NNTP Server
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -35,10 +33,10 @@ E_ERROR = 64
 E_CRC32 = 65
 
 # The mask to apply to all CRC checking
-BIN_MASK = 0xffffffffL
+BIN_MASK = 0xffffffff
 
 
-class CodecBase(object):
+class CodecBase:
 
     def __init__(self, work_dir=None, throttle_cycles=8000, throttle_time=0.2,
                  max_bytes=0, *args, **kwargs):
@@ -86,7 +84,7 @@ class CodecBase(object):
             else:
                 logger.error('Failed to created directory: %s' % self.work_dir)
                 # Should not continue under this circumstance
-                raise IOError((
+                raise OSError((
                     errno.EACCES,
                     'Failed to create directory: %s' % self.work_dir,
                 ))
@@ -118,9 +116,11 @@ class CodecBase(object):
     def _calc_crc(self, decoded):
         """
         Calculate the CRC based on the decoded content passed in
+
+        self._crc is stored inverted (it starts at BIN_MASK); crc32() flips
+        it back when it is reported.
         """
-        self._escape = crc32(decoded, self._escape)
-        self._crc = (self._escape ^ -1)
+        self._crc = crc32(decoded, self._crc ^ BIN_MASK) ^ BIN_MASK
 
     def max_bytes(self):
         """
@@ -142,7 +142,7 @@ class CodecBase(object):
             article_no: 12345678,
             poster: u'the poster's information',
             date: datetime() object,
-            subject: u'a subject line in unicode',
+            subject: 'a subject line',
             size: 2135  // the message size in bytes
             lines: 53   // the number of lines
             group: u'alt.group.one'

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # HookManager allows the management of one or more hooks
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -14,7 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import isfile
 
 from .Hook import Hook
@@ -28,7 +26,7 @@ from newsreap.Logging import NEWSREAP_HOOKS
 logger = logging.getLogger(NEWSREAP_HOOKS)
 
 
-class HookManager(object):
+class HookManager:
     """
     Hook Managers allow you to easily manage one or more hook.
 
@@ -59,7 +57,7 @@ class HookManager(object):
         decorator
 
         """
-        # duplicates are ignored in a blist and therefore
+        # duplicates are ignored in a sortedset and therefore
         # we just capture the length of our list before
         # and after so that we can properly return a True/False
         # value
@@ -72,18 +70,32 @@ class HookManager(object):
 
         elif isinstance(name, HookManager):
             # Merge the HookManager with this one
-            retcode = True
-            for hook in name.iterkeys():
-                self.hooks.add(hook)
-                if len(self.hooks) <= _bcnt:
-                    # Toggle our success
-                    retcode = False
+            #  - new hooks are added as they are
+            #  - functions of a hook we already have (by name) are added to
+            #    our copy of that hook
+            # True is returned if anything new was added
+            added = False
+            for hook in name:
+                existing = next(
+                    (h for h in self.hooks if h.name == hook.name), None)
 
-                else:
-                    # Account for our added entry
-                    _bcnt = len(self.hooks)
+                if existing is None:
+                    self.hooks.add(hook)
+                    added = True
+                    continue
 
-            return retcode
+                if existing is hook:
+                    # It's already ours
+                    continue
+
+                for hookname, entries in hook.functions.items():
+                    for meta in entries:
+                        if existing.add(
+                                meta['function'], name=hookname,
+                                priority=meta['priority']):
+                            added = True
+
+            return added
 
         elif callable(name):
             # we were passed in a function; assocate it with the module
@@ -117,7 +129,7 @@ class HookManager(object):
                 if len(_module) != 1:
                     continue
 
-                name = _module.keys()[0]
+                name = list(_module.keys())[0]
                 if name in self:
                     # Duplicates are not allowed
                     continue
@@ -167,7 +179,8 @@ class HookManager(object):
         for hook in self.hooks:
             if function_name in hook:
                 if ordered_funcs is None:
-                    ordered_funcs = hook[function_name]
+                    # Work on a copy so the hook's own list isn't changed
+                    ordered_funcs = hook[function_name].copy()
                 else:
                     ordered_funcs |= hook[function_name]
 
@@ -234,26 +247,19 @@ class HookManager(object):
         """
         return [x.name for x in self.hooks]
 
-    def iterkeys(self):
-        """
-        Support iterators for our keys
-
-        """
-        return iter(self.keys())
-
     def __contains__(self, function_name):
         """
         Support 'in' keyword
 
         """
-        return function_name in self.keys()
+        return function_name in list(self.keys())
 
     def __getitem__(self, index):
         """
         Support accessing the hook directly if it exists
 
         """
-        if isinstance(index, basestring):
+        if isinstance(index, str):
             # Support indexing by string
             result = next((x for x in self.hooks if x.name == index), None)
             if result is None:

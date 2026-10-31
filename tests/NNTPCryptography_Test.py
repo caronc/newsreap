@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # A base testing class/library to test the NNTP Cryptography class
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -186,7 +185,7 @@ class NNTPCryptography_Test(TestBase):
         assert (prv, pub) == obj.keys()
 
         # Test small content first
-        content = 'newsreap'
+        content = b'newsreap'
 
         # Let's encrypt our content
         encrypted = obj.encrypt(content)
@@ -195,7 +194,7 @@ class NNTPCryptography_Test(TestBase):
         decrypted = obj.decrypt(encrypted)
 
         # Test it out
-        assert(str(content) == str(decrypted))
+        assert(content == decrypted)
 
         # Note that the Hash value is important as encryption
         # and decryption will fail otherwise
@@ -220,7 +219,7 @@ class NNTPCryptography_Test(TestBase):
         )
 
         # It will succeed again
-        assert(str(content) == str(decrypted))
+        assert(content == decrypted)
 
         # Our private Key Location
         tmp_file = join(
@@ -239,8 +238,8 @@ class NNTPCryptography_Test(TestBase):
         # We need to iterate over all of our possible compression types
         # so that we can test that the chunk sizes are valid in all cases
         # This big O(n2) will test all of our supported operations
-        for alg in CRYPTOGRAPHY_HASH_MAP.keys():
-            for mgf1 in CRYPTOGRAPHY_HASH_MAP.keys():
+        for alg in list(CRYPTOGRAPHY_HASH_MAP.keys()):
+            for mgf1 in list(CRYPTOGRAPHY_HASH_MAP.keys()):
 
                 # Create our Cryptography Object
                 obj = NNTPCryptography(alg=alg, mgf1=mgf1)
@@ -268,7 +267,7 @@ class NNTPCryptography_Test(TestBase):
                         decrypted = obj.decrypt(encrypted)
 
                         # Test it out
-                        assert(str(chunk) == str(decrypted))
+                        assert(chunk == decrypted)
 
     def test_decode_encode_keys(self):
         """
@@ -297,3 +296,32 @@ class NNTPCryptography_Test(TestBase):
 
         assert (obj.decode_private_key(encoded_prv) is True)
         assert (obj.decode_public_key(encoded_pub) is True)
+
+    def test_equality_compares_public_keys(self):
+        """
+        Two objects are equal only when they hold the same public key
+        """
+        obj_a = NNTPCryptography()
+        obj_a.genkeys()
+
+        obj_b = NNTPCryptography()
+        obj_b.genkeys()
+
+        assert obj_a == obj_a
+        assert obj_a != obj_b
+        assert obj_a != 'not a key'
+
+        # Loading the same key makes them equal again
+        obj_c = NNTPCryptography()
+        assert obj_c.load(obj_a.private_key) is True
+        assert obj_c == obj_a
+        assert hash(obj_c) == hash(obj_a)
+        assert len(set([obj_a, obj_b, obj_c])) == 2
+
+    def test_bad_private_key_text_is_rejected(self):
+        """
+        Text that isn't a private key fails to load (without crashing)
+        """
+        obj = NNTPCryptography()
+        assert obj.load('not a private key') is False
+        assert obj.load(b'not a private key either') is False

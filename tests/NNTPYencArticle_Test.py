@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to test a yEnc file trnansfer
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -33,7 +31,7 @@ from os.path import join
 from os.path import dirname
 from os.path import abspath
 from os.path import isfile
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 
 try:
     from tests.TestBase import TestBase
@@ -56,7 +54,7 @@ class NNTPYencArticle_Test(TestBase):
         """
         Grab a few more things from the config
         """
-        super(NNTPYencArticle_Test, self).setUp()
+        super().setUp()
 
         # Secure NNTP Server
         self.nntps = NNTPSocketServer(
@@ -125,7 +123,7 @@ class NNTPYencArticle_Test(TestBase):
         self.nntps.shutdown()
         self.nntp.shutdown()
 
-        super(NNTPYencArticle_Test, self).tearDown()
+        super().tearDown()
 
     def test_yenc_message(self):
         """
@@ -148,29 +146,29 @@ class NNTPYencArticle_Test(TestBase):
         assert sock.group_name == self.common_group
         assert isinstance(article, NNTPArticle) is True
         assert len(article.decoded) == 1
-        assert isinstance(iter(article.decoded).next(), NNTPBinaryContent)
-        assert iter(article.decoded).next().is_valid() is True
+        assert isinstance(next(iter(article.decoded)), NNTPBinaryContent)
+        assert next(iter(article.decoded)).is_valid() is True
 
         # Compare File
         decoded_filepath = join(self.var_dir, 'testfile.txt')
         assert isfile(decoded_filepath)
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
-        assert decoded == iter(article.decoded).next().getvalue()
+        assert decoded == next(iter(article.decoded)).getvalue()
 
         # Close up our socket
         sock.close()
 
         # Our temporary cached file
-        assert isfile(iter(article.decoded).next().filepath)
+        assert isfile(next(iter(article.decoded)).filepath)
 
         # Save our file to disk
         new_filepath = join(self.tmp_dir, 'copied.txt')
-        assert iter(article.decoded).next().save(new_filepath, copy=True) \
+        assert next(iter(article.decoded)).save(new_filepath, copy=True) \
                 is True
         assert isfile(new_filepath) is True
-        assert iter(article.decoded).next().filepath != new_filepath
+        assert next(iter(article.decoded)).filepath != new_filepath
 
         try:
             # Makes sure the file doesn't already exist
@@ -178,11 +176,11 @@ class NNTPYencArticle_Test(TestBase):
         except:
             pass
 
-        old_filepath = iter(article.decoded).next().filepath
-        assert iter(article.decoded).next().save(new_filepath) is True
+        old_filepath = next(iter(article.decoded)).filepath
+        assert next(iter(article.decoded)).save(new_filepath) is True
         assert isfile(old_filepath) is False
         assert isfile(new_filepath) is True
-        assert iter(article.decoded).next().filepath == new_filepath
+        assert next(iter(article.decoded)).filepath == new_filepath
 
         # cleanup our file
         unlink(new_filepath)
@@ -237,25 +235,25 @@ class NNTPYencArticle_Test(TestBase):
 
             # TODO: update the article function so it's much easier to get
             # an iterator to decoded list
-            filepath=iter(iter(articles).next().decoded).next().filename,
+            filepath=next(iter(next(iter(articles)).decoded)).filename,
             work_dir=self.tmp_dir,
         )
 
         for article in articles:
             assert isinstance(article, NNTPArticle) is True
             assert len(article.decoded) == 1
-            assert isinstance(iter(article.decoded).next(), NNTPBinaryContent)
-            assert iter(article.decoded).next().is_valid() is True
+            assert isinstance(next(iter(article.decoded)), NNTPBinaryContent)
+            assert next(iter(article.decoded)).is_valid() is True
 
             # Build on new file
-            newfile.append(iter(article.decoded).next())
+            newfile.append(next(iter(article.decoded)))
             # keep open file count low
-            iter(article.decoded).next().close()
+            next(iter(article.decoded)).close()
 
         # Compare File
         decoded_filepath = join(self.var_dir, 'joystick.jpg')
         assert isfile(decoded_filepath)
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
         assert isfile(newfile.filepath) is True
@@ -275,7 +273,7 @@ class NNTPYencArticle_Test(TestBase):
             article = articles.pop()
             # length hasn't changed
             assert len(article.decoded) == 1
-            old_filepath = iter(article.decoded).next().filepath
+            old_filepath = next(iter(article.decoded)).filepath
             assert isfile(old_filepath) is True
 
             # If we remove the article, we automatically destroy
@@ -320,20 +318,20 @@ class NNTPYencArticle_Test(TestBase):
         )
         assert isinstance(article, NNTPArticle) is True
         assert len(article.decoded) == 1
-        assert isinstance(iter(article.decoded).next(), NNTPBinaryContent)
+        assert isinstance(next(iter(article.decoded)), NNTPBinaryContent)
         # Our content isn't valid because it's only a subset/partial download
-        assert iter(article.decoded).next().is_valid() is False
+        assert next(iter(article.decoded)).is_valid() is False
 
         # Compare File
         decoded_filepath = join(self.var_dir, 'testfile.txt')
         assert isfile(decoded_filepath)
-        with open(decoded_filepath, 'r') as fd_in:
+        with open(decoded_filepath, 'rb') as fd_in:
             decoded = fd_in.read()
 
         # Compare our processed content (which is a subset because we
         # specified the max_bytes argument) with the expected results
-        length = len(iter(article.decoded).next().getvalue())
-        assert decoded[0:length] == iter(article.decoded).next().getvalue()
+        length = len(next(iter(article.decoded)).getvalue())
+        assert decoded[0:length] == next(iter(article.decoded)).getvalue()
 
         # Close up our socket
         sock.close()

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A representation of an actual NNTPArticle() which can contain 1 or more
 # NNTPContent() objects in addition to header information.
 #
@@ -17,10 +15,9 @@
 
 import re
 import hashlib
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from copy import deepcopy
 from itertools import chain
-from datetime import datetime
 
 from os.path import isfile
 from os.path import abspath
@@ -39,6 +36,7 @@ from .NNTPHeader import NNTPHeader
 from .NNTPSettings import NNTP_EOL
 from .NNTPSettings import DEFAULT_TMP_DIR
 from .Utils import random_str
+from .Utils import utcnow
 from .Utils import bytes_to_strsize
 from .Utils import strsize_to_bytes
 from .Utils import mkdir
@@ -57,14 +55,15 @@ DEFAULT_NNTP_SUBJECT = 'unknown.file'
 DEFAULT_NNTP_POSTER = 'newsreaper <news@reap.er>'
 
 # Used when parsing groups from a header
-GROUP_DELIMITER_RE = re.compile('[ \t,]+')
+GROUP_DELIMITER_RE = re.compile('[ \t,]+', re.ASCII)
 
 # A regular expression that can be used to check if a string is a valid
 # Message-ID
-MESSAGE_ID_RE = re.compile(r'^\s*<?\s*(?P<id>[a-z0-9@!.$-]+)\s*>?\s*$', re.I)
+MESSAGE_ID_RE = re.compile(r'^\s*<?\s*(?P<id>[a-z0-9@!.$-]+)\s*>?\s*$',
+                           re.I | re.ASCII)
 
 
-class NNTPArticle(object):
+class NNTPArticle:
     """
     An object for maintaining retrieved article content. The primary
     reason for this object is it makes it easier to sort the results
@@ -92,12 +91,12 @@ class NNTPArticle(object):
         """
 
         # The Article Message-ID
-        self.id = id if isinstance(id, basestring) else ''
+        self.id = id if isinstance(id, str) else ''
 
         # The NNTP Group Index #
         self.no = 1000
         try:
-            self.no = int(kwargs.get(u'no', self.no))
+            self.no = int(kwargs.get('no', self.no))
         except:
             # Just use the default
             pass
@@ -133,7 +132,7 @@ class NNTPArticle(object):
             # Our body contains non-decoded content
             self.body = NNTPAsciiContent(work_dir=self.work_dir)
 
-        if isinstance(body, basestring) and len(body) > 0:
+        if isinstance(body, str) and len(body) > 0:
             # Store our body content
             self.body.write(body)
 
@@ -170,9 +169,9 @@ class NNTPArticle(object):
                 # Remove Header from decoded list
                 self.decoded.remove(self.header)
 
-                if u'Newsgroups' in self.header:
+                if 'Newsgroups' in self.header:
                     # Parse our groups out of the header
-                    self.groups = NNTPGroup.split(self.header[u'Newsgroups'])
+                    self.groups = NNTPGroup.split(self.header['Newsgroups'])
 
         elif isinstance(response, NNTPArticle):
             # We basically save everything except the work-dir since
@@ -485,6 +484,8 @@ class NNTPArticle(object):
             subject=self.subject,
             poster=self.poster,
             groups=self.groups,
+            work_dir=self.work_dir,
+            codecs=self._codecs,
         )
 
         article.id = self.id
@@ -555,7 +556,7 @@ class NNTPArticle(object):
         """
         Used for adding content to the self.decoded class
         """
-        if isinstance(content, basestring):
+        if isinstance(content, str):
             # A mime object we can use to detect the type of file
             m = Mime()
 
@@ -602,7 +603,7 @@ class NNTPArticle(object):
         if not isinstance(content, NNTPContent):
             return False
 
-        # duplicates are ignored in a blist and therefore
+        # duplicates are ignored in a sortedset and therefore
         # we just capture the length of our list before
         # and after so that we can properly return a True/False
         # value
@@ -631,8 +632,8 @@ class NNTPArticle(object):
             partno = 1
 
         m = hashlib.sha1()
-        reference = datetime.utcnow()
-        m.update(datetime.utcnow().strftime('%Y%m%d%H%M%S%f'))
+        reference = utcnow()
+        m.update(utcnow().strftime('%Y%m%d%H%M%S%f').encode('ascii'))
         key = m.hexdigest()
 
         # If we reach here an ID hasn't been generated yet; generate one
@@ -864,6 +865,13 @@ class NNTPArticle(object):
         """
         return self.__dict__ == other.__dict__
 
+    def __hash__(self):
+        """
+        Hash by identity so the object can still be stored in sets and
+        used as a dictionary key
+        """
+        return id(self)
+
     def __getitem__(self, index):
         """
         Support accessing NNTPContent objects by index
@@ -875,12 +883,6 @@ class NNTPArticle(object):
         Return a printable version of the article
         """
         return '%s' % self.id
-
-    def __unicode__(self):
-        """
-        Return a printable version of the article
-        """
-        return u'%s' % self.id
 
     def __repr__(self):
         """

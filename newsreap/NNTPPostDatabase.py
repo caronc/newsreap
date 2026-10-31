@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A common NNTP Posting Database management class used by SQLAlchemy
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -33,7 +31,7 @@ class NNTPPostDatabase(Database):
         """
         Initialize NNTP Posting Database
         """
-        super(NNTPPostDatabase, self).__init__(
+        super().__init__(
             base=ObjectBase,
             vsp=Vsp,
             engine=engine,

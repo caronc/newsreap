@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTPSettings Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -81,7 +79,7 @@ class NNTPSettings_Test(TestBase):
         assert settings.read(cfg_file) is False
         assert basename(settings.cfg_file) == basename(cfg_file)
         assert len(settings.cfg_data) == len(VALID_SETTINGS_ENTRY)
-        for k in VALID_SETTINGS_ENTRY.iterkeys():
+        for k in VALID_SETTINGS_ENTRY.keys():
             assert k in settings.cfg_data
 
         assert settings.is_valid() is False
@@ -147,7 +145,7 @@ class NNTPSettings_Test(TestBase):
             fp.write('%s:\n' % SERVER_LIST_KEY)
             for server in servers:
                 fp.write('  - %s' % ('    '.join(
-                    ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
+                    ['%s: %s\n' % (k, v) for (k, v) in list(server.items())])))
 
         assert isfile(cfg_file) is True
 
@@ -180,7 +178,7 @@ class NNTPSettings_Test(TestBase):
 
         # The second entry has a higher priority than the first, so it
         # should be used.
-        for (k, v) in servers[1].items():
+        for (k, v) in list(servers[1].items()):
             if k in (invalid_entry, 'compress'):
                 # We already established the length above, therefore
                 # we can't check for this item or we'll have a problem
@@ -195,7 +193,7 @@ class NNTPSettings_Test(TestBase):
 
         # Now just check that our first entry was successfully stored second
         # since it's priority was lower
-        for (k, v) in servers[0].items():
+        for (k, v) in list(servers[0].items()):
             if k in (invalid_entry, 'compress'):
                 # We already established the length above, therefore
                 # we can't check for this item or we'll have a problem
@@ -234,7 +232,7 @@ class NNTPSettings_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
             fp.write('    %s' % ('    '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in processing.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(processing.items())])))
 
         # Now We test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -251,7 +249,7 @@ class NNTPSettings_Test(TestBase):
         # configuration files to be backwards compatible with the old
         assert invalid_entry not in settings.nntp_processing
 
-        for (k, v) in processing.items():
+        for (k, v) in list(processing.items()):
             if k == invalid_entry:
                 # We already established the length above, therefore
                 # we can't check for this item or we'll have a problem
@@ -279,7 +277,7 @@ class NNTPSettings_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
             fp.write(' - %s' % ('  '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(server.items())])))
 
         # Now we test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -319,11 +317,11 @@ class NNTPSettings_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
             fp.write('  %s' % ('  '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in processing.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(processing.items())])))
 
             fp.write('%s:\n' % SERVER_LIST_KEY)
             fp.write(' - %s' % ('  '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(server.items())])))
 
         # Now we test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -361,11 +359,11 @@ class NNTPSettings_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
             fp.write('    %s' % ('    '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in processing.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(processing.items())])))
 
             fp.write('%s:\n' % SERVER_LIST_KEY)
             fp.write('  - %s' % ('    '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(server.items())])))
 
         # Now We test it out
         settings = NNTPSettings(cfg_file=cfg_file)
@@ -411,7 +409,7 @@ class NNTPSettings_Test(TestBase):
         chmod(new_cfg_file, 0000)
         assert settings.read(new_cfg_file) is False
         assert basename(settings.cfg_file) == basename(new_cfg_file)
-        for k in VALID_SETTINGS_ENTRY.iterkeys():
+        for k in VALID_SETTINGS_ENTRY.keys():
             assert k in settings.cfg_data
 
         assert settings.is_valid() is False
@@ -448,7 +446,7 @@ class NNTPSettings_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % SERVER_LIST_KEY)
             fp.write('  %s' % ('  '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(server.items())])))
 
         # Now we test it out
         settings = NNTPSettings(cfg_file=cfg_file)

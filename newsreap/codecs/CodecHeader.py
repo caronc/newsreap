@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Codec for parsing header information from an NNTP Server
 #
 # Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
@@ -29,10 +27,10 @@ logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Check for begin and end
 HEADER_RE = re.compile(
-    r'^(\s*(?P<key>[a-z0-9-]+)\s*:\s*(?P<value>.*[^\s])\s*'
+    br'^(\s*(?P<key>[a-z0-9-]+)\s*:\s*(?P<value>.*[^\s])\s*'
     # Sometimes lines start with a tab in the header section
-    r'|\t\s*(?P<extra>.*[^\s])\s*)$',
-    re.IGNORECASE,
+    br'|\t\s*(?P<extra>.*[^\s])\s*)$',
+    re.IGNORECASE | re.ASCII,
 )
 
 
@@ -41,7 +39,7 @@ class CodecHeader(CodecBase):
     This class is used for interpreting NNTP Headers
     """
     def __init__(self, descriptor=None, encoding=None, *args, **kwargs):
-        super(CodecHeader, self)\
+        super()\
             .__init__(descriptor=descriptor, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
@@ -77,6 +75,9 @@ class CodecHeader(CodecBase):
         keys/value pairs
 
         """
+
+        if isinstance(line, str):
+            line = line.encode(self.encoding)
 
         header_re = HEADER_RE.match(line)
         if not header_re:
@@ -186,7 +187,7 @@ class CodecHeader(CodecBase):
 
             else:
                 # Append our content to the last match
-                self.decoded[header['key']] += u',' + header['value']
+                self.decoded[header['key']] += ',' + header['value']
 
         # Returns true because we're still expecting more content
         return True
@@ -208,7 +209,7 @@ class CodecHeader(CodecBase):
         # If we reach here; we've decoded the file, the next thing
         # we need to do is check for some common entries that
         # would oherwise have made it so it's not valid
-        if next((True for k in self.decoded.iterkeys()
+        if next((True for k in self.decoded.keys()
                  if NNTP_NUKED_MSG.match(k) is not None), False):
             # Headers check failed!
             return False
@@ -220,7 +221,7 @@ class CodecHeader(CodecBase):
         """
         Reset our decoded content
         """
-        super(CodecHeader, self).reset()
+        super().reset()
 
         # Reset Our Result set
         self.decoded = NNTPHeader(work_dir=self.work_dir)

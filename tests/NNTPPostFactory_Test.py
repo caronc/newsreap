@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTPPostFactory Object
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -39,6 +37,8 @@ from newsreap.NNTPSettings import PROCESSING_KEY
 from newsreap.NNTPSettings import NNTPSettings
 from newsreap.NNTPManager import NNTPManager
 from newsreap.NNTPPostFactory import NNTPPostFactory
+from newsreap.NNTPArticle import NNTPArticle
+from newsreap.decorators import hook
 from newsreap.Utils import strsize_to_bytes
 
 
@@ -78,11 +78,11 @@ class NNTPPostFactory_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
             fp.write('   %s' % ('   '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in processing.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(processing.items())])))
 
             fp.write('%s:\n' % SERVER_LIST_KEY)
             fp.write(' - %s' % ('   '.join(
-                ['%s: %s\n' % (k, v) for (k, v) in server.items()])))
+                ['%s: %s\n' % (k, v) for (k, v) in list(server.items())])))
 
         # Settings Object
         setting = NNTPSettings(cfg_file=cfg_file)
@@ -124,3 +124,42 @@ class NNTPPostFactory_Test(TestBase):
         assert(pf.detect_split_size('25G') == strsize_to_bytes('400MB'))
         assert(pf.detect_split_size('50G') == strsize_to_bytes('400MB'))
         assert(pf.detect_split_size('100G') == strsize_to_bytes('400MB'))
+
+    def test_custom_hooks_keep_transfer_tracking(self):
+        """
+        Loading custom hooks keeps the factory's transfer progress hooks
+        """
+        @hook(name='socket_write')
+        def custom(**kwargs):
+            return 'custom'
+
+        mgr = NNTPManager(self.nntp_settings('post_hooks'))
+        pf = NNTPPostFactory(connection=mgr)
+
+        path = join(self.tmp_dir, 'NNTPPostFactory.hooks', 'My.Content')
+        assert self.touch(join(path, 'file.txt'), size='1K')
+        assert pf.load(path, hooks=custom) is True
+
+        def functions(name):
+            return [
+                meta['function'].__name__
+                for h in mgr.hooks for meta in (h[name] or [])]
+
+        assert 'custom' in functions('socket_write')
+        assert 'transfer_rates' in functions('socket_write')
+        assert 'transfer_count' in functions('post_post')
+        mgr.close()
+
+    def test_saving_a_missing_article_returns_none(self):
+        """
+        save_article() returns None when the article id doesn't exist
+        """
+        mgr = NNTPManager(self.nntp_settings('post_missing'))
+        pf = NNTPPostFactory(connection=mgr)
+
+        path = join(self.tmp_dir, 'NNTPPostFactory.missing', 'My.Content')
+        assert self.touch(join(path, 'file.txt'), size='1K')
+        assert pf.load(path) is True
+
+        assert pf.save_article(NNTPArticle(), id=9999) is None
+        mgr.close()

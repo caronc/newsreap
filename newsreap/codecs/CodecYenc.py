@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Codec for handling yEnc encoded NNTP Articles
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -15,6 +13,8 @@
 # GNU Lesser General Public License for more details.
 
 import re
+from os import fsdecode
+from os import fsencode
 from os.path import basename
 
 from newsreap.NNTPContent import NNTPContent
@@ -34,30 +34,30 @@ from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Defines the new line delimiter
-EOL = '\r\n'
+EOL = b'\r\n'
 
 # Check for =ybegin, =yend and =ypart
 YENC_RE = re.compile(
     # Standard yEnc structure
-    r'^\s*(=y((?P<key_1>begin|part|end))2?('
+    br'^\s*(=y((?P<key_1>begin|part|end))2?('
     # group 1
-    r'(\s+part=(?P<part_1>[0-9]+))?(\s+total=(?P<total>[0-9]+))?'
-    r'(\s+line=(?P<line>[0-9]+))?(\s+size=(?P<size_1>[0-9]+))?'
-    r'(\s+name=[\s\'"]*(?P<name_1>.+)[\'"]*)?|'
+    br'(\s+part=(?P<part_1>[0-9]+))?(\s+total=(?P<total>[0-9]+))?'
+    br'(\s+line=(?P<line>[0-9]+))?(\s+size=(?P<size_1>[0-9]+))?'
+    br'(\s+name=[\s\'"]*(?P<name_1>.+)[\'"]*)?|'
 
     # group 2
-    r'(\s+size=(?P<size_2>[0-9]+))?(\s+part=(?P<part_2>[0-9]+))?'
-    r'(\s+pcrc32=(?P<pcrc32_1>[A-Za-z0-9]+))?'
-    r'(\s+crc32=(?P<crc32_1>[A-Za-z0-9]+))?|'
+    br'(\s+size=(?P<size_2>[0-9]+))?(\s+part=(?P<part_2>[0-9]+))?'
+    br'(\s+pcrc32=(?P<pcrc32_1>[A-Za-z0-9]+))?'
+    br'(\s+crc32=(?P<crc32_1>[A-Za-z0-9]+))?|'
 
     # group 3
-    r'(\s+begin=(?P<begin>[0-9]+))?(\s+end=(?P<end>[0-9]+))?|'
-    r'(\s+size=(?P<size_3>[0-9]+))?(\s+part=(?P<part_3>[0-9]+)\s+)?'
-    r'(\s+pcrc32=(?P<pcrc32_2>[A-Za-z0-9]+))?'
-    r'(\s+crc32=(?P<crc32_2>[A-Za-z0-9]+))?'
+    br'(\s+begin=(?P<begin>[0-9]+))?(\s+end=(?P<end>[0-9]+))?|'
+    br'(\s+size=(?P<size_3>[0-9]+))?(\s+part=(?P<part_3>[0-9]+)\s+)?'
+    br'(\s+pcrc32=(?P<pcrc32_2>[A-Za-z0-9]+))?'
+    br'(\s+crc32=(?P<crc32_2>[A-Za-z0-9]+))?'
     # end
-    r'))\s*$',
-    re.IGNORECASE,
+    br'))\s*$',
+    re.IGNORECASE | re.ASCII,
 )
 
 # This is applied to the regular expression matches to convert
@@ -94,7 +94,8 @@ NZB_SUBJECT_PARSE = (
         r"([\"'\s-]+[\[(]?(?P<index>\d+)\/(?P<count>\d+)[)\]]?)?)?"
         r"[\"'\s-]+)?(?P<fname>[^\"']+)[\"'\s-]+yEnc\s+[\[(]?"
         r"(?P<yindex>\d+)?\/"
-        r"(?P<ycount>\d+)[\])]?([+\s]+?(?P<size>\s*\d+))?\s*$", re.IGNORECASE,
+        r"(?P<ycount>\d+)[\])]?([+\s]+?(?P<size>\s*\d+))?\s*$",
+            re.IGNORECASE | re.ASCII,
     )
 )
 
@@ -107,68 +108,141 @@ class YencError(Exception):
             self.code, self.value)
 
 
-try:
-    # Yenc Support
-    from _yenc import decode_string
-    from _yenc import encode_string
-    FAST_YENC_SUPPORT = True
+# The number of encoded characters written per line before a line break
+# is added (matches the classic yEnc C library)
+YENC_LINESIZE = 128
 
-    # Monkey Patch CodecError (assumes yEnc v0.4)
-    import yenc
-    yenc.Error = YencError
-    yenc.E_ERROR = E_ERROR
-    yenc.E_CRC32 = E_CRC32
-    yenc.BIN_MASK = BIN_MASK
+# Every byte is shifted by 42 when encoded (and back again when decoded)
+YENC_ENCODE_TABLE = bytes((x + 42) & 0xff for x in range(256))
+YENC_DECODE_TABLE = bytes((x - 42) & 0xff for x in range(256))
 
-except ImportError:
-    # Yenc Support not available; so to make things easy
-    # the below code was based on the yEnc libraries.  But
-    # the part that is blisterily fast (Written in C) will
-    # be writting in python (a much slower solution)
-    FAST_YENC_SUPPORT = False
+# Encoded characters that always need to be escaped
+YENC_ALWAYS_ESCAPED = b'\x00\n\r='
 
-    # A Translation Map
-    YENC42 = ''.join(map(lambda x: chr((x-42) & 255), range(256)))
+# Encoded characters that only need to be escaped at the start (or end)
+# of a line
+YENC_TAB = ord('\t')
+YENC_SPACE = ord(' ')
+YENC_DOT = ord('.')
 
-    YENC_DECODE_SPECIAL_MAP = dict([('=%s' % chr(k+64), chr(k)) for k in (
-        # Non-Printable
-        ord('\0'), ord('\r'), ord('\n'),  ord(' '), ord('\t'),
+# An escape character (=) followed by the escaped character
+YENC_ESCAPE_RE = re.compile(br'=(.)', re.DOTALL | re.ASCII)
 
-        # Printable
-        ord('.'), ord('='),
-    )] + [
-        # Ignore Types (we simply ignore these types if they are found)
-        ('\r', ''), ('\n', ''),
-    ])
 
-    # A map used for encoding content
-    YENC_ENCODE_ESCAPED_CHARACTERS = (
-        ord('\0'), ord('\r'), ord('\n'), ord('='),
-        # Whitespace only has to be escaped if it's the first element
-        # in a row (or the last). At this time manual encoding escapes
-        # everything because it's easier to code that way (but results
-        # in a larger encoded file then it has to be).
-        # TODO: Update the manual step to only escape spaces and/or
-        # tabs if they're the first/or last entry in a row
-        ord(' '), ord('\t'),
+def _yenc_escape(byte):
+    """
+    Returns the escaped form of an (already shifted) encoded byte
+    """
+    return bytes((ord('='), (byte + 64) & 0xff))
 
-        # Dot's only have to be escaped if they start a line
-        # similar to the above comment, the manual code currently escapes
-        # all dots. TODO: Fix this to only escape the first dot if present
-        ord('.'),
-    )
 
-    # Compile our map into a decode table
-    YENC_DECODE_SPECIAL_RE = re.compile(
-        r'(' + r'|'.join(YENC_DECODE_SPECIAL_MAP.keys()) + r')',
-    )
+def yenc_encode(data, column=0, linesize=YENC_LINESIZE):
+    """
+    yEnc encodes a block of bytes.
+
+    - column is where the previous block left off on its last line.
+    - A line break (CRLF) is added every `linesize` characters.
+    - Returns a tuple of (encoded_bytes, column)
+    """
+    data = data.translate(YENC_ENCODE_TABLE)
+
+    results = []
+    index = 0
+    total = len(data)
+    while index < total:
+        if column == 0 or column == linesize - 1:
+            # A byte at the start or end of a line follows extra
+            # escaping rules (tabs, spaces and dots)
+            byte = data[index]
+            if byte in YENC_ALWAYS_ESCAPED \
+                    or byte in (YENC_TAB, YENC_SPACE) \
+                    or (byte == YENC_DOT and column == 0):
+                results.append(_yenc_escape(byte))
+                column += 2
+
+            else:
+                results.append(data[index:index + 1])
+                column += 1
+
+            index += 1
+
+        else:
+            # Grab as many bytes as we can that fit on our current line
+            # without reaching its last column
+            room = linesize - 1 - column
+            count = min(room, total - index)
+            while count > 0:
+                chunk = data[index:index + count]
+                escaped = count - len(chunk.translate(
+                    None, YENC_ALWAYS_ESCAPED))
+                if count + escaped <= room:
+                    break
+
+                # Make room for the escape characters and try again
+                count = room - escaped
+
+            if count <= 0:
+                # Not enough room left for the next byte and its escape
+                # character; handle it on its own
+                byte = data[index]
+                if byte in YENC_ALWAYS_ESCAPED:
+                    results.append(_yenc_escape(byte))
+                    column += 2
+
+                else:
+                    results.append(data[index:index + 1])
+                    column += 1
+
+                index += 1
+
+            else:
+                # Escape '=' first so the escapes we add are left alone
+                results.append(
+                    chunk.replace(b'=', b'=}')
+                         .replace(b'\x00', b'=@')
+                         .replace(b'\n', b'=J')
+                         .replace(b'\r', b'=M'))
+                column += count + escaped
+                index += count
+
+        if column >= linesize:
+            results.append(b'\r\n')
+            column = 0
+
+    return b''.join(results), column
+
+
+def yenc_decode(data, escape=False):
+    """
+    Decodes a block of yEnc encoded bytes.
+
+    - Line breaks (CR and LF) are ignored.
+    - escape tells us the previous block ended with an escape character.
+    - Returns a tuple of (decoded_bytes, escape)
+    """
+    data = data.replace(b'\r', b'').replace(b'\n', b'')
+    if escape:
+        data = b'=' + data
+
+    # An odd number of trailing escape characters means the last one
+    # escapes the first character of the next block
+    trailing = len(data) - len(data.rstrip(b'='))
+    escape = bool(trailing % 2)
+    if escape:
+        data = data[:-1]
+
+    decoded = YENC_ESCAPE_RE.sub(
+        lambda m: bytes(((m.group(1)[0] - 64) & 0xff, )), data,
+    ).translate(YENC_DECODE_TABLE)
+
+    return decoded, escape
 
 
 class CodecYenc(CodecBase):
 
     def __init__(self, descriptor=None, work_dir=None,
                  linelen=128, *args, **kwargs):
-        super(CodecYenc, self).__init__(
+        super().__init__(
                 descriptor=descriptor, work_dir=work_dir, *args, **kwargs)
 
         # Used for internal meta tracking when using the decode()
@@ -197,7 +271,8 @@ class CodecYenc(CodecBase):
 
         # Trim results
         if matched.group('desc') is not None:
-            results['desc'] = re.sub('[\s-]+$', '', matched.group('desc'))
+            results['desc'] = re.sub('[\\s-]+$', '', matched.group('desc'),
+                                     flags=re.ASCII)
         if matched.group('fname') is not None:
             results['fname'] = matched.group('fname').strip()
 
@@ -243,28 +318,29 @@ class CodecYenc(CodecBase):
             )
 
         # yEnc (v1.3) begin
-        fmt_ybegin = '=ybegin part=%d total=%d line=%d size=%d name=%s' % (
+        fmt_ybegin = b'=ybegin part=%d total=%d line=%d size=%d name=%s' % (
             content.part, content.total_parts, self.linelen,
-            len(content), content.filename,
+            len(content), fsencode(content.filename),
         )
 
         # yEnc part
-        fmt_ypart = '=ypart begin=%d end=%d' % (
+        fmt_ypart = b'=ypart begin=%d end=%d' % (
             content.begin() + 1,
             content.end(),
         )
 
         if isinstance(content._parent, NNTPContent):
             # yEnc end
-            fmt_yend = '=yend size=%d part=%d pcrc32=%s crc32=%s' % (
+            fmt_yend = b'=yend size=%d part=%d pcrc32=%s crc32=%s' % (
                 len(content), content.part,
-                content.crc32(), content._parent.crc32(),
+                content.crc32().encode('ascii'),
+                content._parent.crc32().encode('ascii'),
             )
 
         else:
             # yEnc end
-            fmt_yend = '=yend size=%d part=%d pcrc32=%s' % (
-                len(content), content.part, content.crc32(),
+            fmt_yend = b'=yend size=%d part=%d pcrc32=%s' % (
+                len(content), content.part, content.crc32().encode('ascii'),
             )
 
         # Write =ybegin line
@@ -275,12 +351,9 @@ class CodecYenc(CodecBase):
         if not content.open():
             return None
 
-        # Prepare our result set
-        results = ""
-
-        # Column is used for decoding
+        # Column is used for encoding; it tracks how far along the current
+        # line we are so lines are broken every `linelen` characters
         column = 0
-        crc = BIN_MASK
 
         # We need to parse the content until we either reach
         # the end of the file or get to an 'end' tag
@@ -291,77 +364,16 @@ class CodecYenc(CodecBase):
                 # We're done
                 break
 
-            if FAST_YENC_SUPPORT:
-                try:
-                    _results, crc, column = encode_string(data, crc, column)
-                    # Append our parsed content onto our ongoing buffer
-                    results += _results
-
-                except YencError as e:
-                    logger.error("Failed to encode Yenc for %s." % content)
-                    logger.debug('Yenc exception: %s' % (str(e)))
-                    return None
-
-            else:
-                # The slow and painful way, the below looks complicated
-                # but it really isn't at the the end of the day; yEnc is
-                # pretty basic;
-                #  - first we translate the all of the characters by adding
-                #    42 to their value with the exception of a few special
-                #    characters that are explicitly reserved for the yEnc
-                #    language (and conflict with the NNTP Server language).
-                #
-                #  - next, we need to apply our ENCODE_SPECIAL_MAP to be
-                #    sure to handle the characters that are reserved as
-                #    special keywords used by both NNTP Servers and the yEnc
-                #    protocol itself.
-                #
-                #  - finally we want to prevent our string from going on for
-                #    to many characters (horizontally).  So we need to split
-                #    our content up
-                #
-
-                idx = 0
-                while idx < len(data):
-                    _byte = (ord(data[idx]) + 42) & 0xff
-                    if _byte in YENC_ENCODE_ESCAPED_CHARACTERS:
-                        _byte = (_byte + 64) & 0xff
-                        # Esape Sequence
-                        results += '='
-
-                    # Store our character
-                    results += chr(_byte)
-
-                    # Increment Index
-                    idx += 1
-
-            # Our offset
-            offset = 0
-
-            while offset < (len(results)-self.linelen+1):
-                eol = offset+self.linelen
-                if results[offset:eol][-1] == '=':
-                    # Lines can't end with the escape sequence (=). If we get
-                    # here then this one did. We just adjust our end-of-line
-                    # by 1 and keep moving
-                    eol -= 1
-
-                _encoded.write(results[offset:eol] + EOL)
-                offset = eol
-
-            if offset < len(results):
-                results = results[-(len(results) - offset):]
-
-            else:
-                # reset string
-                results = ''
+            # Encoded data already has its line breaks in place
+            results, column = yenc_encode(data, column, self.linelen)
+            _encoded.write(results)
 
         # We're done reading our data
         content.close()
 
-        if len(results):
-            # We still have content left in our buffer
-            _encoded.write(results + EOL)
+        if column:
+            # Finish off our last (partial) line
+            _encoded.write(EOL)
 
         # Write footer
         _encoded.write(fmt_yend + EOL)
@@ -387,13 +399,17 @@ class CodecYenc(CodecBase):
         it returns a dictionary of the keys and their mapped values.
 
         """
+        if isinstance(line, str):
+            line = fsencode(line)
+
         yenc_re = YENC_RE.match(line)
         if not yenc_re:
             return None
 
-        # Merge Results
-        f_map = dict((YENC_KEY_MAP[k], v) for k, v
-                     in yenc_re.groupdict().iteritems() if v)
+        # Merge Results; filenames are decoded the same way the operating
+        # system does so that any byte sequence can be represented
+        f_map = dict((YENC_KEY_MAP[k], fsdecode(v)) for k, v
+                     in yenc_re.groupdict().items() if v)
 
         # Tidy filename (whitespace)
         if 'name' in f_map:
@@ -520,42 +536,10 @@ class CodecYenc(CodecBase):
                 # keep going until we find it
                 continue
 
-            if FAST_YENC_SUPPORT:
-                try:
-                    decoded, self._crc, self._escape = \
-                        decode_string(data, self._crc, self._escape)
+            decoded, self._escape = yenc_decode(data, self._escape)
 
-                except YencError:
-                    logger.warning(
-                        "Yenc corruption detected on line %d." %
-                        self._lines,
-                    )
-
-                    # Line Tracking
-                    self._lines += 1
-
-                    # keep storing our data
-                    continue
-
-            else:
-                # The slow and painful way, the below looks complicated
-                # but it really isn't at the the end of the day; yEnc is
-                # pretty basic;
-                #  - first we need to translate the special keyword tokens
-                #    that are used by the yEnc language. We also want to
-                #    ignore any trailing white space or new lines. This
-                #    occurs by applying our DECODE_SPECIAL_MAP to the line
-                #    being processed.
-                #
-                #  - finally we translate the remaining characters by taking
-                #    away 42 from their value.
-                #
-                decoded = YENC_DECODE_SPECIAL_RE.sub(
-                    lambda x: YENC_DECODE_SPECIAL_MAP[x.group()], data,
-                ).translate(YENC42)
-
-                # CRC Calculations
-                self._calc_crc(decoded)
+            # CRC Calculations
+            self._calc_crc(decoded)
 
             # Line Tracking
             self._lines += 1
@@ -592,7 +576,7 @@ class CodecYenc(CodecBase):
         """
         Reset our decoded content
         """
-        super(CodecYenc, self).reset()
+        super().reset()
 
         # Tracks part no; defaults to 1 and shifts if it's determined
         # that we're another part

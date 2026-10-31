@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # hook decorator used by Hook() and HookManager()
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>

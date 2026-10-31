@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # The GroupTrack Object used to track specific Groups
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -76,7 +74,7 @@ class GroupTrack(ObjectBase):
 
 
     def __init__(self, *args, **kwargs):
-        super(GroupTrack, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
 
     def __repr__(self):

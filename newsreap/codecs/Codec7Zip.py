@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Codec for handling 7-Zip Files
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -16,8 +14,9 @@
 
 import re
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import basename
+from os.path import exists
 from os.path import splitext
 
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
@@ -35,7 +34,12 @@ from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 # 7-Zip Binary Path
-DEFAULT_PATH = '/usr/bin/7za'
+DEFAULT_PATH = next((c for c in (
+    # p7zip
+    '/usr/bin/7za',
+    # 7-Zip (the tool newer distributions ship instead of p7zip)
+    '/usr/bin/7z',
+) if exists(c)), '/usr/bin/7za')
 
 # Size to default spliting to if not otherwise specified
 DEFAULT_SPLIT_SIZE = strsize_to_bytes('25M')
@@ -47,8 +51,8 @@ DEFAULT_SPLIT_SIZE = strsize_to_bytes('25M')
 #  - supports .7z.000, .7z.001, etc
 #  - supports .7za.000, .7za.001, etc
 SEVEN_ZIP_PART_RE = re.compile(
-    '^.*?\.(part(?P<part>[0-9]+)\.7z|7za?\.?(?P<part0>[0-9]+)?)$',
-    re.IGNORECASE,
+    '^.*?\\.(part(?P<part>[0-9]+)\\.7z|7za?\\.?(?P<part0>[0-9]+)?)$',
+    re.IGNORECASE | re.ASCII,
 )
 
 # Return Codes
@@ -81,7 +85,7 @@ class Codec7Zip(CodecFile):
         """
         Initialize the Codec
         """
-        super(Codec7Zip, self).__init__(work_dir=work_dir, *args, **kwargs)
+        super().__init__(work_dir=work_dir, *args, **kwargs)
 
         # Initalize Paths
         self._bin = bin_path
@@ -92,7 +96,7 @@ class Codec7Zip(CodecFile):
 
         # Exclude the base directory when creating an archive
         self.volume_size = volume_size
-        if isinstance(self.volume_size, basestring):
+        if isinstance(self.volume_size, str):
             self.volume_size = int(strsize_to_bytes(self.volume_size))
 
         if self.volume_size is True:

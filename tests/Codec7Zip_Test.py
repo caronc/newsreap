@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the Z-Zip Codec
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -26,7 +24,7 @@ gevent.monkey.patch_all()
 import unittest
 import os
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import join
 from os.path import dirname
 from os.path import isfile
@@ -41,10 +39,17 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.codecs.Codec7Zip import Codec7Zip
+from newsreap.codecs.Codec7Zip import DEFAULT_PATH as DEFAULT_7ZA_PATH
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.Utils import find
+
+
+# Some tests need the 7-Zip tool (7za) installed on the system
+requires_7za = unittest.skipUnless(
+    os.access(DEFAULT_7ZA_PATH, os.X_OK),
+    '7-Zip is not installed (%s)' % DEFAULT_7ZA_PATH)
 
 
 class Codec7Zip_Test(TestBase):
@@ -197,6 +202,7 @@ class Codec7Zip_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_7za
     def test_7z_single_file(self):
         """
         Test that we can compress content
@@ -236,6 +242,7 @@ class Codec7Zip_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_7za
     def test_7z_multi_files(self):
         """
         Test that we can rar content into multiple files
@@ -273,6 +280,7 @@ class Codec7Zip_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_7za
     def test_7z_uncompress(self):
         """
         Tests the uncompressing of content
@@ -340,6 +348,7 @@ class Codec7Zip_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_7za
     def test_password_protection(self):
         """
         Tests the un-compressing of content with passwords

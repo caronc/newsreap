@@ -26,14 +26,14 @@ for x in range(0, Q):
 #
 # lambda vs itemgetter
 #
-print('sorted(5000000) using itergettter() : %s' % (
+print(('sorted(5000000) using itergettter() : %s' % (
     Timer(
         'sorted(mydictlist, key=itemgetter("key"))',
         'Q=300000;D=5000000'+setup).timeit(1)
-))
+)))
 
-print('sorted(5000000) using lamda         : %s' % (
+print(('sorted(5000000) using lamda         : %s' % (
     Timer(
         'sorted(mydictlist, key=lambda k: k["key"])',
         'Q=300000;D=5000000'+setup).timeit(1)
-))
+)))

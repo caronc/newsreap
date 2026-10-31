@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # NNTPGroup is an object to simplify group manipulation and shortform
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -21,10 +19,10 @@ from os.path import join
 
 # a regular expression used to break appart multiple groups
 # identfied; we split on anything that isn't a valid group token
-GROUP_INVALID_CHAR_RE = re.compile(r'[^A-Z0-9.-]+', re.I)
+GROUP_INVALID_CHAR_RE = re.compile(r'[^A-Z0-9.-]+', re.I | re.ASCII)
 
 
-class NNTPGroup(object):
+class NNTPGroup:
     """
     An object for manipulating and looking up group information.
 
@@ -80,14 +78,14 @@ class NNTPGroup(object):
 
         # If we reach here, we want to additionally try to look up any
         # shorthand notation and expand it
-        entries = re.split('[.]+', group)
+        entries = re.split('[.]+', group, flags=re.ASCII)
 
         if NNTPGroup._translations is None:
             # Populate it
             line_re = re.compile(
                 r'^(?P<index>\d)\s+'
                 r'(?P<key>[a-z0-9.-]+)\s+'
-                r'(?P<lookup>[a-z0-9.-]+)', re.I)
+                r'(?P<lookup>[a-z0-9.-]+)', re.I | re.ASCII)
 
             NNTPGroup._translations = list()
             path = join(dirname(abspath(__file__)), 'var', 'groups.dat')
@@ -135,7 +133,7 @@ class NNTPGroup(object):
         # Initialize our return result set
         result = set()
 
-        if isinstance(groups, basestring):
+        if isinstance(groups, str):
             groups = GROUP_INVALID_CHAR_RE.split(groups)
 
         if isinstance(groups, (set, list, tuple)):
@@ -143,7 +141,7 @@ class NNTPGroup(object):
                 if isinstance(group, NNTPGroup):
                     result.add(group)
 
-                elif isinstance(group, basestring):
+                elif isinstance(group, str):
                     try:
                         result.add(NNTPGroup(group))
 
@@ -170,12 +168,6 @@ class NNTPGroup(object):
         """
         return '%s' % self.name
 
-    def __unicode__(self):
-        """
-        Return a printable version of the article
-        """
-        return u'%s' % self.name
-
     def __lt__(self, other):
         """
         Handles group sorting while sticking 'None' type records (if they
@@ -191,7 +183,7 @@ class NNTPGroup(object):
         if isinstance(other, NNTPGroup):
             return self.name == other.name
 
-        elif isinstance(other, basestring):
+        elif isinstance(other, str):
             return self.name == NNTPGroup.normalize(other)
 
         return False

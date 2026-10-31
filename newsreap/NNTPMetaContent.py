@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A NNTP Meta Information Representation
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -24,7 +22,7 @@ class NNTPMetaContent(NNTPContent):
     def __init__(self, filepath=None, part=0, work_dir=None, sort_no=2500,
                  *args, **kwargs):
 
-        super(NNTPMetaContent, self).__init__(
+        super().__init__(
             filepath=filepath,
             part=part,
             work_dir=work_dir, sort_no=sort_no, *args, **kwargs)
@@ -38,16 +36,6 @@ class NNTPMetaContent(NNTPContent):
             lambda x : x.key()
         """
         return '%.5d/MetaContent/%d' % (self.sort_no, id(self))
-
-    def next(self):
-        """
-        Python 2 support
-        Support stream type functions and iterations
-        """
-        if not self._iter:
-            self._iter = iter(self.content)
-
-        return next(self._iter)
 
     def __next__(self):
         """

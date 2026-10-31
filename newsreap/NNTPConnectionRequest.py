@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # An NNTPRequest Object used by the NNTPManagaer
 #
 # Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
@@ -50,7 +48,7 @@ class NNTPConnectionRequest(NNTPRequest):
         """
         Initializes a request object and the actions specified
         """
-        super(NNTPConnectionRequest, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         # Store our actions
         self.actions = actions

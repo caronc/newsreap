@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 #
 # A base testing class/library to test the NNTP Manager class
 #
@@ -44,6 +43,7 @@ from tests.NNTPSocketServer import NNTPSocketServer
 
 from newsreap.NNTPSettings import NNTPSettings
 from newsreap.NNTPManager import NNTPManager
+from newsreap.decorators import hook
 from newsreap.NNTPSettings import SERVER_LIST_KEY
 from newsreap.NNTPSettings import PROCESSING_KEY
 
@@ -53,7 +53,7 @@ class NNTPManager_Test(TestBase):
         """
         Grab a few more things from the config
         """
-        super(NNTPManager_Test, self).setUp()
+        super().setUp()
 
         # Secure NNTP Server
         self.nntps = NNTPSocketServer(
@@ -84,7 +84,7 @@ class NNTPManager_Test(TestBase):
         self.nntps.shutdown()
         self.nntp.shutdown()
 
-        super(NNTPManager_Test, self).tearDown()
+        super().tearDown()
 
     def test_group_searching(self):
         """
@@ -117,11 +117,11 @@ class NNTPManager_Test(TestBase):
         with open(cfg_file, 'w') as fp:
             fp.write('%s:\n' % PROCESSING_KEY)
             fp.write('   %s' % ('   '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in processing.items()])))
+                for (k, v) in list(processing.items())])))
 
             fp.write('%s:\n' % SERVER_LIST_KEY)
             fp.write(' - %s' % ('   '.join(['%s: %s\n' % (k, v) \
-                for (k, v) in server.items()])))
+                for (k, v) in list(server.items())])))
 
         # Settings Object
         setting = NNTPSettings(cfg_file=cfg_file)
@@ -143,4 +143,24 @@ class NNTPManager_Test(TestBase):
         assert len(groups) == 5270
 
         # Clean close
+        mgr.close()
+
+    def test_hooks_can_be_passed_in(self):
+        """
+        Hooks given to the manager are loaded and can be replaced
+        """
+        @hook(name='socket_read')
+        def reader(**kwargs):
+            return 'read'
+
+        @hook(name='socket_write')
+        def writer(**kwargs):
+            return 'write'
+
+        mgr = NNTPManager(self.nntp_settings('hooks'), hooks=reader)
+        assert len(mgr.hooks.call('socket_read')) == 1
+
+        mgr.set_hooks(writer)
+        assert len(mgr.hooks.call('socket_read')) == 0
+        assert len(mgr.hooks.call('socket_write')) == 1
         mgr.close()

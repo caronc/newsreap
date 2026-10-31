@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the RAR Codec
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -26,7 +24,7 @@ gevent.monkey.patch_all()
 import unittest
 import os
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import join
 from os.path import dirname
 from os.path import isfile
@@ -41,10 +39,18 @@ except ImportError:
     from tests.TestBase import TestBase
 
 from newsreap.codecs.CodecRar import CodecRar
+from newsreap.codecs.CodecRar import DEFAULT_RAR_PATH
+from newsreap.codecs.CodecRar import DEFAULT_UNRAR_PATH
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.Utils import find
+
+
+# Some tests need the rar and unrar tools installed on the system
+requires_rar = unittest.skipUnless(
+    DEFAULT_RAR_PATH and DEFAULT_UNRAR_PATH,
+    'rar and/or unrar are not installed')
 
 
 class CodecRar_Test(TestBase):
@@ -201,6 +207,7 @@ class CodecRar_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_rar
     def test_rar_single_file(self):
         """
         Test that we can rar content
@@ -240,6 +247,7 @@ class CodecRar_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_rar
     def test_rar_multi_files(self):
         """
         Test that we can rar content into multiple files
@@ -277,6 +285,7 @@ class CodecRar_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_rar
     def test_unrar(self):
         """
         Tests the un-raring of content
@@ -344,6 +353,7 @@ class CodecRar_Test(TestBase):
 
     @unittest.skipIf(os.environ.get("TRAVIS") == "true",
                      "Skipping this test on Travis CI.")
+    @requires_rar
     def test_password_protection(self):
         """
         Tests the un-raring of content

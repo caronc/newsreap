@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A decoder to handle for handling group fetches
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -16,6 +14,7 @@
 
 import re
 from newsreap.codecs.CodecBase import CodecBase
+from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 from newsreap.NNTPMetaContent import NNTPMetaContent
 
 # Logging
@@ -26,17 +25,17 @@ logger = logging.getLogger(NEWSREAP_CODEC)
 # Defines the parsing of an LIST ACTIVE Response Entry
 NNTP_LIST_ACTIVE_RESPONSE_RE = re.compile(
     # Group
-    r'\s*(?P<group>[^\s]+)\s+' + \
+    br'\s*(?P<group>[^\s]+)\s+' + \
     # High-Water Mark
-    r'[0]*(?P<low>([1-9]+[0-9]*|0))\s+' + \
+    br'[0]*(?P<low>([1-9]+[0-9]*|0))\s+' + \
     # Low-Water Mark
-    r'[0]*(?P<high>([1-9]+[0-9]*|0))\s*' + \
+    br'[0]*(?P<high>([1-9]+[0-9]*|0))\s*' + \
     # Flags (may or may not exist)
-    r'(?P<flags>[^\s]+)?\s*$'
+    br'(?P<flags>[^\s]+)?\s*$', re.ASCII
 )
 
 
-class GroupStatus(object):
+class GroupStatus:
     POSTING_ALLOWED = 'y'
     POSTING_DENIED = 'n'
     POSTING_MODERATED = 'm'
@@ -54,7 +53,7 @@ class CodecGroups(CodecBase):
     """
 
     def __init__(self, descriptor=None, work_dir=None, *args, **kwargs):
-        super(CodecGroups, self).__init__(descriptor=descriptor,
+        super().__init__(descriptor=descriptor,
             work_dir=work_dir, *args, **kwargs)
 
         # Our Decoded Content
@@ -70,6 +69,9 @@ class CodecGroups(CodecBase):
         it returns a dictionary of the keys and their mapped values.
 
         """
+        if isinstance(line, str):
+            line = line.encode(NNTP_DEFAULT_ENCODING)
+
         group_re = NNTP_LIST_ACTIVE_RESPONSE_RE.match(line)
         if not group_re:
             return None
@@ -104,15 +106,17 @@ class CodecGroups(CodecBase):
             # and we can keep on trucking with what we have. Feel
             # free to use the mapped valid defined in here though
             # in the GroupStatus object
-            flags = list(group_re.group('flags'))
+            flags = list(
+                group_re.group('flags').decode(NNTP_DEFAULT_ENCODING))
 
-        except TypeError:
+        except AttributeError:
             # There were no flags defined
             # Always set a list (for consistency)
             flags = []
 
         return {
-            'group': group_re.group('group').lower(),
+            'group': group_re.group('group')
+                             .decode(NNTP_DEFAULT_ENCODING).lower(),
             'low': low,
             'high': high,
             'count': count,
@@ -157,7 +161,7 @@ class CodecGroups(CodecBase):
         """
         Reset our decoded content
         """
-        super(CodecGroups, self).reset()
+        super().reset()
 
         # Reset Our Result set
         self.decoded = NNTPMetaContent(work_dir=self.work_dir)

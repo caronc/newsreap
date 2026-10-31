@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTPContent Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -23,7 +21,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import join
 from os.path import isdir
 from os.path import exists
@@ -51,6 +49,7 @@ from newsreap.Utils import strsize_to_bytes
 from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import mkdir
 from newsreap.Utils import stat
+from newsreap.Utils import SEEK_SET
 
 
 class NNTPContent_Test(TestBase):
@@ -172,8 +171,8 @@ class NNTPContent_Test(TestBase):
         temp_file = join(self.tmp_dir, 'NNTPContent_Test-test_iterations.tmp')
 
         with open(temp_file, 'wb') as fd:
-            fd.write('Line 1\n')
-            fd.write('Line 2\n')
+            fd.write(b'Line 1\n')
+            fd.write(b'Line 2\n')
         assert(isfile(temp_file) is True)
 
         assert(aa.load(temp_file) is True)
@@ -184,7 +183,7 @@ class NNTPContent_Test(TestBase):
         # Ascii Content read line by line
         lineno = 1
         for line in aa:
-            assert(line == 'Line %d\n' % (lineno))
+            assert(line == b'Line %d\n' % (lineno))
             lineno += 1
 
         # Remove article
@@ -219,7 +218,7 @@ class NNTPContent_Test(TestBase):
 
         # Write just '1' more bytes so we ``overflow`` and require
         # a 5th query later
-        bobj.write('0')
+        bobj.write(b'0')
 
         # Content
         ba = NNTPBinaryContent()
@@ -513,7 +512,7 @@ class NNTPContent_Test(TestBase):
         assert(isfile(tmp_file) is False)
         # we'll write data
 
-        data = 'hello\r\n'
+        data = b'hello\r\n'
         content.write(data)
 
         # It's worth noting that this file will ''STILL'' not exist
@@ -526,7 +525,7 @@ class NNTPContent_Test(TestBase):
         assert(isfile(tmp_file) is True)
 
         # Open our file and verify it is the data we saved.
-        with open(tmp_file) as f:
+        with open(tmp_file, 'rb') as f:
             data_read = f.read()
         assert(data == data_read)
 
@@ -783,3 +782,55 @@ class NNTPContent_Test(TestBase):
         # At this point we should have a duplicate of our original object
         assert(len(content_a) == len(content_b))
         assert(content_a.md5() == content_b.md5())
+
+    def test_content_sorts_by_key(self):
+        """
+        Content sorts (and compares) using its key()
+        """
+        a = NNTPContent(filepath='a.file', part=1, work_dir=self.tmp_dir)
+        b = NNTPContent(filepath='a.file', part=2, work_dir=self.tmp_dir)
+        c = NNTPContent(filepath='b.file', part=1, work_dir=self.tmp_dir)
+
+        assert a < b
+        assert not (b < a)
+        assert b > a
+        assert a <= b and a <= a
+        assert b >= a and b >= b
+        assert sorted([c, b, a]) == [a, b, c]
+
+        # Same key means equal
+        assert a == NNTPContent(
+            filepath='a.file', part=1, work_dir=self.tmp_dir)
+        assert a != b
+        assert a != 'a.file'
+
+    def test_open_stream_can_be_wrapped(self):
+        """
+        An already open file can be handed to NNTPContent
+        """
+        tmp_file = join(self.tmp_dir, 'NNTPContent_Test.stream', 'my.file')
+        assert self.touch(tmp_file, size='1K', random=True)
+
+        with open(tmp_file, 'rb') as fd:
+            content = NNTPContent(filepath=fd, work_dir=self.tmp_dir)
+            assert content.filename == 'my.file'
+            assert content.filepath == tmp_file
+            assert content.filemode == 'rb'
+            assert len(content) == 1024
+
+            # Streams are never removed by us
+            assert content.is_attached() is False
+
+            fd.seek(0, SEEK_SET)
+            with open(tmp_file, 'rb') as check:
+                assert content.read() == check.read()
+
+    def test_text_writes_are_stored_as_utf8(self):
+        """
+        Writing text stores it as UTF-8
+        """
+        content = NNTPAsciiContent(work_dir=self.tmp_dir)
+        content.write('caf\u00e9\r\n')
+        content.write(b'raw\r\n')
+        assert content.getvalue() == b'caf\xc3\xa9\r\nraw\r\n'
+        assert str(content) == 'caf\u00e9\r\nraw\r\n'

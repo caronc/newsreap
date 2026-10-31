@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Codec for handling RAR Files
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -16,7 +14,7 @@
 
 import re
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import basename
 from os.path import splitext
 from os.path import exists
@@ -59,8 +57,8 @@ DEFAULT_SPLIT_SIZE = strsize_to_bytes('25M')
 #  - supports .r00, .r01, .r02, etc
 #  - supports .part00.rar, .part01.rar, etc
 RAR_PART_RE = re.compile(
-    '^.*?\.((part|r)(?P<part>[0-9]+)(\.rar)?|rar)$',
-    re.IGNORECASE,
+    '^.*?\\.((part|r)(?P<part>[0-9]+)(\\.rar)?|rar)$',
+    re.IGNORECASE | re.ASCII,
 )
 
 
@@ -96,7 +94,7 @@ class CodecRar(CodecFile):
         """
         Initialize the Codec
         """
-        super(CodecRar, self).__init__(work_dir=work_dir, *args, **kwargs)
+        super().__init__(work_dir=work_dir, *args, **kwargs)
 
         # Initalize Paths
         self._rar = rar_path
@@ -116,7 +114,7 @@ class CodecRar(CodecFile):
 
         # Exclude the base directory when creating an archive
         self.volume_size = volume_size
-        if isinstance(self.volume_size, basestring):
+        if isinstance(self.volume_size, str):
             self.volume_size = int(strsize_to_bytes(self.volume_size))
 
         if self.volume_size is True:

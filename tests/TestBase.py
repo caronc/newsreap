@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to help set some common testing vars
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -72,8 +70,8 @@ class TestBase(unittest.TestCase):
             'var',
             'config.yaml',
         )
-        stream = file(self.config_file, 'r')
-        self.config = yaml.load(stream)
+        with open(self.config_file) as stream:
+            self.config = yaml.safe_load(stream)
         self.test_dir = join(
             gettempdir(),
             'nntp-test-%s' % getuser(),
@@ -93,7 +91,7 @@ class TestBase(unittest.TestCase):
             try:
                 rmtree(self.test_dir)
 
-            except OSError, e:
+            except OSError as e:
                 # An exception occured; get this resolved before
                 # doing any more testing
                 raise
@@ -101,9 +99,9 @@ class TestBase(unittest.TestCase):
             except:
                 pass
 
-        mkdir(self.test_dir, 0700)
-        mkdir(self.tmp_dir, 0700)
-        mkdir(self.out_dir, 0700)
+        mkdir(self.test_dir, 0o700)
+        mkdir(self.tmp_dir, 0o700)
+        mkdir(self.out_dir, 0o700)
 
         ## Configure Logging
         #handler = logging.StreamHandler(sys.stdout)
@@ -148,7 +146,7 @@ class TestBase(unittest.TestCase):
 
         path = abspath(path)
         if not isdir(dirname(path)):
-            mkdir(dirname(path), 0700)
+            mkdir(dirname(path), 0o700)
 
         if not exists(path):
             size = strsize_to_bytes(size)
@@ -157,7 +155,7 @@ class TestBase(unittest.TestCase):
                 f = open(path, "wb")
                 if isinstance(size, int) and size > 0:
                     f.seek(size-1)
-                    f.write("\0")
+                    f.write(b"\0")
                 f.close()
 
             else: # fill our file with randomly generaed content
@@ -174,6 +172,37 @@ class TestBase(unittest.TestCase):
 
         # Return True
         return True
+
+    def nntp_settings(self, name='settings'):
+        """
+        Returns NNTPSettings pointing at a (pretend) local NNTP server.
+
+        Nothing connects to the server unless a test asks it to.
+        """
+        from newsreap.NNTPSettings import NNTPSettings
+        from newsreap.NNTPSettings import PROCESSING_KEY
+        from newsreap.NNTPSettings import SERVER_LIST_KEY
+
+        cfg_file = join(self.tmp_dir, '%s.config.yaml' % name)
+        with open(cfg_file, 'w') as fp:
+            yaml.safe_dump({
+                SERVER_LIST_KEY: [{
+                    'username': 'valid',
+                    'password': 'valid',
+                    'host': 'localhost',
+                    'port': 119,
+                    'secure': False,
+                    'compress': False,
+                    'priority': 1,
+                    'join_group': False,
+                }],
+                PROCESSING_KEY: {
+                    'threads': 1,
+                    'header_batch_size': 8000,
+                },
+            }, fp)
+
+        return NNTPSettings(cfg_file=cfg_file)
 
     def cleanup(self):
         """Remove the temporary directory"""

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A Codec for handling PAR Files
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -16,7 +14,7 @@
 
 import re
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import basename
 from os.path import dirname
 from os.path import exists
@@ -44,8 +42,8 @@ DEFAULT_PAR2_PATH = next((c for c in (
 #  - supports .vol07+08.par2 (the data block)
 #  - supports .par2 (The index file)
 PAR_PART_RE = re.compile(
-    '^.*?\.(vol(?P<index>\d+)\+(?P<count>\d+)\.)?par2?$',
-    re.IGNORECASE,
+    '^.*?\\.(vol(?P<index>\\d+)\\+(?P<count>\\d+)\\.)?par2?$',
+    re.IGNORECASE | re.ASCII,
 )
 
 # Size to default spliting to if not otherwise specified
@@ -55,7 +53,7 @@ DEFAULT_BLOCK_SIZE = strsize_to_bytes('300K')
 DEFAULT_RECOVERY_PERCENT = 5
 
 
-class ParReturnCode(object):
+class ParReturnCode:
     """
     Converts the return values of the par2 command line to interpretable
     response types.
@@ -75,7 +73,7 @@ class ParReturnCode(object):
     Unrepairable = 2
 
 
-class ParVersion(object):
+class ParVersion:
     """Defines the PAR Versions; presently only PAR2 exists but there are
     enough rumors of a developing PAR3 format that there may or may not
     be a different binary or different set of arguments.
@@ -111,7 +109,7 @@ class CodecPar(CodecFile):
         """
         Initialize the Codec
         """
-        super(CodecPar, self).__init__(work_dir=work_dir, *args, **kwargs)
+        super().__init__(work_dir=work_dir, *args, **kwargs)
 
         # Initalize Paths
         self._par = par_path
@@ -127,7 +125,7 @@ class CodecPar(CodecFile):
         # +++++++++++++++++
 
         self.block_size = block_size
-        if isinstance(self.block_size, basestring):
+        if isinstance(self.block_size, str):
             self.block_size = int(strsize_to_bytes(self.block_size))
 
         if self.block_size is True:

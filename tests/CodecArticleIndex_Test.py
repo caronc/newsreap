@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTP Index Header (XOVER Fetching) Codec
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -78,7 +76,7 @@ class Codec_ArticleIndex(TestBase):
             'article_no': 24423,
             'score': 0,
             'group': 'news-big.astraweb.com',
-            'poster': u'Randrup@dcfre.net',
+            'poster': 'Randrup@dcfre.net',
             'date': datetime(2014, 7, 24, 2, 1, 2),
             'xgroups': {
                 'alt.binaries.zappateers': 169669,
@@ -89,7 +87,7 @@ class Codec_ArticleIndex(TestBase):
             'size': 338850,
             'lines': 5363,
             'subject':
-                u'Dawn of the Planet of the Apes 2014 480p Webrip ' + \
-                u'XviD AC3-Osiris - Dawn of the Planet of the Apes ' + \
-                u'2014 480p WebripXviD AC3.US-Osiris.nzb 241176 bytes (1/1)',
+                'Dawn of the Planet of the Apes 2014 480p Webrip ' + \
+                'XviD AC3-Osiris - Dawn of the Planet of the Apes ' + \
+                '2014 480p WebripXviD AC3.US-Osiris.nzb 241176 bytes (1/1)',
         }

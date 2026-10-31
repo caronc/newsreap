@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A base testing class/library to test the Filters
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -50,7 +48,7 @@ class NNTPFilterBase_Test(TestBase):
         """
         Grab a few more things from the config
         """
-        super(NNTPFilterBase_Test, self).setUp()
+        super().setUp()
 
         # Create a template entry we can clone from to make
         # thing easier to manipulate in each individual test
@@ -192,7 +190,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.DESCRIPTION: "Test Regex (string)",
             FilterDirectives.SCORE: 10,
             # This will automatically get compiled
-            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\.mkv.*',
+            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\\.mkv.*',
         })
 
         fb.scorelist_append('alt.regex.*', {
@@ -200,7 +198,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.SCORE: 20,
             # Here we provide it already compiled
             FilterDirectives.SUBJECT_MATCHES_REGEX:
-                re.compile('.*\.(avi|mkv).*'),
+                re.compile('.*\\.(avi|mkv).*', re.ASCII),
         })
 
         fb.scorelist_append('alt.startswith.*', {
@@ -274,7 +272,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.DESCRIPTION: "Test Regex (compiled)",
             FilterDirectives.SCORE: 35,
             FilterDirectives.POSTER_MATCHES_REGEX:
-            re.compile('.*binkle@example.com.*'),
+            re.compile('.*binkle@example.com.*', re.ASCII),
         })
 
         fb.scorelist_append('alt.startswith.*', {
@@ -605,7 +603,7 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 3
 
         # If we subtract 1 to our base
-        entry['xgroups'].pop(entry['xgroups'].keys()[0])
+        entry['xgroups'].pop(list(entry['xgroups'].keys())[0])
 
         # Now we should match our less than case
         assert fb.score(**entry) == -50
@@ -617,8 +615,8 @@ class NNTPFilterBase_Test(TestBase):
 
         # If we add 1 to our base
         entry['xgroups'] = dict(
-            self.template_entry['xgroups'].items() + \
-            [('%s.another' % self.template_entry['xgroups'].keys()[0], 4),],
+            list(self.template_entry['xgroups'].items()) + \
+            [('%s.another' % next(iter(self.template_entry['xgroups'])), 4),],
         )
 
         # Now we should match
@@ -687,7 +685,7 @@ class NNTPFilterBase_Test(TestBase):
         fb.blacklist_append('alt.regex.*', {
             FilterDirectives.DESCRIPTION: "Test Regex (string)",
             # This will automatically get compiled (case-insensitive)
-            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\.mkv.*',
+            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\\.mkv.*',
         })
 
         fb.blacklist_append('alt.case.sensitive.*', {
@@ -696,7 +694,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.SUBJECT_MATCHES_REGEX:
                 # compiled without case sensitive switch
                 # This plays an important note
-                re.compile('.*\.(avi|MkV).*'),
+                re.compile('.*\\.(avi|MkV).*', re.ASCII),
         })
 
         fb.blacklist_append('alt.startswith.*', {
@@ -724,7 +722,8 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 2
 
         entry['subject'] = re.sub('.mkv', '.mKv',
-                                  self.template_entry['subject'])
+                                  self.template_entry['subject'],
+                                      flags=re.ASCII)
 
         # We're case insensitive; so this will still match
         assert fb.blacklist(**entry) == True
@@ -760,14 +759,16 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 2
 
         entry['subject'] = re.sub('.mkv', '.MkV',
-                                  self.template_entry['subject'])
+                                  self.template_entry['subject'],
+                                      flags=re.ASCII)
 
         # We're case insensitive; so this will match now
         assert fb.blacklist(**entry) == True
 
         # So will this
         entry['subject'] = re.sub('.mkv', '.avi',
-                                  self.template_entry['subject'])
+                                  self.template_entry['subject'],
+                                      flags=re.ASCII)
         assert fb.blacklist(**entry) == True
 
         # our hash should have never changed
@@ -796,7 +797,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.POSTER_MATCHES_REGEX:
                 # compiled without case sensitive switch
                 # This plays an important note
-                re.compile('.*(UnKnown|pOsteR).*'),
+                re.compile('.*(UnKnown|pOsteR).*', re.ASCII),
         })
 
         fb.blacklist_append('alt.startswith.*', {
@@ -824,7 +825,7 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 2
 
         entry['poster'] = re.sub('Unknown', 'UnKnoWN',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
 
         # We're case insensitive; so this will still match
         assert fb.blacklist(**entry) == True
@@ -854,7 +855,7 @@ class NNTPFilterBase_Test(TestBase):
 
         assert fb.blacklist(**entry) == True
         entry['poster'] = re.sub('Unknown', 'UnKnoWN',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
 
         # we'll have hashed the new table
         assert len(fb._regex_hash) == 1
@@ -876,14 +877,14 @@ class NNTPFilterBase_Test(TestBase):
 
         # Adjust it...
         entry['poster'] = re.sub('Unknown', 'UnKnown',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
 
         # We're case insensitive; so this will match now
         assert fb.blacklist(**entry) == True
 
         # This will work too
         entry['poster'] = re.sub('Poster', 'pOsteR',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
         assert fb.blacklist(**entry) == True
 
         # our hash should have never changed
@@ -1149,7 +1150,7 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 3
 
         # If we subtract 1 to our base
-        entry['xgroups'].pop(entry['xgroups'].keys()[0])
+        entry['xgroups'].pop(list(entry['xgroups'].keys())[0])
 
         # Now we should match our less than case
         assert fb.blacklist(**entry) == True
@@ -1161,8 +1162,8 @@ class NNTPFilterBase_Test(TestBase):
 
         # If we add 1 to our base
         entry['xgroups'] = dict(
-            self.template_entry['xgroups'].items() + \
-            [('%s.another' % self.template_entry['xgroups'].keys()[0], 4),],
+            list(self.template_entry['xgroups'].items()) + \
+            [('%s.another' % next(iter(self.template_entry['xgroups'])), 4),],
         )
 
         # Now we should match
@@ -1224,7 +1225,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.DESCRIPTION: "Test Regex (string)",
             FilterDirectives.SCORE: 51,
             # This will automatically get compiled
-            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\.mkv.*',
+            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\\.mkv.*',
         })
 
         # Now we'll add a score which will increase our score value
@@ -1233,7 +1234,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.DESCRIPTION: "Test Regex (string)",
             FilterDirectives.SCORE: 51,
             # This will automatically get compiled
-            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\.mkv.*',
+            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\\.mkv.*',
         })
 
 
@@ -1321,7 +1322,7 @@ class NNTPFilterBase_Test(TestBase):
         fb.whitelist_append('alt.regex.*', {
             FilterDirectives.DESCRIPTION: "Test Regex (string)",
             # This will automatically get compiled (case-insensitive)
-            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\.mkv.*',
+            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\\.mkv.*',
         })
 
         fb.whitelist_append('alt.case.sensitive.*', {
@@ -1330,7 +1331,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.SUBJECT_MATCHES_REGEX:
                 # compiled without case sensitive switch
                 # This plays an important note
-                re.compile('.*\.(avi|MkV).*'),
+                re.compile('.*\\.(avi|MkV).*', re.ASCII),
         })
 
         fb.whitelist_append('alt.startswith.*', {
@@ -1358,7 +1359,8 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 2
 
         entry['subject'] = re.sub('.mkv', '.mKv',
-                                  self.template_entry['subject'])
+                                  self.template_entry['subject'],
+                                      flags=re.ASCII)
 
         # We're case insensitive; so this will still match
         assert fb.whitelist(**entry) == True
@@ -1394,14 +1396,16 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 2
 
         entry['subject'] = re.sub('.mkv', '.MkV',
-                                  self.template_entry['subject'])
+                                  self.template_entry['subject'],
+                                      flags=re.ASCII)
 
         # We're case insensitive; so this will match now
         assert fb.whitelist(**entry) == True
 
         # So will this
         entry['subject'] = re.sub('.mkv', '.avi',
-                                  self.template_entry['subject'])
+                                  self.template_entry['subject'],
+                                      flags=re.ASCII)
         assert fb.whitelist(**entry) == True
 
         # our hash should have never changed
@@ -1430,7 +1434,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.POSTER_MATCHES_REGEX:
                 # compiled without case sensitive switch
                 # This plays an important note
-                re.compile('.*(UnKnown|pOsteR).*'),
+                re.compile('.*(UnKnown|pOsteR).*', re.ASCII),
         })
 
         fb.whitelist_append('alt.startswith.*', {
@@ -1458,7 +1462,7 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 2
 
         entry['poster'] = re.sub('Unknown', 'UnKnoWN',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
 
         # We're case insensitive; so this will still match
         assert fb.whitelist(**entry) == True
@@ -1488,7 +1492,7 @@ class NNTPFilterBase_Test(TestBase):
 
         assert fb.whitelist(**entry) == True
         entry['poster'] = re.sub('Unknown', 'UnKnoWN',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
 
         # we'll have hashed the new table
         assert len(fb._regex_hash) == 1
@@ -1510,14 +1514,14 @@ class NNTPFilterBase_Test(TestBase):
 
         # Adjust it...
         entry['poster'] = re.sub('Unknown', 'UnKnown',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
 
         # We're case insensitive; so this will match now
         assert fb.whitelist(**entry) == True
 
         # This will work too
         entry['poster'] = re.sub('Poster', 'pOsteR',
-                                 self.template_entry['poster'])
+                                 self.template_entry['poster'], flags=re.ASCII)
         assert fb.whitelist(**entry) == True
 
         # our hash should have never changed
@@ -1783,7 +1787,7 @@ class NNTPFilterBase_Test(TestBase):
         assert len(fb._regex_hash) == 3
 
         # If we subtract 1 to our base
-        entry['xgroups'].pop(entry['xgroups'].keys()[0])
+        entry['xgroups'].pop(list(entry['xgroups'].keys())[0])
 
         # Now we should match our less than case
         assert fb.whitelist(**entry) == True
@@ -1795,8 +1799,8 @@ class NNTPFilterBase_Test(TestBase):
 
         # If we add 1 to our base
         entry['xgroups'] = dict(
-            self.template_entry['xgroups'].items() + \
-            [('%s.another' % self.template_entry['xgroups'].keys()[0], 4),],
+            list(self.template_entry['xgroups'].items()) + \
+            [('%s.another' % next(iter(self.template_entry['xgroups'])), 4),],
         )
 
         # Now we should match
@@ -1858,7 +1862,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.DESCRIPTION: "Test Regex (string)",
             FilterDirectives.SCORE: 51,
             # This will automatically get compiled
-            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\.mkv.*',
+            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\\.mkv.*',
         })
 
         # Now we'll add a score which will increase our score value
@@ -1867,7 +1871,7 @@ class NNTPFilterBase_Test(TestBase):
             FilterDirectives.DESCRIPTION: "Test Regex (string)",
             FilterDirectives.SCORE: 51,
             # This will automatically get compiled
-            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\.mkv.*',
+            FilterDirectives.SUBJECT_MATCHES_REGEX: '.*\\.mkv.*',
         })
 
 

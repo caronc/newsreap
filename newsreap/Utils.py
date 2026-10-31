@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A simple collection of general functions
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -15,8 +13,9 @@
 # GNU Lesser General Public License for more details.
 
 import re
+import sys
 import errno
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os import listdir
 from os import makedirs
 from os import access
@@ -43,10 +42,10 @@ from os import chdir
 from os import unlink
 from os import rmdir
 
-from urlparse import urlparse
-from urlparse import parse_qsl
-from urllib import quote
-from urllib import unquote
+from urllib.parse import urlparse
+from urllib.parse import parse_qsl
+from urllib.parse import quote
+from urllib.parse import unquote
 
 from random import choice
 from string import ascii_uppercase
@@ -56,6 +55,7 @@ from string import ascii_letters
 from string import punctuation
 
 from datetime import datetime
+from datetime import UTC
 
 # File Stats
 from stat import ST_ATIME
@@ -73,13 +73,8 @@ from .Mime import DEFAULT_MIME_TYPE
 
 # delimiters used to separate values when content is passed in by string
 # Python 3 Support
-try:
-    from importlib.machinery import SourceFileLoader
-    PYTHON_3 = True
-
-except ImportError:
-    from imp import load_source
-    PYTHON_3 = False
+from importlib.util import module_from_spec
+from importlib.util import spec_from_file_location
 
 # Logging
 import logging
@@ -95,33 +90,33 @@ ESCAPED_WIN_PATH_SEPARATOR = re.escape('\\')
 ESCAPED_NUX_PATH_SEPARATOR = re.escape('/')
 
 TIDY_WIN_PATH_RE = re.compile(
-    '(^[%s]{2}|[^%s\s][%s]|[\s][%s]{2}])([%s]+)' % (
+    '(^[%s]{2}|[^%s\\s][%s]|[\\s][%s]{2}])([%s]+)' % (
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
-    ),
+    ), re.ASCII,
 )
 TIDY_WIN_TRIM_RE = re.compile(
-    '^(.+[^:][^%s])[\s%s]*$' % (
+    '^(.+[^:][^%s])[\\s%s]*$' % (
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
-    ),
+    ), re.ASCII,
 )
 
 TIDY_NUX_PATH_RE = re.compile(
     '([%s])([%s]+)' % (
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
-    ),
+    ), re.ASCII,
 )
 
 TIDY_NUX_TRIM_RE = re.compile(
-    '([^%s])[\s%s]+$' % (
+    '([^%s])[\\s%s]+$' % (
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
-    ),
+    ), re.ASCII,
 )
 
 # A General Path Delimiter (look for semi-colon's and comma's)
@@ -131,7 +126,7 @@ PATH_DELIMITERS_RE = re.compile(
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
         ESCAPED_NUX_PATH_SEPARATOR,
-    )
+    ), re.ASCII
 )
 
 # For separating windows paths
@@ -141,7 +136,7 @@ WIN_LOCAL_DRIVE_DELIMITERS_RE = re.compile(
     r'[\s,\|]+([A-Za-z]):+(%s)%s*' % (
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
-    )
+    ), re.ASCII
 )
 
 # For separating windows network paths
@@ -152,7 +147,7 @@ WIN_NETWORK_DRIVE_DELIMITERS_RE = re.compile(
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
-    )
+    ), re.ASCII
 )
 
 # For separating (Microsoft) Windows based paths
@@ -162,34 +157,30 @@ WIN_PATH_DELIMITERS_RE = re.compile(
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
         ESCAPED_WIN_PATH_SEPARATOR,
-    )
+    ), re.ASCII
 )
 
 DEFAULT_PYLIB_IGNORE_LIST = (
     # Any item begining with an underscore
-    re.compile(r'^_.*'),
+    re.compile(r'^_.*', re.ASCII),
 )
 
-# Stream `whence` variables were introduced in Python 2.7 but to remaing
-# compatible with Python 2.6, we define their values here which when
-# referenced make our code easier to read. These are used for stream
-# manipulation only.
-
-# Start of the stream (the default); offset should be zero or positive
-# ie: stream.seek(0L, SEEK_SET)
-SEEK_SET = 0
-# Current stream position; offset may be negative or possitive
-SEEK_CUR = 1
-# End of the stream; offset should be zero or negative
-SEEK_END = 2
+# Stream `whence` values used when seeking within a stream:
+#  - SEEK_SET: start of the stream (offset should be zero or positive)
+#  - SEEK_CUR: current position (offset may be negative or positive)
+#  - SEEK_END: end of the stream (offset should be zero or negative)
+from os import SEEK_SET  # noqa: E402
+from os import SEEK_CUR  # noqa: E402
+from os import SEEK_END  # noqa: E402
 
 # Sub commands are identified by they're filename
-PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py$')
+PYTHON_MODULE_RE = re.compile(r'^(?P<fname>[^_].+)\.py$', re.ASCII)
 
 # URL Indexing Table for returns via parse_url()
-VALID_URL_RE = re.compile(r'^[\s]*([^:\s]+):[/\\]*([^?]+)(\?(.+))?[\s]*$')
-VALID_HOST_RE = re.compile(r'^[\s]*([^:/\s]+)')
-VALID_QUERY_RE = re.compile(r'^(.*[/\\])([^/\\]*)$')
+VALID_URL_RE = re.compile(r'^[\s]*([^:\s]+):[/\\]*([^?]+)(\?(.+))?[\s]*$',
+                          re.ASCII)
+VALID_HOST_RE = re.compile(r'^[\s]*([^:/\s]+)', re.ASCII)
+VALID_QUERY_RE = re.compile(r'^(.*[/\\])([^/\\]*)$', re.ASCII)
 
 # The maximum number of recursive calls that can be made to rm
 RM_RECURSION_LIMIT = 100
@@ -213,7 +204,7 @@ def strsize_to_bytes(strsize):
         strsize_re = re.match(
             r'\s*(?P<size>(0|[1-9][0-9]*)(\.(0+|[1-9][0-9]*))?)\s*'
             r'((?P<unit>.)(?P<type>[bB])?)?\s*',
-            strsize,
+            strsize, re.ASCII,
         )
     except TypeError:
         return None
@@ -385,7 +376,7 @@ def stat(path, fsinfo=True, mime=True):
     return nfo
 
 
-def mkdir(name, perm=0775):
+def mkdir(name, perm=0o775):
     """
     A more contained wrapper to directory management
     """
@@ -399,8 +390,8 @@ def mkdir(name, perm=0775):
             logger.debug('Created directory: %s' % name)
             return True
 
-        except OSError, e:
-            if e[0] == errno.EEXIST:
+        except OSError as e:
+            if e.errno == errno.EEXIST:
                 # directory exists; this is okay
                 return isdir(name)
 
@@ -468,7 +459,7 @@ def rm(path, *args, **kwargs):
         try:
             names = listdir(path)
 
-        except _OSError:
+        except OSError:
             # Failed
             return False
 
@@ -477,7 +468,7 @@ def rm(path, *args, **kwargs):
             try:
                 mode = lstat(fullname).st_mode
 
-            except _OSError:
+            except OSError:
                 mode = 0
 
             if S_ISDIR(mode):
@@ -489,7 +480,7 @@ def rm(path, *args, **kwargs):
                     # Attempt to remove directory
                     rmdir(fullname)
 
-                except _OSError:
+                except OSError:
                     # It's not empty, so recursively enter it
                     if not rm(
                             fullname, __recursion_level=recursion_count + 1):
@@ -508,7 +499,7 @@ def rm(path, *args, **kwargs):
             rmdir(path)
             logger.debug('Removed file %s' % path)
 
-        except _OSError:
+        except OSError:
             logger.warning('Failed to remove file %s' % path)
             return False
 
@@ -589,7 +580,7 @@ def scan_pylib(paths, ignore_re=DEFAULT_PYLIB_IGNORE_LIST):
                 for filename in listdir(path):
                     store(path, filename)
 
-        except (OSError, IOError) as e:
+        except OSError as e:
             # We failed, do not return an empty set; just abort
             # out right
             logger.debug('scan_pylib(%s) exception: %s' % (path, e))
@@ -632,9 +623,26 @@ def load_pylib(module_name, filepath=None):
         # fall through for loading
 
     try:
-        if PYTHON_3:
-            return SourceFileLoader(module_name, filepath).load_module()
-        return load_source(module_name, filepath)
+        # Make sure the source file itself can be read; otherwise Python
+        # could quietly load an older cached copy of it instead
+        with open(filepath, 'rb'):
+            pass
+
+        spec = spec_from_file_location(module_name, filepath)
+        if spec is None:
+            raise ImportError('Unsupported file type: %s' % filepath)
+
+        module = module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+
+        except BaseException:
+            # Don't leave a half loaded module behind
+            del sys.modules[module_name]
+            raise
+
+        return module
 
     except ImportError as e:
         # Could not load module
@@ -645,17 +653,24 @@ def load_pylib(module_name, filepath=None):
             )
         )
 
-    except IOError as e:
+    except OSError as e:
         # Could not load module
         logger.warning(
             'Failed to load dynamic module: %s (reason: %s)' % (
                 filepath,
-                e[1],
+                e.strerror,
             )
         )
 
     # We failed if we get here
     return None
+
+
+def utcnow():
+    """
+    Returns the current UTC time as a naive datetime (no timezone attached)
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def tidy_path(path):
@@ -701,7 +716,7 @@ def parse_url(url, default_schema='http'):
      content could not be extracted.
     """
 
-    if not isinstance(url, basestring):
+    if not isinstance(url, str):
         # Simple error checking
         return None
 
@@ -798,7 +813,7 @@ def parse_url(url, default_schema='http'):
                 result['query'] = None
     try:
         (result['user'], result['host']) = \
-            re.split('[\s@]+', result['host'])[:2]
+            re.split('[\\s@]+', result['host'], flags=re.ASCII)[:2]
 
     except ValueError:
         # no problem then, host only exists
@@ -808,7 +823,7 @@ def parse_url(url, default_schema='http'):
     if result['user'] is not None:
         try:
             (result['user'], result['password']) = \
-                re.split('[:\s]+', result['user'])[:2]
+                re.split('[:\\s]+', result['user'], flags=re.ASCII)[:2]
 
         except ValueError:
             # no problem then, user only exists
@@ -817,7 +832,7 @@ def parse_url(url, default_schema='http'):
 
     try:
         (result['host'], result['port']) = \
-            re.split('[\s:]+', result['host'])[:2]
+            re.split('[\\s:]+', result['host'], flags=re.ASCII)[:2]
 
     except ValueError:
         # no problem then, user only exists
@@ -835,9 +850,9 @@ def parse_url(url, default_schema='http'):
 
     # Re-assemble cleaned up version of the url
     result['url'] = '%s://' % result['schema']
-    if isinstance(result['user'], basestring):
+    if isinstance(result['user'], str):
         result['url'] += result['user']
-        if isinstance(result['password'], basestring):
+        if isinstance(result['password'], str):
             result['url'] += ':%s@' % result['password']
         else:
             result['url'] += '@'
@@ -875,13 +890,13 @@ def parse_list(*args):
 
     result = []
     for arg in args:
-        if isinstance(arg, basestring):
-            result += re.split(STRING_DELIMITERS, arg)
+        if isinstance(arg, str):
+            result += re.split(STRING_DELIMITERS, arg, flags=re.ASCII)
 
         elif isinstance(arg, (list, tuple, set, sortedset)):
             for _arg in arg:
-                if isinstance(arg, basestring):
-                    result += re.split(STRING_DELIMITERS, arg)
+                if isinstance(arg, str):
+                    result += re.split(STRING_DELIMITERS, arg, flags=re.ASCII)
 
                 # A list inside a list? - use recursion
                 elif isinstance(_arg, (list, tuple, set, sortedset)):
@@ -896,7 +911,7 @@ def parse_list(*args):
 
     # apply as well as make the list unique by converting it
     # to a set() first. filter() eliminates any empty entries
-    return filter(bool, list(set(result)))
+    return list(filter(bool, list(set(result))))
 
 
 def find(search_dir, regex_filter=None, prefix_filter=None,
@@ -952,7 +967,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
     if isinstance(search_dir, (sortedset, set, list, tuple)):
         for _dir in search_dir:
             # use recursion to build a master (unique) list
-            files = dict(files.items() + find(
+            files = dict(list(files.items()) + list(find(
                 search_dir=_dir,
                 regex_filter=regex_filter,
                 prefix_filter=prefix_filter,
@@ -966,27 +981,27 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 # Internal Current Directory Depth tracking
                 __current_depth=current_depth,
                 __root_dir=root_dir,
-            ).items())
+            ).items()))
         return files
 
-    elif not isinstance(search_dir, basestring):
+    elif not isinstance(search_dir, str):
         # Unsupported
         return {}
 
     # Change all filters strings lists (if they aren't already)
     if regex_filter is None:
         regex_filter = tuple()
-    if isinstance(regex_filter, basestring):
+    if isinstance(regex_filter, str):
         regex_filter = (regex_filter,)
-    elif isinstance(regex_filter, re._pattern_type):
+    elif isinstance(regex_filter, re.Pattern):
         regex_filter = (regex_filter,)
     if suffix_filter is None:
         suffix_filter = tuple()
-    if isinstance(suffix_filter, basestring):
+    if isinstance(suffix_filter, str):
         suffix_filter = (suffix_filter, )
     if prefix_filter is None:
         prefix_filter = tuple()
-    if isinstance(prefix_filter, basestring):
+    if isinstance(prefix_filter, str):
         prefix_filter = (prefix_filter, )
 
     # clean prefix list
@@ -1001,13 +1016,13 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
     if regex_filter:
         _filters = []
         for f in regex_filter:
-            if not isinstance(f, re._pattern_type):
+            if not isinstance(f, re.Pattern):
                 flags = 0x0
                 if not case_sensitive:
                     flags = re.IGNORECASE
 
                 try:
-                    _filters.append(re.compile(f, flags=flags))
+                    _filters.append(re.compile(f, flags=flags | re.ASCII))
 
                 except:
                     logger.error(
@@ -1112,7 +1127,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 continue
 
             # use recursion to build a master (unique) list
-            files = dict(files.items() + find(
+            files = dict(list(files.items()) + list(find(
                 search_dir=fullpath,
                 regex_filter=regex_filter,
                 prefix_filter=prefix_filter,
@@ -1126,7 +1141,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 # Internal Current Directory Depth tracking
                 __current_depth=current_depth + 1,
                 __root_dir=root_dir,
-            ).items())
+            ).items()))
             continue
 
         elif not isfile(fullpath):
@@ -1226,23 +1241,23 @@ def parse_paths(*args):
 
     result = []
     for arg in args:
-        if isinstance(arg, basestring):
+        if isinstance(arg, str):
             cleaned = PATH_DELIMITERS_RE.sub('|/', tidy_path(arg))
             cleaned = WIN_PATH_DELIMITERS_RE.sub('|\\1', cleaned)
             cleaned = WIN_NETWORK_DRIVE_DELIMITERS_RE.sub('|\\1', cleaned)
             cleaned = WIN_LOCAL_DRIVE_DELIMITERS_RE.sub('|\\1:\\2', cleaned)
-            result += re.split('[,|]+', cleaned)
+            result += re.split('[,|]+', cleaned, flags=re.ASCII)
 
         elif isinstance(arg, (list, tuple)):
             for _arg in arg:
-                if isinstance(_arg, basestring):
+                if isinstance(_arg, str):
                     cleaned = PATH_DELIMITERS_RE.sub('|', tidy_path(_arg))
                     cleaned = WIN_PATH_DELIMITERS_RE.sub('|\\1', cleaned)
                     cleaned = WIN_NETWORK_DRIVE_DELIMITERS_RE.sub(
                         '|\\1', cleaned)
                     cleaned = WIN_LOCAL_DRIVE_DELIMITERS_RE.sub(
                         '|\\1:\\2', cleaned)
-                    result += re.split('[,|]+', cleaned)
+                    result += re.split('[,|]+', cleaned, flags=re.ASCII)
 
                 # A list inside a list? - use recursion
                 elif isinstance(_arg, (list, tuple)):
@@ -1258,11 +1273,11 @@ def parse_paths(*args):
 
     # apply as well as make the list unique by converting it
     # to a set() first. filter() eliminates any empty entries
-    return filter(bool, list(set([tidy_path(p) for p in result])))
+    return list(filter(bool, list(set([tidy_path(p) for p in result]))))
 
 
 @contextmanager
-def pushd(newdir, create_if_missing=False, perm=0775):
+def pushd(newdir, create_if_missing=False, perm=0o775):
     """
     # A pushd/popd implimentation
     # Based on : http://stackoverflow.com/questions/6194499/\
@@ -1271,10 +1286,10 @@ def pushd(newdir, create_if_missing=False, perm=0775):
     # It's use is pretty straight forward:
     # with pushd('somewhere'):
     #     # somewhere
-    #     print os.getcwd()
+    #     print(os.getcwd())
     #
     # # wherever you started
-    # print os.getcwd()
+    # print(os.getcwd())
 
     """
     prevdir = getcwd()
@@ -1313,7 +1328,7 @@ def parse_bool(arg, default=False):
     returned.
     """
 
-    if isinstance(arg, basestring):
+    if isinstance(arg, str):
         # no = no - False
         # of = short for off - False
         # 0  = int for False
@@ -1353,10 +1368,10 @@ def hexdump(src, length=16, sep='.'):
     allowed = digits + ascii_letters + punctuation + ' '
 
     print_map = ''.join(((x if x in allowed else '.')
-                        for x in map(chr, range(256))))
+                        for x in map(chr, list(range(256)))))
     lines = []
 
-    for c in xrange(0, len(src), length):
+    for c in range(0, len(src), length):
         chars = src[c:c + length]
         hex = ' '.join(["%02x" % ord(x) for x in chars])
         if len(hex) > 24:
@@ -1382,7 +1397,7 @@ def dirsize(src):
         with pushd(src, create_if_missing=False):
             size = sum(getsize(f) for f in listdir('.') if isfile(f))
 
-    except (OSError, IOError):
+    except OSError:
         return None
 
     # Return our total size

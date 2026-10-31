@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/caronc/newsreap.svg?branch=master)](https://travis-ci.org/caronc/newsreap)[![Coverage Status](https://coveralls.io/repos/caronc/newsreap/badge.svg?branch=master)](https://coveralls.io/r/caronc/newsreap?branch=master)
+[![Tests](https://github.com/caronc/newsreap/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/caronc/newsreap/actions/workflows/tests.yml)
 [![Paypal](http://repo.nuxref.com/pub/img/paypaldonate.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MHANV39UZNQ5E)
 
 ## Introduction
@@ -31,12 +31,21 @@ Make sure you configure your __config.yaml__ file (sample included) and place it
 5. /etc/config.yaml
 
 Assuming you configured the file correctly, you can now start interfacing with you're NNTP Provider.
-You'll want to make sure you meet all of the dependencies:
+
+NewsReap requires Python 3.13 or newer. Install it (and all of its dependencies) like so:
 ```bash
 # Browse to the directory you installed newsreap into
-# Then Install the necessary dependencies like so:
-pip install -r requirements.txt
+# Then install it; this also gives you the `nr` command
+pip install .
 ```
+
+You can also run the tool straight from the source directory without installing it:
+```bash
+pip install -r requirements.txt
+./bin/nr.py --help
+```
+
+See [INSTALL.md](INSTALL.md) for the optional archive tools (7-Zip, rar and par2).
 
 ## Downloading
 If you know the article-id/Message-ID of the item in question, the following
@@ -262,6 +271,28 @@ _EOF
 ```
 
 ## Developers
+Tests, linting and builds are all run through [tox](https://tox.wiki/):
+```bash
+# Install tox once
+pip install tox
+
+# Run the full test suite (with code coverage)
+tox -e qa
+
+# A quicker test run without coverage; extra arguments go to pytest
+tox -e test -- tests/CodecYenc_Test.py
+
+# Check the code for lint issues (and fix what can be fixed)
+tox -e lint
+tox -e format
+
+# Build the source and wheel packages
+tox -e build
+```
+
+Tests that need the 7-Zip, rar or par2 tools are skipped when those tools
+aren't installed.
+
 The core of this tool wraps around it's framework it provides
 
 ```python

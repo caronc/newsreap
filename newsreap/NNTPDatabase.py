@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A common NNTP Database management class for manipulating SQLAlchemy
 #
 # Copyright (C) 2015 Chris Caron <lead2gold@gmail.com>
@@ -50,7 +48,7 @@ class NNTPDatabase(Database):
         """
         Initialize NNTP Database Manager
         """
-        super(NNTPDatabase, self).__init__(
+        super().__init__(
             base=ObjectBase,
             vsp=Vsp,
             engine=engine,

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 #  The Article Object found on UseNet Servers
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -65,7 +63,7 @@ class Article(ObjectBase):
     hidden = Column(Boolean, default=False, nullable=False, index=True)
 
     def __init__(self, *args, **kwargs):
-        super(Article, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __repr__(self):
         return "<Article(message_id=%s)>" % (self.message_id)

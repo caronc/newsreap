@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTP Groups Codec
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -196,7 +194,7 @@ class CodecGroups_Test(TestBase):
         assert isfile(encoded_filepath)
 
         # Read data and decode it
-        with open(encoded_filepath, 'r') as fd_in:
+        with open(encoded_filepath, 'rb') as fd_in:
             # This module always returns 'True' expecting more
             # but content can be retrieved at any time
             assert ch_py.decode(fd_in) is True

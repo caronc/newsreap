@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A container for handling mime manipulation
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -113,15 +111,16 @@ MAGIC_MIME_ENCODING = 1024
 MAGIC_MIME = 1040
 
 # The delimiters we use to divy up our results
-MAGIC_LIST_RE = re.compile('\s*[;]+\s*')
+MAGIC_LIST_RE = re.compile('\\s*[;]+\\s*', re.ASCII)
 
 # Used to detect encoding type
-ENCODING_PARSE_RE = re.compile(r'^(charset=)?(?P<encoding>.*)$', re.I)
+ENCODING_PARSE_RE = re.compile(r'^(charset=)?(?P<encoding>.*)$',
+                               re.I | re.ASCII)
 
 # Support deep scan of files
 TYPE_PARSE_RE = re.compile(
     r'([\\]+(?P<offset>[0-9]+)?-\s+)?(?P<mtype>[a-z0-9_-]+/[a-z0-9_-]+)\s*',
-    re.I,
+    re.I | re.ASCII,
 )
 
 # An advanced regular expression that can be used to extract the extension
@@ -142,7 +141,7 @@ EXTENSION_SEARCH_RE = re.compile(
     r'(\.vol[0-9]+(\+[0-9]+)?)?(\.par2?)?'
     r'(\.[0-9]{2,3})?'
     r')\s*$',
-    re.I,
+    re.I | re.ASCII,
 )
 # servers. This table is used for matching based on filename in addition to
 # performing reverse lookups if we know the type. This list is intentionally
@@ -156,11 +155,13 @@ MT_PREFIX_RE = r'^\s*(.+[\\/])?(?P<fname>[^\\/]+)?'
 MIME_TYPES = (
     # rar, r00, r01, etc
     ('application/x-rar-compressed', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(r(ar|[0-9]{2})))\s*$', flags=re.I), 'binary', '.rar'),
+     r'(?P<ext>\.(r(ar|[0-9]{2})))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.rar'),
 
     # zip, z00, z01, etc
     ('application/zip', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(z(ip|[0-9]{2})))\s*$', flags=re.I), 'binary', '.zip'),
+     r'(?P<ext>\.(z(ip|[0-9]{2})))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.zip'),
 
     # 7z,
     #  - supports .7z, 7za
@@ -170,299 +171,305 @@ MIME_TYPES = (
     #  - supports .7za.000, .7za.001, etc
     ('application/x-7z-compressed', re.compile(MT_PREFIX_RE +
      r'(?P<ext>\.(part(?P<part>[0-9]+)\.7z|7za?\.?(?P<part0>[0-9]+)?))\s*$',
-                                               flags=re.I), 'binary', '.7z'),
+                                               flags=re.I | re.ASCII), 'binary', '.7z'),
 
     # B-Zipped (v2) Tape Archive  .tar.bz2
     ('application/tar+bzip2', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.t(ar\.bz2|bz2))\s*$', flags=re.I), 'binary', '.tar.bz2'),
+     r'(?P<ext>\.t(ar\.bz2|bz2))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.tar.bz2'),
 
     # B-Zipped (v1) Tape Archive  .tar.bz
     ('application/tar+bzip', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.t(ar\.bz|bz))\s*$', flags=re.I), 'binary', '.tar.bz'),
+     r'(?P<ext>\.t(ar\.bz|bz))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.tar.bz'),
 
     # LZMA2 Compression Tape Archive .xz
     ('application/tar+xz', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.t(ar\.xz|xz))\s*$', flags=re.I), 'binary', '.tar.xz'),
+     r'(?P<ext>\.t(ar\.xz|xz))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.tar.xz'),
 
     # GZipped Tape Archive (TAR)
     ('application/tar+gzip', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.t(ar\.gz|gz))\s*$', flags=re.I), 'binary', '.tar.gz'),
+     r'(?P<ext>\.t(ar\.gz|gz))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.tar.gz'),
 
     # Tape Archive (TAR) .tar
     ('application/x-tar', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.tar)\s*$', flags=re.I), 'binary', '.tar'),
+     r'(?P<ext>\.tar)\s*$', flags=re.I | re.ASCII), 'binary', '.tar'),
 
     # GZip .gz
     ('application/x-gzip', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.gz)\s*$', flags=re.I), 'binary', '.gz'),
+     r'(?P<ext>\.gz)\s*$', flags=re.I | re.ASCII), 'binary', '.gz'),
 
     # B-Zip 2 .bz2
     ('application/x-bzip2', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.bz2)\s*$', flags=re.I), 'binary', '.bz2'),
+     r'(?P<ext>\.bz2)\s*$', flags=re.I | re.ASCII), 'binary', '.bz2'),
 
     # LZMA2 Compression .xz
     ('application/x+xz', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.xz)\s*$', flags=re.I), 'binary', '.xz'),
+     r'(?P<ext>\.xz)\s*$', flags=re.I | re.ASCII), 'binary', '.xz'),
 
     # B-Zip .bz
     ('application/x-bzip', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.bz)\s*$', flags=re.I), 'binary', '.bz'),
+     r'(?P<ext>\.bz)\s*$', flags=re.I | re.ASCII), 'binary', '.bz'),
 
     # LZH Compressed .lza, .lha
     ('application/x-lzh-compressed', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.l[zh]a)\s*$', flags=re.I), 'binary', '.lza'),
+     r'(?P<ext>\.l[zh]a)\s*$', flags=re.I | re.ASCII), 'binary', '.lza'),
 
     # .avi
     ('video/x-msvideo', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.avi)\s*$', flags=re.I), 'binary', '.avi'),
+     r'(?P<ext>\.avi)\s*$', flags=re.I | re.ASCII), 'binary', '.avi'),
 
     # .mkv
     ('video/x-matroska', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.mkv)\s*$', flags=re.I), 'binary', '.mkv'),
+     r'(?P<ext>\.mkv)\s*$', flags=re.I | re.ASCII), 'binary', '.mkv'),
 
     # mpg, mpeg, mpe, mpg mpeg2, mpga
     ('video/mpg', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.mp(e|e?g2?|a))\s*$', flags=re.I), 'binary', '.mpg'),
+     r'(?P<ext>\.mp(e|e?g2?|a))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.mpg'),
 
     # mp4, mpeg4, mpe4, mpg4
     ('video/mp4', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.mpe?g?4)\s*$', flags=re.I), 'binary', '.mp4'),
+     r'(?P<ext>\.mpe?g?4)\s*$', flags=re.I | re.ASCII), 'binary', '.mp4'),
 
     # .ogv
     ('video/ogg', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.ogg)\s*$', flags=re.I), 'binary', '.ogg'),
+     r'(?P<ext>\.ogg)\s*$', flags=re.I | re.ASCII), 'binary', '.ogg'),
 
     # .3gp, .3gpp
     ('video/3gpp', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.3gpp?)\s*$', flags=re.I), 'binary', '.3gp'),
+     r'(?P<ext>\.3gpp?)\s*$', flags=re.I | re.ASCII), 'binary', '.3gp'),
 
     # .3g2
     ('video/3gpp2', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.3g2)\s*$', flags=re.I), 'binary', '.3g2'),
+     r'(?P<ext>\.3g2)\s*$', flags=re.I | re.ASCII), 'binary', '.3g2'),
 
     # .ts
     ('video/mp2t', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.ts)\s*$', flags=re.I), 'binary', '.ts'),
+     r'(?P<ext>\.ts)\s*$', flags=re.I | re.ASCII), 'binary', '.ts'),
 
     # .mov, .qt
     ('video/quicktime', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(mov|qt))\s*$', flags=re.I), 'binary', '.mov'),
+     r'(?P<ext>\.(mov|qt))\s*$', flags=re.I | re.ASCII), 'binary', '.mov'),
 
     # .divx
     ('video/divx', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.divx)\s*$', flags=re.I), 'binary', '.divx'),
+     r'(?P<ext>\.divx)\s*$', flags=re.I | re.ASCII), 'binary', '.divx'),
 
     # .webm
     ('video/webm', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.webm)\s*$', flags=re.I), 'binary', '.webm'),
+     r'(?P<ext>\.webm)\s*$', flags=re.I | re.ASCII), 'binary', '.webm'),
 
     # .flv
     ('video/x-flv', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.flv)\s*$', flags=re.I), 'binary', '.flv'),
+     r'(?P<ext>\.flv)\s*$', flags=re.I | re.ASCII), 'binary', '.flv'),
 
     # .m4v
     ('video/x-m4v', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.m4v)\s*$', flags=re.I), 'binary', '.m4v'),
+     r'(?P<ext>\.m4v)\s*$', flags=re.I | re.ASCII), 'binary', '.m4v'),
 
     # .mng
     ('video/x-mng', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.mng)\s*$', flags=re.I), 'binary', '.mng'),
+     r'(?P<ext>\.mng)\s*$', flags=re.I | re.ASCII), 'binary', '.mng'),
 
     # .asf, asx
     ('video/x-ms-asf', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.as[xf])\s*$', flags=re.I), 'binary', '.asf'),
+     r'(?P<ext>\.as[xf])\s*$', flags=re.I | re.ASCII), 'binary', '.asf'),
 
     # .wmv
     ('video/x-ms-wmv', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.wmv)\s*$', flags=re.I), 'binary', '.wmv'),
+     r'(?P<ext>\.wmv)\s*$', flags=re.I | re.ASCII), 'binary', '.wmv'),
 
     # .mid, midi, .kar
     ('audio/midi', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(midi?|kar))\s*$', flags=re.I), 'binary', '.midi'),
+     r'(?P<ext>\.(midi?|kar))\s*$', flags=re.I | re.ASCII), 'binary', '.midi'),
 
     # .mp3
     ('audio/mpeg', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.mp3)\s*$', flags=re.I), 'binary', '.mp3'),
+     r'(?P<ext>\.mp3)\s*$', flags=re.I | re.ASCII), 'binary', '.mp3'),
 
     # .wav
     ('audio/x-wav', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.wav)\s*$', flags=re.I), 'binary', '.wav'),
+     r'(?P<ext>\.wav)\s*$', flags=re.I | re.ASCII), 'binary', '.wav'),
 
     # .oga
     ('audio/oga', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.oga)\s*$', flags=re.I), 'binary', '.oga'),
+     r'(?P<ext>\.oga)\s*$', flags=re.I | re.ASCII), 'binary', '.oga'),
 
     # .m4a
     ('audio/x-m4a', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.m4a)\s*$', flags=re.I), 'binary', '.m4a'),
+     r'(?P<ext>\.m4a)\s*$', flags=re.I | re.ASCII), 'binary', '.m4a'),
 
     # .ra, .ram
     ('audio/x-realaudio', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.ram?)\s*$', flags=re.I), 'binary', '.ra'),
+     r'(?P<ext>\.ram?)\s*$', flags=re.I | re.ASCII), 'binary', '.ra'),
 
     # gif file (.gif)
     ('image/gif', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.gif)\s*$', flags=re.I), 'binary', '.gif'),
+     r'(?P<ext>\.gif)\s*$', flags=re.I | re.ASCII), 'binary', '.gif'),
 
     # Jpeg file (.jpeg, .jpg)
     ('image/jpeg', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.jpe?g)\s*$', flags=re.I), 'binary', '.jpeg'),
+     r'(?P<ext>\.jpe?g)\s*$', flags=re.I | re.ASCII), 'binary', '.jpeg'),
 
     # PNG Image (.png)
     ('image/png', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.png)\s*$', flags=re.I), 'binary', '.png'),
+     r'(?P<ext>\.png)\s*$', flags=re.I | re.ASCII), 'binary', '.png'),
 
     # TIFF File (.tif, .tiff)
     ('image/tiff', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.tiff?)\s*$', flags=re.I), 'binary', '.tiff'),
+     r'(?P<ext>\.tiff?)\s*$', flags=re.I | re.ASCII), 'binary', '.tiff'),
 
     # VND Bitmap (.wbmp)
     ('image/vnd.wap.wbmp', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.wbmp)\s*$', flags=re.I), 'binary', '.wbmp'),
+     r'(?P<ext>\.wbmp)\s*$', flags=re.I | re.ASCII), 'binary', '.wbmp'),
 
     # Windows BMP (.bmp)
     ('image/x-ms-bmp', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.bmp)\s*$', flags=re.I), 'binary', '.bmp'),
+     r'(?P<ext>\.bmp)\s*$', flags=re.I | re.ASCII), 'binary', '.bmp'),
 
     # Quicktime Image (.qti, .qtif)
     ('image/x-quicktime', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.qtif?)\s*$', flags=re.I), 'binary', '.qti'),
+     r'(?P<ext>\.qtif?)\s*$', flags=re.I | re.ASCII), 'binary', '.qti'),
 
     # Scalar Vector Graphics (.svg, svgz)
     ('image/image/svg+xml', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.svgz?)\s*$', flags=re.I), 'binary', '.svg'),
+     r'(?P<ext>\.svgz?)\s*$', flags=re.I | re.ASCII), 'binary', '.svg'),
 
     # JNG Format (.jng)
     ('image/image/x-jng', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.jng)\s*$', flags=re.I), 'binary', '.jng'),
+     r'(?P<ext>\.jng)\s*$', flags=re.I | re.ASCII), 'binary', '.jng'),
 
     # Icon Format (.ico)
     ('image/image/x-icon', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.ico)\s*$', flags=re.I), 'binary', '.ico'),
+     r'(?P<ext>\.ico)\s*$', flags=re.I | re.ASCII), 'binary', '.ico'),
 
     # Support image files (.iso and .img)
     ('application/x-iso9660-image', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(iso|img))\s*$', flags=re.I), 'binary', '.iso'),
+     r'(?P<ext>\.(iso|img))\s*$', flags=re.I | re.ASCII), 'binary', '.iso'),
 
     # Support PAR files (.par, .par2)
     ('application/x-par2', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.par2?(\.vol[0-9]+(\+[0-9]+)?)?)\s*$', flags=re.I),
+     r'(?P<ext>\.par2?(\.vol[0-9]+(\+[0-9]+)?)?)\s*$', flags=re.I | re.ASCII),
      'binary', '.par'),
 
     # text files
     ('text/plain', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(txt|diz|nfo))\s*$', flags=re.I), 'ascii', '.txt'),
+     r'(?P<ext>\.(txt|diz|nfo))\s*$', flags=re.I | re.ASCII), 'ascii', '.txt'),
 
     # Rich Text files
     ('application/rtf', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.rtf)\s*$', flags=re.I), 'ascii', '.rtf'),
+     r'(?P<ext>\.rtf)\s*$', flags=re.I | re.ASCII), 'ascii', '.rtf'),
 
     # Microsoft Document
     ('application/msword', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.doc)\s*$', flags=re.I), 'binary', '.doc'),
+     r'(?P<ext>\.doc)\s*$', flags=re.I | re.ASCII), 'binary', '.doc'),
 
     # NZB-File
     ('text/x-nzb', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.nzb)\s*$', flags=re.I), 'ascii', '.nzb'),
+     r'(?P<ext>\.nzb)\s*$', flags=re.I | re.ASCII), 'ascii', '.nzb'),
 
     # Windows Binary/Executable Files
     ('application/x-dosexec', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(msi|bin|exe|com|scr|dll))\s*$', flags=re.I),
+     r'(?P<ext>\.(msi|bin|exe|com|scr|dll))\s*$', flags=re.I | re.ASCII),
      'binary', '.exe'),
 
     # Debian Packages (.deb)
     ('application/vnd.debian.binary-package', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(deb))\s*$', flags=re.I), 'binary', '.deb'),
+     r'(?P<ext>\.(deb))\s*$', flags=re.I | re.ASCII), 'binary', '.deb'),
 
     # RPM Package (.rpm and .drpm)
     ('application/x-redhat-package-manager', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(d?rpm))\s*$', flags=re.I), 'binary', '.rpm'),
+     r'(?P<ext>\.(d?rpm))\s*$', flags=re.I | re.ASCII), 'binary', '.rpm'),
 
     # html, htm, and shtml
     ('text/html', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.s?html?)\s*$', flags=re.I), 'ascii', '.html'),
+     r'(?P<ext>\.s?html?)\s*$', flags=re.I | re.ASCII), 'ascii', '.html'),
 
     # Shockwave Flash
     ('application/x-shockwave-flash', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.swf)\s*$', flags=re.I), 'binary', '.swf'),
+     r'(?P<ext>\.swf)\s*$', flags=re.I | re.ASCII), 'binary', '.swf'),
 
     # sql
     ('application/x-sql', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.sql)\s*$', flags=re.I), 'ascii', '.sql'),
+     r'(?P<ext>\.sql)\s*$', flags=re.I | re.ASCII), 'ascii', '.sql'),
 
     # css
     ('text/css', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.css)\s*$', flags=re.I), 'ascii', '.css'),
+     r'(?P<ext>\.css)\s*$', flags=re.I | re.ASCII), 'ascii', '.css'),
 
     # xml
     ('text/xml', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.xml)\s*$', flags=re.I), 'ascii', '.xml'),
+     r'(?P<ext>\.xml)\s*$', flags=re.I | re.ASCII), 'ascii', '.xml'),
 
     # Perl (.pl, .pm)
     ('application/x-perl', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.pl)\s*$', flags=re.I), 'ascii', '.pl'),
+     r'(?P<ext>\.pl)\s*$', flags=re.I | re.ASCII), 'ascii', '.pl'),
 
     # Python ByteCode (.pyo, .pyc)
     ('application/x-python', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.py(o|c))\s*$', flags=re.I), 'binary', '.pyc'),
+     r'(?P<ext>\.py(o|c))\s*$', flags=re.I | re.ASCII), 'binary', '.pyc'),
 
     # Python .py
     ('application/x-python', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.py)\s*$', flags=re.I), 'ascii', '.py'),
+     r'(?P<ext>\.py)\s*$', flags=re.I | re.ASCII), 'ascii', '.py'),
 
     # javascript (.js)
     ('application/javascript', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.js)\s*$', flags=re.I), 'ascii', '.js'),
+     r'(?P<ext>\.js)\s*$', flags=re.I | re.ASCII), 'ascii', '.js'),
 
     # atom (.atom)
     ('application/atom+xml', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.atom)\s*$', flags=re.I), 'ascii', '.atom'),
+     r'(?P<ext>\.atom)\s*$', flags=re.I | re.ASCII), 'ascii', '.atom'),
 
     # rss (.rss)
     ('application/rss+xml', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.rss)\s*$', flags=re.I), 'ascii', '.rss'),
+     r'(?P<ext>\.rss)\s*$', flags=re.I | re.ASCII), 'ascii', '.rss'),
 
     # java archive (.jar, .war, .ear)
     ('application/java-archive', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(jar|war|ear))\s*$', flags=re.I), 'binary', '.jar'),
+     r'(?P<ext>\.(jar|war|ear))\s*$',
+         flags=re.I | re.ASCII), 'binary', '.jar'),
 
     # PDF (.pdf)
     ('application/pdf', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.pdf)\s*$', flags=re.I), 'binary', '.pdf'),
+     r'(?P<ext>\.pdf)\s*$', flags=re.I | re.ASCII), 'binary', '.pdf'),
 
     # EPub (E-Reader Format) (.epub)
     ('application/epub+zip', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.epub)\s*$', flags=re.I), 'binary', '.epub'),
+     r'(?P<ext>\.epub)\s*$', flags=re.I | re.ASCII), 'binary', '.epub'),
 
     # Mobi (Amazon E-Reader Format) (.mobi, .prc)
     ('application/x-mobipocket-ebook', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(mobi|prc))\s*$', flags=re.I), 'binary', '.mobi'),
+     r'(?P<ext>\.(mobi|prc))\s*$', flags=re.I | re.ASCII), 'binary', '.mobi'),
 
     # Postscript (.ps, .eps, .ai)
     ('application/postscript', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(e?ps|ai))\s*$', flags=re.I), 'binary', '.ps'),
+     r'(?P<ext>\.(e?ps|ai))\s*$', flags=re.I | re.ASCII), 'binary', '.ps'),
 
     # (Ascii based) Certificates (.crt, .pem)
     ('application/x-x509-ca-cert', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.(crt|pem))\s*$', flags=re.I), 'ascii', '.crt'),
+     r'(?P<ext>\.(crt|pem))\s*$', flags=re.I | re.ASCII), 'ascii', '.crt'),
 
     # (binary based) Certificates (.crt, .pem)
     ('application/x-x509-ca-cert', re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.der)\s*$', flags=re.I), 'binary', '.der'),
+     r'(?P<ext>\.der)\s*$', flags=re.I | re.ASCII), 'binary', '.der'),
 
     # ====================================================================== #
 
     # The second last entry must always catch all that has an extension
     (DEFAULT_MIME_TYPE, re.compile(MT_PREFIX_RE +
-     r'(?P<ext>\.[^ \t]+)\s*$'), DEFAULT_MIME_ENCODING, ''),
+     r'(?P<ext>\.[^ \t]+)\s*$', re.ASCII), DEFAULT_MIME_ENCODING, ''),
 
     # The last entry must always be the empty - catch all
     (DEFAULT_MIME_TYPE, re.compile(MT_PREFIX_RE +
-     r'(?P<ext>)\s+$'), DEFAULT_MIME_ENCODING, ''),
+     r'(?P<ext>)\s+$', re.ASCII), DEFAULT_MIME_ENCODING, ''),
 )
 
 
-class MimeResponse(object):
+class MimeResponse:
     """
     Our mime result
     """
@@ -475,7 +482,7 @@ class MimeResponse(object):
 
         # e.g. text/x-python
         self._mime_type = mime_type
-        if isinstance(self._mime_type, basestring):
+        if isinstance(self._mime_type, str):
             # The mime type is stored as (index, detected_type)
             # since it's possible to do a deep scan, you can match
             # on different parts of the file to acquire different
@@ -542,6 +549,12 @@ class MimeResponse(object):
 
         return False
 
+    def __hash__(self):
+        """
+        Responses that are equal share the same hash
+        """
+        return hash((self.type(), self.encoding()))
+
     def __repr__(self):
         """
         Return a printable version of the file being read
@@ -555,11 +568,8 @@ class MimeResponse(object):
     def __str__(self):
         return self.type()
 
-    def __unicode__(self):
-        return unicode(self.type())
 
-
-class Mime(object):
+class Mime:
     """
     Our mime response object.
     """
@@ -634,7 +644,7 @@ class Mime(object):
 
                 _typs = []
                 for n, _typ_re in enumerate(TYPE_PARSE_RE.finditer(_typ)):
-                    if n is 0:
+                    if n == 0:
                         _typs.append((0, _typ_re.group('mtype')))
                     else:
                         _typs.append(
@@ -730,7 +740,7 @@ class Mime(object):
 
                 _typs = []
                 for n, _typ_re in enumerate(TYPE_PARSE_RE.finditer(_typ)):
-                    if n is 0:
+                    if n == 0:
                         _typs.append((0, _typ_re.group('mtype')))
                     else:
                         _typs.append(
@@ -893,17 +903,15 @@ class Mime(object):
             return None
         if isinstance(s, str):
             return s
-        try:  # keep Python 2 compatibility
-            return str(s, encoding)
-        except TypeError:
-            return str(s)
+        if isinstance(s, (bytes, bytearray)):
+            return s.decode(encoding)
+        return str(s)
 
     def _tobytes(self, b, encoding='utf-8'):
         if b is None:
             return None
         if isinstance(b, bytes):
             return b
-        try:  # keep Python 2 compatibility
-            return bytes(b, encoding)
-        except TypeError:
-            return bytes(b)
+        if isinstance(b, str):
+            return b.encode(encoding)
+        return bytes(b)

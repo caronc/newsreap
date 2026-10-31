@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the NNTPnzb Object
 #
 # Copyright (C) 2015-2017 Chris Caron <lead2gold@gmail.com>
@@ -42,6 +40,7 @@ from newsreap.NNTPnzb import NZBParseMode
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+from os.path import exists
 
 
 class NNTPnzb_Test(TestBase):
@@ -369,11 +368,11 @@ class NNTPnzb_Test(TestBase):
 
         expected_iter = iter(expected_results)
         for segment in nzbobj:
-            assert(segment.filename == expected_iter.next())
+            assert(segment.filename == next(expected_iter))
 
         try:
             # We should have gracefully passed through our entire list
-            expected_iter.next()
+            next(expected_iter)
             # We should never make it here
             assert(False)
 
@@ -390,7 +389,7 @@ class NNTPnzb_Test(TestBase):
         expected_iter = iter(expected_results)
         results = []
         for segment in nzbobj_sp:
-            assert(segment.filename == expected_iter.next())
+            assert(segment.filename == next(expected_iter))
             results.append(segment.filename)
 
         # We should still have 9 files left in our list we didn't process
@@ -402,3 +401,32 @@ class NNTPnzb_Test(TestBase):
 
         # Our list count is different because we're ignoring pars in one list
         assert(len(nzbobj_sp) < len(nzbobj))
+
+    def test_name_comes_from_filename_without_meta(self):
+        """
+        Without a name in its meta data, the NZB-File's filename is used
+        """
+        nzbfile = join(self.var_dir, 'Ubuntu-16.04.1-Server-i386.nzb')
+        nzbcopy = join(self.tmp_dir, 'NNTPnzb_Test.name', 'Ubuntu-Copy.nzb')
+        assert self.touch(nzbcopy) is True
+
+        with open(nzbfile) as src:
+            content = src.read()
+
+        # Strip the name from the meta data
+        meta = '<meta type="name">Ubuntu-16.04.1-Server-i386</meta>'
+        assert meta in content
+        with open(nzbcopy, 'w') as dst:
+            dst.write(content.replace(meta, ''))
+
+        nzbobj = NNTPnzb(nzbfile=nzbcopy)
+        filenames = [segment.filename for segment in nzbobj]
+        assert len(filenames) == len(NNTPnzb(nzbfile=nzbfile))
+        assert all(f.startswith('Ubuntu-Copy.') for f in filenames)
+
+    def test_nzb_is_available_from_the_package(self):
+        """
+        NNTPnzb can be imported straight from the newsreap package
+        """
+        from newsreap import NNTPnzb as PackageNNTPnzb
+        assert PackageNNTPnzb is NNTPnzb

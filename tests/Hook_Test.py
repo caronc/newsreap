@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the Hook Object
 #
 # Copyright (C) 2017 Chris Caron <lead2gold@gmail.com>
@@ -23,7 +21,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import dirname
 from os.path import abspath
 
@@ -36,6 +34,7 @@ except ImportError:
 
 from newsreap.Hook import Hook
 from newsreap.hooks.post import debug
+from newsreap.decorators import hook
 
 
 class Hook_Test(TestBase):
@@ -65,7 +64,7 @@ class Hook_Test(TestBase):
 
         # Test our less than operator
         assert(str(hooka) == 'debugA')
-        assert(unicode(hooka) == u'debugA')
+        assert(str(hooka) == 'debugA')
 
         # Test our less than operator
         assert(hooka < hookx)
@@ -143,8 +142,46 @@ class Hook_Test(TestBase):
             # iterates over our functions
             assert(callable(function))
 
-        # Test our length
-        assert(len(hookx) == 19)
+        # Test our length; 16 functions where one of them is registered
+        # under 2 different hook names
+        assert(len(hookx) == 17)
 
         # We can delete too
         del hooka['good_entry']
+
+    def test_function_with_two_hooks_is_called_once_each(self):
+        """
+        A function decorated for two hooks is called once by each hook
+        """
+        hookx = Hook(name='debugX', module=debug, priority=1000)
+
+        names = [m['function'].__name__ for m in hookx['pre_prepare']]
+        assert names.count('pre_and_pre_prepare_call') == 1
+
+        names = [m['function'].__name__ for m in hookx['post_prepare']]
+        assert names.count('pre_and_pre_prepare_call') == 1
+
+    def test_functions_are_called_in_priority_order(self):
+        """
+        The priority set by the @hook decorator decides the calling order
+        """
+        @hook(name='my_hook', priority=500)
+        def zebra(**kwargs):
+            return 'zebra'
+
+        @hook(name='my_hook', priority=10)
+        def yak(**kwargs):
+            return 'yak'
+
+        @hook(name='my_hook')
+        def aardvark(**kwargs):
+            return 'aardvark'
+
+        obj = Hook(name='ordered')
+        assert obj.add(zebra) is True
+        assert obj.add(yak) is True
+        assert obj.add(aardvark) is True
+
+        results = obj.call('my_hook')
+        assert [r['result'] for r in results] == ['yak', 'zebra', 'aardvark']
+        assert [r['priority'] for r in results] == [10, 500, 1000]

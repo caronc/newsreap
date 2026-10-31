@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Test the Base Class File Codec
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -23,7 +21,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from blist import sortedset
+from newsreap.SortedSet import sortedset
 from os.path import join
 from os.path import dirname
 from os.path import isfile

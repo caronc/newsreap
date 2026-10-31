@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # A common NNTP Database management class for manipulating SQLAlchemy
 #
 # Copyright (C) 2015-2016 Chris Caron <lead2gold@gmail.com>
@@ -29,16 +27,16 @@ from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
 # The Group key used to save the database version
-VSP_VERSION_GROUP = u'newsreap.version'
+VSP_VERSION_GROUP = 'newsreap.version'
 VSP_VERSION_KEYS = (
-    (u'major', 1),
-    (u'minor', 0),
-    (u'patch', 0),
-    (u'build', 0),
+    ('major', 1),
+    ('minor', 0),
+    ('patch', 0),
+    ('build', 0),
 )
 
 # A default group is used for just common set(), get() retrievals
-VSP_DEFAULT_GROUP = u'newsreap.common'
+VSP_DEFAULT_GROUP = 'newsreap.common'
 
 # This one is used for testing since memory is destroyed once the program
 # exits
@@ -55,7 +53,7 @@ MEMORY_DATABASE_ENGINE = 'sqlite:///:memory:'
 Session = sessionmaker(autoflush=True, expire_on_commit=False)
 
 
-class Database(object):
+class Database:
     """
     A managment class to the NNTP Core Database manipulation.
     """
@@ -71,7 +69,7 @@ class Database(object):
         self.Vsp = vsp
 
         self._engine_str = MEMORY_DATABASE_ENGINE
-        if isinstance(engine, basestring):
+        if isinstance(engine, str):
             self._engine_str = engine
 
         self._session = None
@@ -98,8 +96,11 @@ class Database(object):
         """
         if self._engine is not None:
             logger.debug('Closing database engine %s.' % self)
+            # Only close what belongs to this database; other databases
+            # may still be in use
             self._session.expunge_all()
-            self._session.close_all()
+            self._session.close()
+            self._engine.dispose()
             self._engine = None
             self._session = None
 
@@ -145,11 +146,8 @@ class Database(object):
             #       and not by SQLAlchemy
             self._engine = create_engine(engine, echo=False)
 
-            # associate it with our custom Session class
-            Session.configure(bind=self._engine)
-
-            # Store our session
-            self._session = Session()
+            # Store our session (bound to our own engine)
+            self._session = Session(bind=self._engine)
 
         if reset is True:
             logger.debug('Destroying existing database...')
@@ -204,7 +202,7 @@ class Database(object):
                 try:
                     self.Base.metadata.create_all(self._engine)
 
-                except OperationalError, e:
+                except OperationalError as e:
                     logger.error('Database Initialization failed.')
                     logger.debug('Database Initialization error: %s' % str(e))
                     raise
@@ -296,6 +294,7 @@ class Database(object):
                 self._session.query(self.Vsp)\
                             .filter_by(group=group)\
                             .filter_by(key=key).delete()
+                self._session.commit()
                 return True
 
         except OperationalError:
@@ -313,17 +312,15 @@ class Database(object):
 
         """
 
-        response = None
-        try:
-            response = self._session.query(self.Vsp)\
-                        .filter_by(group=group)\
-                        .filter_by(key=key).one().value
+        entry = self._session.query(self.Vsp)\
+            .filter_by(group=group)\
+            .filter_by(key=key).first()
 
-        except IndexError:
+        if entry is None or entry.value is None:
             # Entry is simply missing
-            pass
+            return default
 
-        return response if response is not None else default
+        return entry.value
 
     def __del__(self):
         """
