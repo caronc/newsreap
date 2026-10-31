@@ -208,3 +208,16 @@ class HookManager_Test(TestBase):
         # Each hook still only holds its own function
         assert len(hook_a['my_hook']) == 1
         assert len(hook_b['my_hook']) == 1
+
+    def test_hook_names_can_be_iterated(self):
+        """
+        iterkeys() walks the hook names; 'in' checks them
+        """
+        hookm = HookManager()
+        hookm.add(Hook(name='first'))
+        hookm.add(Hook(name='second'))
+
+        assert sorted(hookm.iterkeys()) == ['first', 'second']
+        assert sorted(hookm.keys()) == ['first', 'second']
+        assert 'first' in hookm
+        assert 'third' not in hookm

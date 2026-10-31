@@ -76,7 +76,7 @@ def group_watch(ctx, groups):
     # to True and then we can compare to it
     pep8_e712 = False
 
-    for name, _id in list(groups.items()):
+    for name, _id in groups.items():
         # Remove the entry if we can otherwise we just gracefully move on
         if session.query(Group).filter(Group.id == _id)\
                 .filter(Group.watch == pep8_e712)\
@@ -120,7 +120,7 @@ def group_unwatch(ctx, groups):
     # to True and then we can compare to it
     pep8_e712 = True
 
-    for name, _id in list(groups.items()):
+    for name, _id in groups.items():
         # Remove the entry if we can otherwise we just gracefully move on
         if session.query(Group).filter(Group.id == _id)\
                 .filter(Group.watch == pep8_e712)\

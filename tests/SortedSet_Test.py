@@ -111,7 +111,7 @@ class SortedSet_Test(TestBase):
             s.pop()
             assert False
 
-        except KeyError:
+        except IndexError:
             pass
 
         s = sortedset([1, 2, 3])

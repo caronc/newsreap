@@ -41,7 +41,7 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from tests.TestBase import TestBase
 
-from tests.NNTPSocketServer import NNTPSocketServer
+from tests.FakeNNTPServer import FakeNNTPServer
 
 from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPIOStream import NNTPIOStream
@@ -62,33 +62,24 @@ class NNTPConnection_Test(TestBase):
         super().setUp()
 
         # Secure NNTP Server
-        self.nntps = NNTPSocketServer(
-            secure=True,
-        )
+        self.nntps = FakeNNTPServer(secure=True)
 
         # Insecure NNTP Server
-        self.nntp = NNTPSocketServer(
-            secure=False,
-        )
+        self.nntp = FakeNNTPServer(secure=False)
 
-        # Exit the server thread when the main thread terminates
-        self.nntps.daemon = True
-        self.nntp.daemon = True
-
-        # Start Our Server Threads
+        # Start our servers
         self.nntps.start()
         self.nntp.start()
 
         # Acquire our configuration
-        self.nttp_ipaddr, self.nntp_portno = \
-                self.nntp.local_connection_info()
+        self.nttp_ipaddr, self.nntp_portno = self.nntp.host, self.nntp.port
         self.nttps_ipaddr, self.nntps_portno = \
-                self.nntps.local_connection_info()
+            self.nntps.host, self.nntps.port
 
     def tearDown(self):
-        # Shutdown NNTP Dummy Servers Daemons
-        self.nntps.shutdown()
-        self.nntp.shutdown()
+        # Shutdown our test servers
+        self.nntps.stop()
+        self.nntp.stop()
 
         super().tearDown()
 
@@ -158,7 +149,7 @@ class NNTPConnection_Test(TestBase):
             port=self.nntps_portno,
             username='valid',
             password='invalid',
-            secure=False,
+            secure=True,
             join_group=False,
         )
         # Invalid Password
@@ -307,3 +298,55 @@ class NNTPConnection_Test(TestBase):
         assert sock.connect(timeout=5.0) is True
 
         # TODO
+
+    def test_dot_stuffing_across_chunks(self):
+        """
+        Lines starting with a dot are stuffed and unstuffed even when a
+        line starts at the edge of a chunk
+        """
+        sock = NNTPConnection()
+
+        stuffed = b''.join(sock._stuff([
+            '.header\r\n', b'body\r\n.', b'dot\r\n', b'\n.', b'x\r\n.\r\n']))
+        assert stuffed == \
+            b'..header\r\nbody\r\n..dot\r\n\n..x\r\n..\r\n'
+
+        # Text is encoded with our character set
+        assert b''.join(sock._stuff(['café'])) == b'caf\xe9'
+
+        sock._soft_reset()
+        restored = b''.join(sock._unstuff(chunk) for chunk in (
+            b'..header\r\nbody\r\n', b'..dot\r\n..', b'.\r\n'))
+        assert restored == b'.header\r\nbody\r\n.dot\r\n..\r\n'
+
+        # The 2 dots of a stuffed line can arrive in separate pieces
+        sock._soft_reset()
+        restored = b''.join(sock._unstuff(chunk) for chunk in (
+            b'first\r\n.', b'.second\r\n', b'.', b'.', b'.third\r\n'))
+        assert restored == b'first\r\n.second\r\n..third\r\n'
+
+        # Every way of splitting stuffed content gives the same result
+        wire = b'..a\r\nb\r\n...\r\n..\r\nc.d\r\n'
+        for cut in range(len(wire) + 1):
+            for cut2 in range(cut, len(wire) + 1):
+                sock._soft_reset()
+                restored = b''.join(sock._unstuff(chunk) for chunk in (
+                    wire[:cut], wire[cut:cut2], wire[cut2:]))
+                assert restored == b'.a\r\nb\r\n..\r\n.\r\nc.d\r\n', \
+                    (cut, cut2)
+
+    def test_end_of_data_must_be_on_its_own_line(self):
+        """
+        Only a line holding a single dot marks the end of the data
+        """
+        sock = NNTPConnection()
+        for data, expected in (
+                (b'220 ok\r\nbody\r\n.\r\n', True),
+                (b'220 ok\r\n.\r\n', True),
+                (b'220 ok\r\nbody\n.\n', True),
+                (b'220 ok\r\nends with a dot.\r\n', False),
+                (b'220 ok\r\nbody\r\n', False),
+                (b'.\r', False)):
+            sock._soft_reset()
+            sock._buffer.write(data)
+            assert sock._has_eod(len(data)) is expected, data

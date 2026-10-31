@@ -15,6 +15,8 @@
 import re
 from sortedcontainers import SortedDict as sorteddict
 from datetime import datetime
+from datetime import timedelta
+from email.utils import parsedate_tz
 from pytz import UTC
 from dateutil.tz import tzutc
 from dateutil.parser import parse
@@ -27,6 +29,51 @@ from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 import logging
 from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
+
+# The (RFC 5322) date format almost every article uses; these can be read
+# much faster than the free form dates we otherwise have to deal with
+#   ie: Sat, 01 Jan 2020 00:00:07 +0000
+RFC5322_DATE_RE = re.compile(
+    r'^\s*([A-Za-z]{3},\s*)?\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+'
+    r'\d{1,2}:\d{2}(:\d{2})?\s+[+-]\d{4}\s*$', re.ASCII)
+
+
+def parse_date(date):
+    """
+    Returns the (naive UTC) datetime of a date found in an article; None
+    is returned if the date can't be read.
+    """
+    if RFC5322_DATE_RE.match(date):
+        parsed = parsedate_tz(date)
+        if parsed is not None:
+            try:
+                return datetime(*parsed[:6]) - timedelta(seconds=parsed[9])
+
+            except (ValueError, OverflowError):
+                # Fall back to our slower (but more forgiving) parser
+                pass
+
+    try:
+        article_date = parse(date)
+
+    except (ValueError, TypeError, OverflowError):
+        try:
+            # We weren't able to parse the date
+            article_date = parse(date, fuzzy=True)
+
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+    if article_date.tzinfo is not None:
+        # ensure all times are naive
+        if isinstance(article_date.tzinfo, tzutc):
+            article_date = article_date.replace(tzinfo=None)
+        else:
+            article_date = article_date.astimezone(UTC)\
+                    .replace(tzinfo=None)
+
+    return article_date
+
 
 # Defines the parsing of an XOVER Response Entry
 NNTP_XOVER_RESPONSE_RE = re.compile(
@@ -124,30 +171,15 @@ class CodecArticleIndex(CodecBase):
             return None
 
         date = result.group('date').decode(self.encoding)
-        try:
-            # handle datetime
-            article_date = parse(date)
+        article_date = parse_date(date)
+        if article_date is None:
+            # It would be great if users of the product would email
+            # us these errors so we can work on making them better
+            logger.warning(
+                "Unparsable XOVER date '%s'" % (date),
+            )
+            article_date = datetime.fromtimestamp(0)
 
-        except (ValueError, TypeError, OverflowError):
-            try:
-                # We weren't able to parse the date
-                article_date = parse(date, fuzzy=True)
-
-            except (ValueError, TypeError, OverflowError):
-                # It would be great if users of the product would email
-                # us these errors so we can work on making them better
-                logger.warning(
-                    "Unparsable XOVER date '%s'" % (date),
-                )
-                article_date = datetime.fromtimestamp(0)
-
-        if article_date.tzinfo is not None:
-            # ensure all times are naive
-            if isinstance(article_date.tzinfo, tzutc):
-                article_date = article_date.replace(tzinfo=None)
-            else:
-                article_date = article_date.astimezone(UTC)\
-                        .replace(tzinfo=None)
         try:
             lines = int(result.group('lines'))
         except (TypeError, ValueError):

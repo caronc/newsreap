@@ -117,7 +117,8 @@ class sortedset(MutableSet):
         Removes and returns the entry at index (the last one by default)
         """
         if not self._list:
-            raise KeyError('pop from an empty set')
+            # Just like a list (and blist) does
+            raise IndexError('pop from an empty set')
         return self._list.pop(index)
 
     def clear(self):

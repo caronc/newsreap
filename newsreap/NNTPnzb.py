@@ -264,7 +264,7 @@ class NNTPnzb(NNTPContent):
                 if pretty:
                     indent = ''.ljust(self.padding_multiplier*2, self.padding)
 
-                for k, v in list(self.meta.items()):
+                for k, v in self.meta.items():
                     self.write('%s<meta type="%s">%s</meta>%s' % (
                         indent,
                         self.escape_xml(k),

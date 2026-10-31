@@ -91,3 +91,29 @@ class Codec_ArticleIndex(TestBase):
                 'XviD AC3-Osiris - Dawn of the Planet of the Apes ' + \
                 '2014 480p WebripXviD AC3.US-Osiris.nzb 241176 bytes (1/1)',
         }
+
+    def test_article_dates(self):
+        """
+        Dates are read into naive UTC datetimes; odd ones still work
+        """
+        from datetime import datetime
+        from newsreap.codecs.CodecArticleIndex import parse_date
+
+        # The common (RFC 5322) format
+        assert parse_date('Sat, 01 Feb 2020 10:11:12 +0000') == \
+            datetime(2020, 2, 1, 10, 11, 12)
+        assert parse_date('1 Feb 2020 10:11 -0130') == \
+            datetime(2020, 2, 1, 11, 41)
+        assert parse_date('Sun,02 Feb 2020 01:00:00 +0200') == \
+            datetime(2020, 2, 1, 23, 0)
+
+        # Less common formats
+        assert parse_date('11 Aug 2014 08:33:07 GMT') == \
+            datetime(2014, 8, 11, 8, 33, 7)
+        assert parse_date('2015-01-05 10:00') == datetime(2015, 1, 5, 10)
+        assert parse_date('Fri, 31 Jul 2015 22:12:03 -0000') == \
+            datetime(2015, 7, 31, 22, 12, 3)
+
+        # Garbage
+        assert parse_date('garbage') is None
+        assert parse_date('Mon, 31 Feb 2015 10:00:00 +0000') is None

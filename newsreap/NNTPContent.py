@@ -18,6 +18,7 @@ import weakref
 
 from os import unlink
 from os import fdopen
+from os import stat as os_stat
 from os.path import join
 from os.path import getsize
 from os.path import basename
@@ -55,6 +56,10 @@ from .NNTPSettings import DEFAULT_BLOCK_SIZE as BLOCK_SIZE
 import logging
 from .Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
+
+
+# How much of a file (in bytes) is read at a time when working out a digest
+DIGEST_BLOCK_SIZE = 1048576
 
 
 class NNTPFileMode:
@@ -245,10 +250,8 @@ class NNTPContent:
         # object as a reference.
         self._parent = None
 
-        # TODO: all md5, crc32, len() calls etc should all cache their results
-        # here and retrieve from here if present. If a write() or load() is
-        # made, the cache should be destroyed. The cache is only populated on
-        # demand.
+        # Our crc32, md5, sha1 and sha256 results are kept here so they're
+        # only calculated once. They're thrown away if the content changes.
         self._lazy_cache = {}
 
         # NNTPContent supports directory storing too. This is toggle in the
@@ -938,6 +941,10 @@ class NNTPContent:
 
         response = self.stream.write(data)
 
+        if self._lazy_cache:
+            # Our content changed
+            self._lazy_cache.clear()
+
         if not self._dirty:
             # Set dirty flag
             self._dirty = True
@@ -1111,27 +1118,56 @@ class NNTPContent:
                 yield data
             self.close()
 
+    def _digest(self, name, calculate):
+        """
+        Returns a cached digest (crc32, md5, etc) of our content.
+
+        - calculate(chunk_iterator) works the value out when it isn't
+          cached yet.
+        - The cached value is only used while the file's size and
+          modification time are unchanged.
+        """
+        if self.stream is not None and self._dirty is True:
+            self.stream.flush()
+            self._dirty = False
+
+        try:
+            st = os_stat(self.filepath)
+            signature = (st.st_size, st.st_mtime_ns)
+
+        except (OSError, TypeError):
+            # Not a file we can track; just calculate it
+            signature = None
+
+        cached = self._lazy_cache.get(name)
+        if signature is not None and cached and cached[0] == signature:
+            return cached[1]
+
+        if not self.open(mode=NNTPFileMode.BINARY_RO):
+            return None
+
+        # Always read from the start of our content
+        self.stream.seek(0, SEEK_SET)
+        value = calculate(
+            iter(lambda: self.stream.read(DIGEST_BLOCK_SIZE), b''))
+
+        if signature is not None:
+            self._lazy_cache[name] = (signature, value)
+
+        return value
+
     def crc32(self):
         """
         A little bit old-fashioned, but some encodings like yEnc require that
         a crc32 value be used.  This calculates it based on the file
         """
-        # block size defined as 2**16
-        block_size = 65536
-
-        # The mask to apply to all CRC checking
-        BIN_MASK = 0xffffffff
-
-        # Initialize
-        _crc = 0
-
-        if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in iter(lambda: self.stream.read(block_size), b''):
+        def calculate(chunks):
+            _crc = 0
+            for chunk in chunks:
                 _crc = crc32(chunk, _crc)
+            return format(_crc & 0xffffffff, '08x')
 
-            return format(_crc & BIN_MASK, '08x')
-
-        return None
+        return self._digest('crc32', calculate)
 
     def mime(self):
         """
@@ -1161,13 +1197,13 @@ class NNTPContent:
 
         If the file can't be accessed, then None is returned.
         """
-        md5 = hashlib.md5()
-        if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in \
-                    iter(lambda: self.stream.read(128*md5.block_size), b''):
-                md5.update(chunk)
-            return md5.hexdigest()
-        return None
+        def calculate(chunks):
+            digest = hashlib.md5()
+            for chunk in chunks:
+                digest.update(chunk)
+            return digest.hexdigest()
+
+        return self._digest('md5', calculate)
 
     def sha1(self):
         """
@@ -1175,13 +1211,13 @@ class NNTPContent:
 
         If the file can't be accessed, then None is returned.
         """
-        sha1 = hashlib.sha1()
-        if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in \
-                    iter(lambda: self.stream.read(128*sha1.block_size), b''):
-                sha1.update(chunk)
-            return sha1.hexdigest()
-        return None
+        def calculate(chunks):
+            digest = hashlib.sha1()
+            for chunk in chunks:
+                digest.update(chunk)
+            return digest.hexdigest()
+
+        return self._digest('sha1', calculate)
 
     def sha256(self):
         """
@@ -1189,13 +1225,13 @@ class NNTPContent:
 
         If the file can't be accessed, then None is returned.
         """
-        sha256 = hashlib.sha256()
-        if self.open(mode=NNTPFileMode.BINARY_RO):
-            for chunk in \
-                    iter(lambda: self.stream.read(128*sha256.block_size), b''):
-                sha256.update(chunk)
-            return sha256.hexdigest()
-        return None
+        def calculate(chunks):
+            digest = hashlib.sha256()
+            for chunk in chunks:
+                digest.update(chunk)
+            return digest.hexdigest()
+
+        return self._digest('sha256', calculate)
 
     def tell(self):
         """
@@ -1220,13 +1256,33 @@ class NNTPContent:
 
         return self.stream.tell()
 
+    def seek(self, offset, whence=SEEK_SET):
+        """
+        Moves to a new position in the stream (just like a file)
+
+        """
+        if not self.stream:
+            if not self.open(mode=NNTPFileMode.BINARY_RO):
+                return None
+
+        return self.stream.seek(offset, whence)
+
     def readline(self, *args, **kwargs):
         """
         Returns a single line from the stream
         """
         if not self.stream:
-            return ''
+            return b''
         return self.stream.readline(*args, **kwargs)
+
+    def readlines(self, *args, **kwargs):
+        """
+        Returns a list of lines from the stream; pass a size hint to only
+        read about that many bytes worth of lines
+        """
+        if not self.stream:
+            return []
+        return self.stream.readlines(*args, **kwargs)
 
     def __next__(self):
         """

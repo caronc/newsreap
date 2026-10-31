@@ -40,6 +40,8 @@ from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.NNTPArticle import NNTPArticle
 from newsreap.codecs.CodecYenc import yenc_encode
 from newsreap.codecs.CodecYenc import yenc_decode
+import newsreap.codecs.CodecYenc as CodecYencModule
+from io import BytesIO
 
 
 class CodecYENC_Test(TestBase):
@@ -745,3 +747,84 @@ class CodecYENC_Test(TestBase):
             with open(binary_filepath, 'rb') as fd:
                 assert decoded.getvalue() == fd.read()
             assert decoded.is_valid() is True
+
+    def _encoded(self, data, name='file.bin', part=None):
+        """
+        Returns yEnc encoded bytes (begin, part, data and end lines)
+        """
+        encoded, column = yenc_encode(data)
+        if column:
+            encoded += b'\r\n'
+
+        head = b'=ybegin line=128 size=%d name=%s\r\n' % (
+            len(data), name.encode())
+        if part:
+            head = b'=ybegin part=%d line=128 size=%d name=%s\r\n' % (
+                part, len(data), name.encode())
+            head += b'=ypart begin=1 end=%d\r\n' % len(data)
+
+        return head + encoded + b'=yend size=%d\r\n' % len(data)
+
+    def test_back_to_back_parts_in_one_stream(self):
+        """
+        Each decode() stops at the end of its part, leaving the rest
+        """
+        first = bytes(range(256)) * 50
+        second = b'second' * 1000
+        stream = BytesIO(
+            self._encoded(first, 'first.bin') +
+            self._encoded(second, 'second.bin') +
+            b'-- \r\nA signature\r\n')
+
+        decoded = CodecYenc(work_dir=self.test_dir).decode(stream)
+        assert decoded.filename == 'first.bin'
+        assert decoded.getvalue() == first
+        assert decoded.is_valid() is True
+
+        decoded = CodecYenc(work_dir=self.test_dir).decode(stream)
+        assert decoded.filename == 'second.bin'
+        assert decoded.getvalue() == second
+
+        # Whatever follows is left for someone else
+        assert stream.read() == b'-- \r\nA signature\r\n'
+
+    def test_decoding_in_small_blocks(self):
+        """
+        Block sizes don't change the result (escapes can be split up)
+        """
+        data = bytes(range(256)) * 200
+        encoded = self._encoded(data)
+
+        original = CodecYencModule.YENC_DECODE_BLOCK_SIZE
+        try:
+            for size in (1, 7, 129, 4096):
+                CodecYencModule.YENC_DECODE_BLOCK_SIZE = size
+                decoder = CodecYenc(work_dir=self.test_dir)
+                decoded = decoder.decode(BytesIO(encoded))
+                assert decoded.getvalue() == data
+                assert decoder.crc32() == decoded.crc32()
+
+        finally:
+            CodecYencModule.YENC_DECODE_BLOCK_SIZE = original
+
+    def test_decoding_arrives_in_pieces(self):
+        """
+        Data can be handed to the decoder a piece at a time (as it arrives)
+        """
+        data = bytes(range(256)) * 100
+        lines = self._encoded(data, part=1).split(b'\r\n')
+
+        decoder = CodecYenc(work_dir=self.test_dir)
+        stream = BytesIO()
+        result = True
+        for start in range(0, len(lines), 10):
+            # Add a few more lines to our stream and decode what is there
+            ptr = stream.tell()
+            stream.seek(0, 2)
+            stream.write(b''.join(
+                line + b'\r\n' for line in lines[start:start + 10]))
+            stream.seek(ptr)
+            result = decoder.decode(stream)
+
+        assert result.getvalue() == data
+        assert result.is_valid() is True

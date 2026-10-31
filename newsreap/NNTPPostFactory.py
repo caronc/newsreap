@@ -1047,7 +1047,7 @@ class NNTPPostFactory:
                 }
 
         # Update our verification map
-        for key, meta in list(verification_map.items()):
+        for key, meta in verification_map.items():
             # Ensure we're done
             meta['response'].wait()
 
@@ -1257,7 +1257,7 @@ class NNTPPostFactory:
             )
 
         # Store our header(s) associated with the article now
-        for _key, _value in list(article.header.items()):
+        for _key, _value in article.header.items():
             session.add(
                 StagedArticleHeader(
                     key=str(_key),

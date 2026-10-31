@@ -40,8 +40,8 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from tests.TestBase import TestBase
 
-from tests.NNTPSocketServer import NNTPSocketServer
-from tests.NNTPSocketServer import NNTP_TEST_VAR_PATH as VAR_PATH
+from tests.FakeNNTPServer import FakeNNTPServer
+from tests.FakeNNTPServer import VAR_PATH
 
 from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPIOStream import NNTPIOStream
@@ -57,71 +57,42 @@ class NNTPYencArticle_Test(TestBase):
         super().setUp()
 
         # Secure NNTP Server
-        self.nntps = NNTPSocketServer(
-            secure=True,
-            join_group=True,
-        )
+        self.nntps = FakeNNTPServer(secure=True, join_group=True)
 
         # Insecure NNTP Server
-        self.nntp = NNTPSocketServer(
-            secure=False,
-            join_group=True,
-        )
+        self.nntp = FakeNNTPServer(secure=False, join_group=True)
 
         # Common Group Name
         self.common_group = 'alt.binaries.test'
 
         # Map Articles (to groups) for fetching
-        self.nntp.map(
-            article_id='5',
-            groups=(self.common_group, ),
-            filepath=join(VAR_PATH, '00000005.ntx'),
-        )
-        self.nntps.map(
-            article_id='5',
-            groups=(self.common_group, ),
-            filepath=join(VAR_PATH, '00000005.ntx'),
-        )
+        self.nntp.add_article(
+            '5', join(VAR_PATH, '00000005.ntx'), groups=self.common_group)
+        self.nntps.add_article(
+            '5', join(VAR_PATH, '00000005.ntx'), groups=self.common_group)
 
-        self.nntp.map(
-            article_id='20',
-            groups=(self.common_group, ),
-            filepath=join(VAR_PATH, '00000020.ntx'),
-        )
-        self.nntp.map(
-            article_id='21',
-            groups=(self.common_group, ),
-            filepath=join(VAR_PATH, '00000021.ntx'),
-        )
-        self.nntps.map(
-            article_id='20',
-            groups=(self.common_group, ),
-            filepath=join(VAR_PATH, '00000020.ntx'),
-        )
-        self.nntps.map(
-            article_id='21',
-            groups=(self.common_group, ),
-            filepath=join(VAR_PATH, '00000021.ntx'),
-        )
+        self.nntp.add_article(
+            '20', join(VAR_PATH, '00000020.ntx'), groups=self.common_group)
+        self.nntp.add_article(
+            '21', join(VAR_PATH, '00000021.ntx'), groups=self.common_group)
+        self.nntps.add_article(
+            '20', join(VAR_PATH, '00000020.ntx'), groups=self.common_group)
+        self.nntps.add_article(
+            '21', join(VAR_PATH, '00000021.ntx'), groups=self.common_group)
 
-        # Exit the server thread when the main thread terminates
-        self.nntps.daemon = True
-        self.nntp.daemon = True
-
-        # Start Our Server Threads
+        # Start our servers
         self.nntps.start()
         self.nntp.start()
 
         # Acquire our configuration
-        self.nttp_ipaddr, self.nntp_portno = \
-                self.nntp.local_connection_info()
+        self.nttp_ipaddr, self.nntp_portno = self.nntp.host, self.nntp.port
         self.nttps_ipaddr, self.nntps_portno = \
-                self.nntps.local_connection_info()
+            self.nntps.host, self.nntps.port
 
     def tearDown(self):
-        # Shutdown NNTP Dummy Servers Daemons
-        self.nntps.shutdown()
-        self.nntp.shutdown()
+        # Shutdown our test servers
+        self.nntps.stop()
+        self.nntp.stop()
 
         super().tearDown()
 

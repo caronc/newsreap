@@ -221,6 +221,16 @@ class SocketBase:
         # es = Error Sockets
         if self.socket is not None:
             try:
+                if self.socket.pending():
+                    # Encrypted (SSL) data was already received and
+                    # decrypted; select() can't see it
+                    return True
+
+            except (AttributeError, ValueError, OSError):
+                # Not a secure socket
+                pass
+
+            try:
                 rs, _, es = select([self.socket], [], [], timeout)
             except (SelectError, socket.error) as e:
                 if e.errno == errno.EBADF:
@@ -775,6 +785,12 @@ class SocketBase:
         if retry_wait:
             # Make sure we're not blocking
             self.socket.setblocking(False)
+
+        elif timeout:
+            # Block, but never for longer than we were asked to; this
+            # matters when only part of an encrypted (SSL) block arrived
+            self.socket.settimeout(timeout)
+
         else:
             self.socket.setblocking(True)
 

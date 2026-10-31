@@ -34,6 +34,15 @@
 #       enabled: True
 #       encoding: ISO-8859-1
 #
+#       # Optional: how many times a failed download is retried and when
+#       # a connection is treated as dead (no data for stall_timeout
+#       # seconds, or averaging under min_rate bytes per second for
+#       # slow_window seconds)
+#       retries: 3
+#       stall_timeout: 60
+#       min_rate: 1024
+#       slow_window: 120
+#
 #   # have you got another server you want to add as a backup?
 #   # you can add as many more as you want here, just follow
 #   # the proper yaml formating and indentation; keep adding
@@ -240,6 +249,25 @@ DEFAULT_GLOBAL_VARIABLES = {
 # Keyword used in configuration to host all of the defined NNTP Servers
 GLOBAL_KEY = 'global'
 
+# How many more times a command is tried (reconnecting first if needed) when
+# the connection drops, stalls or slows to a crawl.  We give up after this.
+NNTP_RETRIES = 3
+
+# Seconds to wait before retrying; this doubles after each failed attempt
+NNTP_RETRY_WAIT = 2.0
+
+# A connection that sends us nothing at all for this many seconds while we
+# wait on a response is treated as dead.  Set to 0 to wait forever.
+NNTP_STALL_TIMEOUT = 60.0
+
+# A response arriving slower than NNTP_MIN_TRANSFER_RATE (bytes per second)
+# on average over NNTP_SLOW_RATE_WINDOW seconds is treated as dead too.
+# - The window is long on purpose so a short slow down (someone streaming
+#   video, a router throttling usenet traffic) doesn't trip it.
+# - Set the rate to 0 to turn this check off.
+NNTP_MIN_TRANSFER_RATE = 1024
+NNTP_SLOW_RATE_WINDOW = 120.0
+
 # Server Variables mapped to their defaults if not found.
 # if None is specified, then the field is mandatory or we'll abort
 DEFAULT_SERVER_VARIABLES = {
@@ -258,6 +286,13 @@ DEFAULT_SERVER_VARIABLES = {
 
     # Defines The encoding thing such as the subject are encoded as
     'encoding': NNTP_DEFAULT_ENCODING,
+
+    # How often we retry and when a connection is considered dead
+    'retries': NNTP_RETRIES,
+    'retry_wait': NNTP_RETRY_WAIT,
+    'stall_timeout': NNTP_STALL_TIMEOUT,
+    'min_rate': NNTP_MIN_TRANSFER_RATE,
+    'slow_window': NNTP_SLOW_RATE_WINDOW,
 }
 
 # Keyword used in configuration to host all of the defined NNTP Servers
@@ -590,17 +625,17 @@ class NNTPSettings(NNTPDatabase):
         # Strip out only the information we're not interested in
         self.nntp_processing.update({
             k: self.cfg_data[PROCESSING_KEY][k]
-            for k in list(DEFAULT_PROCESSING_VARIABLES.keys())
+            for k in DEFAULT_PROCESSING_VARIABLES
             if k in self.cfg_data[PROCESSING_KEY]})
 
         self.nntp_database.update({
             k: self.cfg_data[DATABASE_KEY][k]
-            for k in list(DEFAULT_DATABASE_VARIABLES.keys())
+            for k in DEFAULT_DATABASE_VARIABLES
             if k in self.cfg_data[DATABASE_KEY]})
 
         self.nntp_posting.update({
             k: self.cfg_data[POSTING_KEY][k]
-            for k in list(DEFAULT_POSTING_VARIABLES.keys())
+            for k in DEFAULT_POSTING_VARIABLES
             if k in self.cfg_data[POSTING_KEY]})
 
         # Parse our content
@@ -768,7 +803,7 @@ class NNTPSettings(NNTPDatabase):
 
             # we build our mask once for speed
             self._mask_re = re.compile(
-                r'(' + '|'.join(list(self._mask_map.keys())) + r')',
+                r'(' + '|'.join(self._mask_map) + r')',
                 re.IGNORECASE | re.ASCII,
             )
 
@@ -778,7 +813,7 @@ class NNTPSettings(NNTPDatabase):
         if mask_map:
             # a mask map was provided as input too
             extra_mask_re = re.compile(
-                r'(' + '|'.join(list(mask_map.keys())) + r')',
+                r'(' + '|'.join(mask_map) + r')',
                 re.IGNORECASE | re.ASCII,
             )
 

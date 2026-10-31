@@ -38,7 +38,7 @@ BIN_MASK = 0xffffffff
 
 class CodecBase:
 
-    def __init__(self, work_dir=None, throttle_cycles=8000, throttle_time=0.2,
+    def __init__(self, work_dir=None, throttle_cycles=8000, throttle_time=0,
                  max_bytes=0, *args, **kwargs):
         """
         The dir identfies the directory to store our sessions in
@@ -100,16 +100,21 @@ class CodecBase:
         self.throttle_time = throttle_time
         self.throttle_iter = 0
 
-    def decode_loop(self):
+    def decode_loop(self, count=1):
         """
-        Throttle system usage
+        Lets other workers (greenlets) run while we decode
 
-        This call should exist within the while() loop of all decode() calls
+        - Every `throttle_cycles` passes we pause for `throttle_time`
+          seconds; a pause of zero simply gives the others a turn.
+        - count is the number of passes (lines) just handled.
+        - This call should exist within the while() loop of all decode()
+          calls.
         """
         # TODO: Generate some statistics here too based on lines processed
 
-        self.throttle_iter += 1
-        if ((self.throttle_cycles % self.throttle_iter) == 0):
+        before = self.throttle_iter // self.throttle_cycles
+        self.throttle_iter += count
+        if self.throttle_iter // self.throttle_cycles != before:
             sleep(self.throttle_time)
         return True
 

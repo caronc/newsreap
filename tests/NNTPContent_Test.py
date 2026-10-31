@@ -50,6 +50,7 @@ from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import mkdir
 from newsreap.Utils import stat
 from newsreap.Utils import SEEK_SET
+import newsreap.NNTPContent as NNTPContentModule
 
 
 class NNTPContent_Test(TestBase):
@@ -834,3 +835,71 @@ class NNTPContent_Test(TestBase):
         content.write(b'raw\r\n')
         assert content.getvalue() == b'caf\xc3\xa9\r\nraw\r\n'
         assert str(content) == 'caf\u00e9\r\nraw\r\n'
+
+    def test_digests_are_calculated_once(self):
+        """
+        crc32/md5/sha1/sha256 are remembered until the content changes
+        """
+        tmp_file = join(self.tmp_dir, 'NNTPContent_Test.digest', 'my.file')
+        assert self.touch(tmp_file, size='64K', random=True)
+
+        content = NNTPBinaryContent(tmp_file, work_dir=self.tmp_dir)
+        first = (content.crc32(), content.md5(), content.sha1(),
+                 content.sha256())
+
+        # Count how much gets read for the second round
+        reads = []
+        original = NNTPContentModule.DIGEST_BLOCK_SIZE
+        stream_read = content.stream.read
+
+        def counting_read(*args):
+            reads.append(1)
+            return stream_read(*args)
+
+        content.stream.read = counting_read
+        try:
+            assert first == (content.crc32(), content.md5(),
+                             content.sha1(), content.sha256())
+            assert reads == []
+
+        finally:
+            content.stream.read = stream_read
+            NNTPContentModule.DIGEST_BLOCK_SIZE = original
+
+        # Writing to the content throws our cached values away
+        content.open(mode='r+b', eof=True)
+        content.write(b'more data')
+        content.close()
+        assert content.crc32() != first[0]
+        assert content.md5() != first[1]
+
+    def test_digests_notice_outside_changes(self):
+        """
+        A file changed by something else gets new digests
+        """
+        tmp_file = join(self.tmp_dir, 'NNTPContent_Test.outside', 'my.file')
+        assert self.touch(tmp_file, size='1K', random=True)
+
+        content = NNTPBinaryContent(tmp_file, work_dir=self.tmp_dir)
+        before = content.md5()
+
+        with open(tmp_file, 'ab') as fd:
+            fd.write(b'appended')
+
+        assert content.md5() != before
+
+    def test_content_can_be_read_like_a_file(self):
+        """
+        seek(), readline() and readlines() behave like a file's
+        """
+        content = NNTPAsciiContent(work_dir=self.tmp_dir)
+        assert content.readline() == b''
+        assert content.readlines() == []
+
+        content.write(b'line 1\nline 2\nline 3\n')
+        content.seek(0)
+        assert content.readline() == b'line 1\n'
+        assert content.readlines() == [b'line 2\n', b'line 3\n']
+
+        content.seek(0)
+        assert content.readlines(4) == [b'line 1\n']

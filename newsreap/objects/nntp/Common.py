@@ -144,6 +144,6 @@ def get_groups(session, lookup=None, watched=False):
                 results = groups
             else:
                 # append to our existing results
-                results = dict(list(results.items()) + list(groups.items()))
+                results.update(groups)
 
     return results

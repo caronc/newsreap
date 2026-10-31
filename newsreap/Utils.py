@@ -911,7 +911,7 @@ def parse_list(*args):
 
     # apply as well as make the list unique by converting it
     # to a set() first. filter() eliminates any empty entries
-    return list(filter(bool, list(set(result))))
+    return [x for x in set(result) if x]
 
 
 def find(search_dir, regex_filter=None, prefix_filter=None,
@@ -967,7 +967,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
     if isinstance(search_dir, (sortedset, set, list, tuple)):
         for _dir in search_dir:
             # use recursion to build a master (unique) list
-            files = dict(list(files.items()) + list(find(
+            files.update(find(
                 search_dir=_dir,
                 regex_filter=regex_filter,
                 prefix_filter=prefix_filter,
@@ -981,7 +981,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 # Internal Current Directory Depth tracking
                 __current_depth=current_depth,
                 __root_dir=root_dir,
-            ).items()))
+            ))
         return files
 
     elif not isinstance(search_dir, str):
@@ -1127,7 +1127,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 continue
 
             # use recursion to build a master (unique) list
-            files = dict(list(files.items()) + list(find(
+            files.update(find(
                 search_dir=fullpath,
                 regex_filter=regex_filter,
                 prefix_filter=prefix_filter,
@@ -1141,7 +1141,7 @@ def find(search_dir, regex_filter=None, prefix_filter=None,
                 # Internal Current Directory Depth tracking
                 __current_depth=current_depth + 1,
                 __root_dir=root_dir,
-            ).items()))
+            ))
             continue
 
         elif not isfile(fullpath):
@@ -1273,7 +1273,7 @@ def parse_paths(*args):
 
     # apply as well as make the list unique by converting it
     # to a set() first. filter() eliminates any empty entries
-    return list(filter(bool, list(set([tidy_path(p) for p in result]))))
+    return [x for x in set(tidy_path(p) for p in result) if x]
 
 
 @contextmanager
@@ -1368,7 +1368,7 @@ def hexdump(src, length=16, sep='.'):
     allowed = digits + ascii_letters + punctuation + ' '
 
     print_map = ''.join(((x if x in allowed else '.')
-                        for x in map(chr, list(range(256)))))
+                        for x in map(chr, range(256))))
     lines = []
 
     for c in range(0, len(src), length):

@@ -124,9 +124,27 @@ class NNTPHeader(NNTPMetaContent):
 
     def keys(self):
         """
-        Mimic Dictionary:  dict.keys()
+        Mimic Dictionary:  dict.keys() (a view; no list is built)
         """
-        return list(self.content.keys())
+        return self.content.keys()
+
+    def iterkeys(self):
+        """
+        Iterate over our header keys
+        """
+        return iter(self.content)
+
+    def itervalues(self):
+        """
+        Iterate over our header values
+        """
+        return iter(self.content.values())
+
+    def iteritems(self):
+        """
+        Iterate over our header (key, value) pairs
+        """
+        return iter(self.content.items())
 
     def key(self):
         """
@@ -137,15 +155,15 @@ class NNTPHeader(NNTPMetaContent):
 
     def values(self):
         """
-        Mimic Dictionary:  dict.values()
+        Mimic Dictionary:  dict.values() (a view; no list is built)
         """
-        return list(self.content.values())
+        return self.content.values()
 
     def items(self):
         """
-        Mimic Dictionary:  dict.items()
+        Mimic Dictionary:  dict.items() (a view; no list is built)
         """
-        return list(self.content.items())
+        return self.content.items()
 
     def pop(self, key, d=None):
         """
@@ -226,6 +244,12 @@ class NNTPHeader(NNTPMetaContent):
         Returns the number of header entries
         """
         return len(self.content)
+
+    def __iter__(self):
+        """
+        Iterate over our header keys (just like a dictionary)
+        """
+        return iter(self.content)
 
     def __contains__(self, key):
         """

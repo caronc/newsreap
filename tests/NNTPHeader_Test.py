@@ -175,3 +175,24 @@ class NNTPHeader_Test(TestBase):
         # Changing the copy leaves the original alone
         copied['Subject'] = 'Another subject'
         assert hdr['Subject'] == 'A subject'
+
+    def test_header_iterates_like_a_dictionary(self):
+        """
+        Keys, values and items are views; iter*() versions iterate
+        """
+        hdr = NNTPHeader(work_dir=self.tmp_dir)
+        hdr['Subject'] = 'A subject'
+        hdr['From'] = 'l2g@nuxref.com'
+
+        assert list(hdr) == ['Subject', 'From']
+        assert list(hdr.iterkeys()) == ['Subject', 'From']
+        assert list(hdr.itervalues()) == ['A subject', 'l2g@nuxref.com']
+        assert list(hdr.iteritems()) == [
+            ('Subject', 'A subject'), ('From', 'l2g@nuxref.com')]
+
+        # Views reflect changes without being built again
+        keys = hdr.keys()
+        hdr['Message-ID'] = '<abc@example.com>'
+        assert 'Message-ID' in keys
+        assert len(hdr.values()) == 3
+        assert ('From', 'l2g@nuxref.com') in hdr.items()

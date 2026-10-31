@@ -23,6 +23,8 @@ from os.path import abspath
 from os.path import expanduser
 from io import BytesIO
 from datetime import datetime
+from time import monotonic
+from gevent import sleep
 from newsreap.SortedSet import sortedset
 import weakref
 
@@ -48,7 +50,11 @@ from .Utils import SEEK_END
 from .NNTPnzb import NNTPnzb
 from .NNTPSettings import DEFAULT_TMP_DIR
 from .NNTPSettings import NNTP_EOL
-from .NNTPSettings import NNTP_EOD
+from .NNTPSettings import NNTP_RETRIES
+from .NNTPSettings import NNTP_RETRY_WAIT
+from .NNTPSettings import NNTP_STALL_TIMEOUT
+from .NNTPSettings import NNTP_MIN_TRANSFER_RATE
+from .NNTPSettings import NNTP_SLOW_RATE_WINDOW
 
 # Codecs
 # These define the messages themselves.
@@ -72,6 +78,14 @@ EOD = '\r\n.'
 # These are applied to the raw (bytes) data read from the server
 EOL_RE = re.compile(br'([\r]?\n)', re.ASCII)
 EOD_RE = re.compile(br'(\.([\r]?\n))$', re.ASCII)
+
+# The end of data marker (a line holding just a dot) at the very end of
+# what we've received
+EOD_LINE_RE = re.compile(br'\n\.\r?\n$', re.ASCII)
+
+# Commands that are always answered by a single line even though their
+# response code (211) can also start a multi-line response (LISTGROUP)
+SINGLE_LINE_COMMAND_RE = re.compile(r'^\s*GROUP\s', re.IGNORECASE | re.ASCII)
 
 # Splitting doesn't work well with the parenthesis
 # the below fixes this
@@ -192,7 +206,11 @@ class NNTPConnection(SocketBase):
                  iostream=NNTPIOStream.RFC3977_GZIP,
                  join_group=False, use_body=False, use_head=True,
                  encoding=None, work_dir=None,
-                 filters=None, hooks=None, *args, **kwargs):
+                 filters=None, hooks=None, retries=NNTP_RETRIES,
+                 retry_wait=NNTP_RETRY_WAIT,
+                 stall_timeout=NNTP_STALL_TIMEOUT,
+                 min_rate=NNTP_MIN_TRANSFER_RATE,
+                 slow_window=NNTP_SLOW_RATE_WINDOW, *args, **kwargs):
         """
         Initialize NNTP Connection
 
@@ -235,6 +253,19 @@ class NNTPConnection(SocketBase):
         some cases. By default this is set to False so we can acquire as much
         information on the article we're retrieving as we can dispite the
         small overhead that it comes with.
+
+        retries / retry_wait
+        --------------------
+        How many more times a failed fetch is tried (reconnecting first) and
+        how long to wait before the first retry (doubled each time after).
+
+        stall_timeout / min_rate / slow_window
+        --------------------------------------
+        When a connection is treated as dead (and retried):
+          - stall_timeout: seconds without receiving anything at all
+          - min_rate / slow_window: average bytes per second over the window
+            dropped below min_rate
+        Setting any of these to 0 turns that check off.
         """
 
         # get connection mode
@@ -263,6 +294,13 @@ class NNTPConnection(SocketBase):
 
         # Initialize the Socket Base Class
         super().__init__(*args, **kwargs)
+
+        # Retry and dead connection detection settings
+        self.retries = max(0, int(retries))
+        self.retry_wait = max(0.0, float(retry_wait))
+        self.stall_timeout = max(0.0, float(stall_timeout))
+        self.min_rate = max(0, int(min_rate))
+        self.slow_window = max(0.0, float(slow_window))
 
         # Store the default encoding
         self.encoding = encoding
@@ -653,19 +691,18 @@ class NNTPConnection(SocketBase):
 
         # If we reach here we're read to go
         xfer_total_bytes = 0
-        for chunk in post_iter:
-            if isinstance(chunk, str):
-                # Headers are text; encode them using our character set
-                chunk = chunk.encode(self.encoding)
-
+        chunk = b''
+        for chunk in self._stuff(post_iter):
             xfer_bytes = super().send(chunk)
             if xfer_bytes != len(chunk):
                 # uh-oh
                 return NNTPResponse(436, 'Transfer failed.')
             xfer_total_bytes += xfer_bytes
 
-        # Send our EOD and capture our response
-        response = self.send(NNTP_EOL + NNTP_EOD)
+        # Send our end of data marker (a line holding just a dot) and
+        # capture our response; send() adds the line ending for us
+        response = self.send(
+            '.' if chunk.endswith(b'\n') else NNTP_EOL + '.')
 
         return response
 
@@ -794,7 +831,7 @@ class NNTPConnection(SocketBase):
             # Send LIST ACTIVE command
             response = self.send('LIST ACTIVE', decoders=[
                 CodecGroups(work_dir=self.work_dir),
-            ])
+            ], retries=None)
             if not response.is_success(multiline=True):
                 logger.error('Failed to interpret NNTP LIST ACTIVE response.')
                 # could not retrieve list
@@ -913,132 +950,97 @@ class NNTPConnection(SocketBase):
         refdate must be a datetime object.
 
         How it's done:
-        Using recursion; we drill down to a specific location but
-        since usenet 'sort-of' sorted by time. Once we get within
-        X records (defined by a global variable) we need to scan
-        within those results to match our time (or as close as we
-        can get to it without going over. Since our content is
-        stored in a btree; this is relatively speedy.
+        - Usenet articles are (more or less) numbered in the order they
+          were posted, so we binary search the article numbers.
+        - Each step fetches a small window of overview (XOVER) entries from
+          the middle of what is left and decides which half our date is in.
+        - Article numbers (not positions) are used since groups often have
+          gaps where articles have expired or were removed.
+
+        Returns the first article number posted at (or after) refdate, or
+        -1 if there isn't one.
 
         """
 
-        if head is None:
-            # Initial Entry
-            head = self.group_head
-
-        if tail is None:
-            # Initial Entry
-            tail = self.group_tail
+        lo = self.group_head if head is None else head
+        hi = self.group_tail if tail is None else tail
 
         logger.debug('Scanning for index at %s in %d article(s)' % (
             refdate.strftime('%Y-%m-%d %H:%M:%S'),
-            tail - head,
+            hi - lo,
         ))
 
-        # initalize filter count
-        filter_count = tail - head
+        # Our date in the same format as our (date sorted) overview keys
+        _refdate = refdate.strftime('%Y%m%d%H%M%S:0000000000')
 
-        # Get the middle
-        start = head + (filter_count // 2) \
-            - (NNTP_FETCH_BY_DATE_MAX_MISSES // 2)
-        end = start + min(NNTP_FETCH_BY_DATE_MAX_MISSES, filter_count)
+        # The best match found so far
+        best = -1
 
-        response = self.xover(
-            start=start,
-            end=end - 1,
-            sort=XoverGrouping.BY_TIME,
-        )
+        window = NNTP_FETCH_BY_DATE_MAX_MISSES
 
-        if response is None:
-            # Nothing Retrieved
-            return -1
-            # if response.code != 423:
-            #    # 423 means there were no more items to fetch
-            #    # this is a common error that even this class produces
-            #    # and therefore we do not need to create a verbose
-            #    # message from it.
-            #    logger.error('NNTP Server responded %s' % response)
-            # return -1
+        # How wide a window it took to find articles last time; groups
+        # with lots of gaps need wider windows
+        found_size = window
 
-        # Deal with our response
-        if len(response):
-            # Get string equivalent
-            _refdate = refdate.strftime('%Y%m%d%H%M%S:0000000000')
+        while hi - lo >= window:
+            mid = (lo + hi) // 2
 
-            # Get keys
-            # (this returns a sorted list of keys): Big O(n)
-            # This is 'very' fast operation since we're not dealing with a
-            # dict()
-            _refkeys = list(response.keys())
+            # Grab a few entries starting at our middle; if there is a gap
+            # in the article numbers here, keep widening our window
+            size = max(window, found_size // 2)
+            while True:
+                end = min(mid + size - 1, hi)
+                response = self.xover(
+                    start=mid, end=end, sort=XoverGrouping.BY_TIME)
 
-            # logger.debug('total=%d, left=%s, right=%s, ref=%s' % (
-            #    end-start,
-            #    _refkeys[0],
-            #    _refkeys[-1],
-            #    _refdate,
-            # ))
+                if response is None and not self.connected:
+                    # We lost our connection
+                    return -1
 
-            #
-            # Decisions
-            #
-            if end - start < NNTP_FETCH_BY_DATE_MAX_MISSES and \
-               len(_refkeys) < NNTP_FETCH_BY_DATE_MAX_MISSES:
-                # We're in great shape if we reach here
-                # It means we've narrowed off our search to just
-                # the small window for our match
-                return _refkeys.bisect_left(_refdate) + start
+                if response or end >= hi:
+                    break
 
-            elif _refkeys[-1] < _refdate:
-                # look closer to the tail (our right)
-                logger.debug('%s > %s / JUMP RIGHT' % (
-                    _refdate,
-                    _refkeys[-1],
-                ))
+                size *= 2
 
-                if tail - end > 0:
-                    result = self._seek_by_date(refdate, end - 1, tail)
-                else:
-                    result = tail
+            found_size = size
 
-                while result < 0:
-                    # SHIFT LEFT
-                    logger.debug('SHIFT LEFT')
-                    tail -= ((tail - end) // 2)
-                    if tail - end > 0:
-                        result = self._seek_by_date(refdate, end - 1, tail)
-                    else:
-                        result = tail
-                        break
+            if not response:
+                # Nothing exists from our middle onwards
+                hi = mid - 1
+                continue
 
-                return result
+            pos = response.bisect_left(_refdate)
+            if pos == 0:
+                # Everything here is newer; our match is either the first
+                # article we saw or something before our middle
+                best = min(e['article_no'] for e in response.values())
+                hi = mid - 1
 
-            elif _refkeys[0] >= _refdate:
-                # look closer to the front
-                logger.debug('%s < %s / JUMP LEFT' % (
-                    _refdate,
-                    _refkeys[0],
-                ))
+            elif pos == len(response):
+                # Everything here is older; our match comes afterwards
+                lo = max(e['article_no'] for e in response.values()) + 1
 
-                if start - head > 1:
-                    result = self._seek_by_date(refdate, head, start)
-                else:
-                    result = start
+            else:
+                # Our date falls within what we retrieved
+                return response.values()[pos]['article_no']
 
-                while result < 0:
-                    # SHIFT RIGHT
-                    logger.debug('SHIFT RIGHT')
-                    head += ((start - head) // 2)
-                    if start - head > 1:
-                        result = self._seek_by_date(refdate, head, start)
-                    else:
-                        result = start
-                        break
+            if hi - lo < window:
+                break
 
-                return result
+        if lo > hi:
+            return best
 
-        # We recursively scanned too far in one
-        # direction; we need to
-        return -1
+        # We've narrowed our search down to just a few articles
+        response = self.xover(start=lo, end=hi, sort=XoverGrouping.BY_TIME)
+        if not response:
+            return best
+
+        pos = response.bisect_left(_refdate)
+        if pos == len(response):
+            # Nothing here was posted at (or after) our date
+            return best
+
+        return response.values()[pos]['article_no']
 
     def seek(self, index, whence=None):
         """
@@ -1258,7 +1260,7 @@ class NNTPConnection(SocketBase):
             return response.decoded.pop().content
 
         except IndexError:
-            # TODO: Debug; wtf is going on
+            # The server had no articles in the range we asked for
             return None
 
     def stat(self, id, full=None, group=None):
@@ -1342,7 +1344,7 @@ class NNTPConnection(SocketBase):
         """
 
         if not full:
-            response = self.send('STAT <%s>' % id)
+            response = self.send('STAT <%s>' % id, retries=None)
             if response.is_success(multiline=False):
                 # we're good to go, return what we do know so it fits
                 results = NNTPHeader()
@@ -1359,6 +1361,7 @@ class NNTPConnection(SocketBase):
                         work_dir=self.work_dir,
                     ),
                 ],
+                retries=None,
             )
 
             if response.is_success(multiline=True):
@@ -1671,11 +1674,11 @@ class NNTPConnection(SocketBase):
 
             # This is faster, but does not allow for some extra checking
             # we can do.
-            response = self.send('BODY <%s>' % id, decoders=decoders)
+            response = self.send('BODY <%s>' % id, decoders=decoders, retries=None)
         else:
             # Article retrives the same content as Body plus the Header
             # too.
-            response = self.send('ARTICLE <%s>' % id, decoders=decoders)
+            response = self.send('ARTICLE <%s>' % id, decoders=decoders, retries=None)
 
         if response.is_success(multiline=True):
             # we're good to go!
@@ -1723,6 +1726,11 @@ class NNTPConnection(SocketBase):
         article is only used if a list is passed in and the expected
         results are a multi-line response. It is populated with the
         data returned.
+
+        retries is how many more times the command is sent (on a fresh
+        connection) if the connection drops, stalls or gets garbage back.
+        Set it to None to use the connection's own setting.  Only use
+        retries for commands that are safe to send twice (not POST).
         """
 
         if not self.connected:
@@ -1743,59 +1751,76 @@ class NNTPConnection(SocketBase):
                 match.group('key'),
             ))
 
-        total_retries = retries
+        if retries is None:
+            # Use our connection defaults
+            retries = self.retries
+
+        attempt = 0
         while True:
-            # Soft reset in preparation for returned results
-            self._soft_reset()
+            # A dropped connection forgets our group so we remember it here
+            group = self.group_name
 
+            response = self._exchange(command, decoders=decoders)
+            if attempt >= retries or response.code not in (
+                    NNTPResponseCode.FETCH_ERROR,
+                    NNTPResponseCode.BAD_RESPONSE,
+                    NNTPResponseCode.NO_CONNECTION,
+                    NNTPResponseCode.CONNECTION_LOST):
+                return response
+
+            # If we reach here; our return code is considered recoverable.
+            # We start again on a fresh connection since we can't trust
+            # what is left over on this one.
+            attempt += 1
+            wait = self.retry_wait * (2 ** (attempt - 1))
+            logger.warning(
+                'Received NNTP error %d (%s); retrying in %.1fs... (%d/%d)' % (
+                    response.code, response.code_str, wait, attempt, retries))
+
+            # Reset our decoders for re-use
+            for decoder in (decoders or []):
+                decoder.reset()
+
+            self.close()
+            sleep(wait)
+
+            if self.connect() and group and self.group_name != group:
+                # Rejoin the group we were in
+                self.group(group)
+
+    def _exchange(self, command, decoders=None):
+        """
+        Sends a command once and returns the response the server gave
+        """
+        if not self.connected:
+            return NNTPResponse(
+                NNTPResponseCode.NO_CONNECTION,
+                'No Connection',
+            )
+
+        # Soft reset in preparation for returned results
+        self._soft_reset()
+
+        # Some commands never get a multi-line response
+        self._single_line = \
+            SINGLE_LINE_COMMAND_RE.match(command) is not None
+
+        try:
             if not super().send(command + EOL):
-                break
-
-            try:
-                response = self._recv(timeout=0, decoders=decoders)
-
-            except SocketException:
-                # Connection Lost
-                self.close()
-
-                # Setup Response
-                response = NNTPResponse(
-                    NNTPResponseCode.CONNECTION_LOST,
-                    'Connection Lost',
+                return NNTPResponse(
+                    NNTPResponseCode.BAD_RESPONSE,
+                    'Invalid Command: "%s"' % command,
                 )
 
-            if retries > 0:
-                # We have a retry left; depending on the severity of our return
-                # code, we may try again
-                if response.code in (
-                        NNTPResponseCode.FETCH_ERROR,
-                        NNTPResponseCode.BAD_RESPONSE,
-                        NNTPResponseCode.NO_CONNECTION,
-                        NNTPResponseCode.CONNECTION_LOST):
-                    # If we reach here; our return code is considered
-                    # recoverable;
+            return self._recv(timeout=0, decoders=decoders)
 
-                    # decrement our retry counter
-                    retries -= 1
-
-                    # Reset our decoders for re-use
-                    for decoder in decoders:
-                        decoder.reset()
-
-                    logger.warning(
-                        'Received NNTP error %d; retrying... (%d/%d)' % (
-                            response.code,
-                            total_retries - retries,
-                            total_retries,
-                        ))
-                    continue
-
-            return response
-
-        return NNTPResponse(
-            NNTPResponseCode.BAD_RESPONSE,
-            'Invalid Command: "%s"' % command,
-        )
+        except SocketException:
+            # Connection Lost
+            self.close()
+            return NNTPResponse(
+                NNTPResponseCode.CONNECTION_LOST,
+                'Connection Lost',
+            )
 
     def _recv(self, decoders=None, timeout=None):
         """ Receive data, return #bytes, done, skip
@@ -1871,6 +1896,11 @@ class NNTPConnection(SocketBase):
         #  variable.
         codec_active = None
 
+        # Used to spot a connection that has stalled or slowed to a crawl
+        idle_limit = timeout or self.stall_timeout
+        last_data = window_start = monotonic()
+        window_bytes = 0
+
         while not self.article_eod:
             # This loop really only takes effect if we aren't forced
             # to just wait for a server command line. Otherwise
@@ -1879,10 +1909,11 @@ class NNTPConnection(SocketBase):
             self._buffer.seek(0, SEEK_END)
 
             try:
-                self._buffer.write(self.read(
+                data = self.read(
                     max_bytes=self.MAX_BUFFER_SIZE - total_bytes,
-                    timeout=timeout, retry_wait=None,
-                ))
+                    timeout=max(idle_limit - (monotonic() - last_data), 0.01)
+                    if idle_limit else timeout, retry_wait=None,
+                )
 
             except (SocketException, SignalCaughtException):
                 logger.debug('_recv() Connection Lost')
@@ -1890,6 +1921,49 @@ class NNTPConnection(SocketBase):
                     NNTPResponseCode.CONNECTION_LOST,
                     'Connection Lost',
                 )
+
+            now = monotonic()
+            if not data:
+                if not self.connected:
+                    logger.debug('_recv() Connection Lost')
+                    return NNTPResponse(
+                        NNTPResponseCode.CONNECTION_LOST,
+                        'Connection Lost',
+                    )
+
+                if now - last_data < idle_limit:
+                    # Keep waiting
+                    continue
+
+                logger.warning(
+                    'Connection stalled; nothing received in %.1fs.' % (
+                        now - last_data))
+                self.close()
+                return NNTPResponse(
+                    NNTPResponseCode.CONNECTION_LOST,
+                    'Connection Stalled',
+                )
+
+            last_data = now
+            if self.min_rate and self.slow_window:
+                # Check our average speed once every window
+                window_bytes += len(data)
+                if now - window_start >= self.slow_window:
+                    rate = window_bytes / (now - window_start)
+                    if rate < self.min_rate:
+                        logger.warning(
+                            'Connection too slow; averaged %d byte(s) per '
+                            'second over %.1fs.' % (rate, now - window_start))
+                        self.close()
+                        return NNTPResponse(
+                            NNTPResponseCode.CONNECTION_LOST,
+                            'Connection Too Slow',
+                        )
+
+                    window_start = now
+                    window_bytes = 0
+
+            self._buffer.write(data)
 
             # Some Stats (TODO)
             _bytes = self._buffer.tell() - total_bytes
@@ -1978,7 +2052,8 @@ class NNTPConnection(SocketBase):
                     self.payload_gzipped = False
 
             # Non-Multiline responses mean were done now.
-            if self.last_resp_code not in NNTPResponseCode.SUCCESS_MULTILINE:
+            if self._single_line or self.last_resp_code \
+                    not in NNTPResponseCode.SUCCESS_MULTILINE:
                 # We're done; flush results and move on
                 self.article_eod = True
 
@@ -1997,8 +2072,14 @@ class NNTPConnection(SocketBase):
                 # Return our response
                 return NNTPResponse(self.last_resp_code, self.last_resp_str)
 
-            # Store our can_read() flag
-            can_read = self.can_read(3)
+            # Store our can_read() flag; a response that already ends with
+            # the end of data marker is complete so there is no need to
+            # wait around for more
+            if self._has_eod(total_bytes, head_ptr):
+                can_read = False
+
+            else:
+                can_read = self.can_read(3)
 
             if response is None:
                 # Initialize our response object on first iteration
@@ -2156,7 +2237,8 @@ class NNTPConnection(SocketBase):
                         tail_ptr = offset + chunk_ptr
                         break
 
-            if not self.payload_gzipped and (tail_ptr - head_ptr) > 0 \
+            if not self.payload_gzipped and not self.article_eod \
+                    and (tail_ptr - head_ptr) > 0 \
                     and total_bytes < self.MAX_BUFFER_SIZE \
                     and tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
                 # Astraweb is absolutely terrible for sending a little
@@ -2174,9 +2256,9 @@ class NNTPConnection(SocketBase):
 
                     dc_obj = decompressobj()
                     try:
-                        self._data.write(dc_obj.decompress(
+                        self._data.write(self._unstuff(dc_obj.decompress(
                             self._buffer.read(tail_ptr - head_ptr),
-                        ))
+                        )))
                         logger.debug("NNTP ZLIB decompression successful.")
 
                     except ZlibException:
@@ -2196,7 +2278,8 @@ class NNTPConnection(SocketBase):
                         )
                 else:
                     # No compression
-                    self._data.write(self._buffer.read(tail_ptr - head_ptr))
+                    self._data.write(self._unstuff(
+                        self._buffer.read(tail_ptr - head_ptr)))
 
                 # Truncate our original buffer by striping out what was already
                 # processed from it
@@ -2379,12 +2462,101 @@ class NNTPConnection(SocketBase):
         # content on the socket before closing it
         return super().close()
 
+    def _stuff(self, chunks):
+        """
+        Prepares content for posting (RFC 3977 dot stuffing)
+
+        - Text is encoded using our character set.
+        - Lines starting with a dot get a second one so the server doesn't
+          mistake them for the end of the article.
+        """
+        line_start = True
+        for chunk in chunks:
+            if isinstance(chunk, str):
+                chunk = chunk.encode(self.encoding)
+
+            if not chunk:
+                continue
+
+            if line_start and chunk[:1] == b'.':
+                chunk = b'.' + chunk
+
+            chunk = chunk.replace(b'\n.', b'\n..')
+            line_start = chunk[-1:] == b'\n'
+            yield chunk
+
+    def _unstuff(self, data):
+        """
+        Restores lines the server dot stuffed (RFC 3977); a line starting
+        with two dots is given back with just one
+        """
+        if not data:
+            return data
+
+        # Track where this data leaves off (based on what was received); a
+        # line made up of a single dot (so far) may still be followed by
+        # the dot that was stuffed
+        newline = data.rfind(b'\n')
+        if newline >= 0:
+            dot_line = data[newline + 1:] == b'.'
+        else:
+            dot_line = self._line_start and data == b'.'
+
+        line_start = data[-1:] == b'\n'
+
+        if self._line_start and data[:2] == b'..':
+            data = data[1:]
+
+        elif self._dot_line and data[:1] == b'.':
+            # The previous data ended with the first dot of a stuffed line
+            data = data[1:]
+
+        self._line_start = line_start
+        self._dot_line = dot_line
+        return data.replace(b'\n..', b'\n.')
+
+    def _has_eod(self, total_bytes, head_ptr=0):
+        """
+        Returns True if our buffer ends with the end of data marker
+
+        - head_ptr is where the response data starts in our buffer
+        """
+        if total_bytes < 3:
+            return False
+
+        self._buffer.seek(-min(5, total_bytes), SEEK_END)
+        tail = self._buffer.read()
+
+        if not self.payload_gzipped:
+            return EOD_LINE_RE.search(tail) is not None
+
+        if not tail.endswith(b'.\r\n'):
+            return False
+
+        # Compressed data can hold anything, so make sure the compressed
+        # block in front of our marker is really complete
+        self._buffer.seek(head_ptr, SEEK_SET)
+        dc_obj = decompressobj()
+        try:
+            dc_obj.decompress(self._buffer.read(total_bytes - head_ptr - 3))
+
+        except ZlibException:
+            return False
+
+        return dc_obj.eof and not dc_obj.unused_data
+
     def _soft_reset(self):
         """
         Reset tracking items
         """
         self.article = {}
         self.article_eod = False
+        self._single_line = False
+
+        # Whether the next data we receive starts a new line (and whether
+        # the line so far is just a single dot)
+        self._line_start = True
+        self._dot_line = False
         self.article_fname = None
 
         # Reset our Buffers

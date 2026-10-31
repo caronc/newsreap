@@ -15,6 +15,8 @@
 from newsreap.SortedSet import sortedset
 from os.path import isfile
 
+from heapq import merge
+
 from .Hook import Hook
 from .Utils import parse_paths
 from .Utils import scan_pylib
@@ -129,7 +131,7 @@ class HookManager:
                 if len(_module) != 1:
                     continue
 
-                name = list(_module.keys())[0]
+                name = next(iter(_module))
                 if name in self:
                     # Duplicates are not allowed
                     continue
@@ -174,27 +176,31 @@ class HookManager:
 
         """
 
-        # first we generate a list of all of our functions
-        ordered_funcs = None
-        for hook in self.hooks:
-            if function_name in hook:
-                if ordered_funcs is None:
-                    # Work on a copy so the hook's own list isn't changed
-                    ordered_funcs = hook[function_name].copy()
-                else:
-                    ordered_funcs |= hook[function_name]
+        # first we gather the (already sorted) functions of every hook
+        found = [hook[function_name] for hook in self.hooks
+                 if function_name in hook]
 
         # Our response
         # We sort on index zero (0) which will be our priority
         responses = sortedset(key=lambda x: x['key'])
 
-        if not ordered_funcs:
+        if not found:
             # Nothing more to do
             return responses
 
+        # Walk all of the functions in priority order without copying them
+        ordered_funcs = found[0] if len(found) == 1 \
+            else merge(*found, key=lambda x: x['key'])
+
         # We now have an ordered set of hooks to call; itereate over each and
         # execute it
+        last = None
         for meta in ordered_funcs:
+            if meta == last:
+                # The same function was found in more than one hook
+                continue
+            last = meta
+
             func = meta['function']
             priority = meta['priority']
             module = getattr(func, Hook.module_id, func.__name__)
@@ -247,12 +253,18 @@ class HookManager:
         """
         return [x.name for x in self.hooks]
 
+    def iterkeys(self):
+        """
+        Iterate over the keys we've defined as hooks
+        """
+        return (x.name for x in self.hooks)
+
     def __contains__(self, function_name):
         """
         Support 'in' keyword
 
         """
-        return function_name in list(self.keys())
+        return any(x.name == function_name for x in self.hooks)
 
     def __getitem__(self, index):
         """

@@ -26,8 +26,8 @@ EOL = b'\r\n'
 # The following is used to determine we're not dealing with any
 # binary characters on the line
 ASCII_CHARACTERS = bytearray([7, 8, 9, 10, 12, 13, 27]) + \
-        bytearray(list(range(0x20, 0x7f))) + \
-        bytearray(list(range(0x80, 0x100)))
+        bytearray(range(0x20, 0x7f)) + \
+        bytearray(range(0x80, 0x100))
 
 
 class CodecAscii(CodecBase):

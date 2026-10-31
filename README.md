@@ -293,6 +293,37 @@ tox -e build
 Tests that need the 7-Zip, rar or par2 tools are skipped when those tools
 aren't installed.
 
+### Testing conversations with an NNTP Server
+`tests/FakeNNTPServer.py` is a small scripted NNTP server for testing how
+NewsReap talks to a server:
+- Out of the box it answers like a typical provider would (login,
+  compression, group listings, overviews, articles and posting).
+- `on()` lets a test script any reply; use it to act like the odd servers
+  found in the wild (slow or stalling replies, dropped connections, garbage,
+  missing terminators, etc).
+- Every command it receives is recorded, so a test can check the exact
+  conversation that took place.
+
+```python
+from tests.FakeNNTPServer import FakeNNTPServer, Reply
+from tests.conftest import connect_to
+
+def test_slow_server(nntp_server):
+    # Send the article 64 bytes at a time
+    nntp_server.add_article('5', 'tests/var/00000005.ntx', 'alt.binaries.test')
+    nntp_server.on(r'^ARTICLE', Reply(
+        '220 0 <5>', body=open('tests/var/00000005.ntx', 'rb').read(),
+        chunk_size=64, delay=0.01))
+
+    sock = connect_to(nntp_server)
+    assert sock.connect()
+    assert sock.get('5', work_dir='/tmp', group='alt.binaries.test')
+    assert nntp_server.commands()[-2:] == [
+        'GROUP alt.binaries.test', 'ARTICLE <5>']
+```
+
+See `tests/NNTPFlow_Test.py` for many more examples.
+
 The core of this tool wraps around it's framework it provides
 
 ```python

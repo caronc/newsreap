@@ -365,7 +365,7 @@ class CodecFile:
 
         findings = [
             (p, f['size'], f['created'], f['modified'])
-                for p, f in list(findings.items())
+                for p, f in findings.items()
                   if (f['modified'] - f['created']).total_seconds() >= seconds
                     and f['basename'] not in ignore
         ]

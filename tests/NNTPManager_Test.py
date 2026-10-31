@@ -39,7 +39,7 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from tests.TestBase import TestBase
 
-from tests.NNTPSocketServer import NNTPSocketServer
+from tests.FakeNNTPServer import FakeNNTPServer
 
 from newsreap.NNTPSettings import NNTPSettings
 from newsreap.NNTPManager import NNTPManager
@@ -56,33 +56,24 @@ class NNTPManager_Test(TestBase):
         super().setUp()
 
         # Secure NNTP Server
-        self.nntps = NNTPSocketServer(
-            secure=True,
-        )
+        self.nntps = FakeNNTPServer(secure=True)
 
         # Insecure NNTP Server
-        self.nntp = NNTPSocketServer(
-            secure=False,
-        )
+        self.nntp = FakeNNTPServer(secure=False)
 
-        # Exit the server thread when the main thread terminates
-        self.nntps.daemon = True
-        self.nntp.daemon = True
-
-        # Start Our Server Threads
+        # Start our servers
         self.nntps.start()
         self.nntp.start()
 
         # Acquire our configuration
-        self.nttp_ipaddr, self.nntp_portno = \
-                self.nntp.local_connection_info()
+        self.nttp_ipaddr, self.nntp_portno = self.nntp.host, self.nntp.port
         self.nttps_ipaddr, self.nntps_portno = \
-                self.nntps.local_connection_info()
+            self.nntps.host, self.nntps.port
 
     def tearDown(self):
-        # Shutdown NNTP Dummy Servers Daemons
-        self.nntps.shutdown()
-        self.nntp.shutdown()
+        # Shutdown our test servers
+        self.nntps.stop()
+        self.nntp.stop()
 
         super().tearDown()
 

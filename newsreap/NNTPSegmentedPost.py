@@ -407,11 +407,11 @@ class NNTPSegmentedPost:
                 # Apply our custom object if one is defined; first escape
                 # content
                 cmask = {re.escape(str(key)): str(value)
-                         for (key, value) in list(custom.items())}
+                         for (key, value) in custom.items()}
 
                 # Build ourselves a translation map
                 cmask_r = re.compile(
-                    r'(' + '|'.join(list(cmask.keys())) + r')',
+                    r'(' + '|'.join(cmask) + r')',
                     re.IGNORECASE | re.ASCII,
                 )
 
@@ -457,7 +457,7 @@ class NNTPSegmentedPost:
 
             # Build ourselves a translation map
             mask_r = re.compile(
-                r'(' + '|'.join(list(mask.keys())) + r')',
+                r'(' + '|'.join(mask) + r')',
                 re.IGNORECASE | re.ASCII,
             )
 

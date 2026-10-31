@@ -13,6 +13,8 @@
 # GNU Lesser General Public License for more details.
 
 import re
+from collections import deque
+from zlib import crc32
 from os import fsdecode
 from os import fsencode
 from os.path import basename
@@ -116,9 +118,6 @@ YENC_LINESIZE = 128
 YENC_ENCODE_TABLE = bytes((x + 42) & 0xff for x in range(256))
 YENC_DECODE_TABLE = bytes((x - 42) & 0xff for x in range(256))
 
-# Encoded characters that always need to be escaped
-YENC_ALWAYS_ESCAPED = b'\x00\n\r='
-
 # Encoded characters that only need to be escaped at the start (or end)
 # of a line
 YENC_TAB = ord('\t')
@@ -128,12 +127,20 @@ YENC_DOT = ord('.')
 # An escape character (=) followed by the escaped character
 YENC_ESCAPE_RE = re.compile(br'=(.)', re.DOTALL | re.ASCII)
 
+# What each escaped character turns back into (before the 42 shift is
+# removed)
+YENC_UNESCAPE_MAP = {
+    bytes((ord('='), x)): bytes(((x - 64) & 0xff, )) for x in range(256)}
 
-def _yenc_escape(byte):
-    """
-    Returns the escaped form of an (already shifted) encoded byte
-    """
-    return bytes((ord('='), (byte + 64) & 0xff))
+# The most data (in bytes) decoded at one time
+YENC_DECODE_BLOCK_SIZE = 262144
+
+
+# The escape sequence for every (already shifted) encoded byte
+YENC_ESCAPE_MAP = [bytes((ord('='), (x + 64) & 0xff)) for x in range(256)]
+
+# An escape character as it appears in our (shifted) data
+YENC_EQUAL = ord('=')
 
 
 def yenc_encode(data, column=0, linesize=YENC_LINESIZE):
@@ -144,66 +151,65 @@ def yenc_encode(data, column=0, linesize=YENC_LINESIZE):
     - A line break (CRLF) is added every `linesize` characters.
     - Returns a tuple of (encoded_bytes, column)
     """
-    data = data.translate(YENC_ENCODE_TABLE)
+    # A line needs room for at least one escaped character
+    linesize = max(linesize, 2)
+
+    # Shift every byte, then escape the characters that always need it.
+    # '=' is escaped first so the escapes we add are left alone. After this
+    # every '=' in our data starts a 2 character escape sequence.
+    data = data.translate(YENC_ENCODE_TABLE) \
+        .replace(b'=', b'=}') \
+        .replace(b'\x00', b'=@') \
+        .replace(b'\n', b'=J') \
+        .replace(b'\r', b'=M')
 
     results = []
     index = 0
     total = len(data)
     while index < total:
-        if column == 0 or column == linesize - 1:
-            # A byte at the start or end of a line follows extra
-            # escaping rules (tabs, spaces and dots)
+        if column == 0:
             byte = data[index]
-            if byte in YENC_ALWAYS_ESCAPED \
-                    or byte in (YENC_TAB, YENC_SPACE) \
-                    or (byte == YENC_DOT and column == 0):
-                results.append(_yenc_escape(byte))
-                column += 2
+            if byte == YENC_TAB or byte == YENC_SPACE or byte == YENC_DOT:
+                # These can't start a line
+                results.append(YENC_ESCAPE_MAP[byte])
+                column = 2
+                index += 1
+                if column >= linesize:
+                    results.append(b'\r\n')
+                    column = 0
+                continue
 
-            else:
-                results.append(data[index:index + 1])
-                column += 1
+        if column < linesize - 1:
+            # Copy everything up to (but not including) the last column
+            end = index + (linesize - 1 - column)
+            if end >= total:
+                end = total
 
-            index += 1
+            elif data[end - 1] == YENC_EQUAL:
+                # Never split an escape sequence across lines
+                end += 1
+
+            results.append(data[index:end])
+            column += end - index
+            index = end
 
         else:
-            # Grab as many bytes as we can that fit on our current line
-            # without reaching its last column
-            room = linesize - 1 - column
-            count = min(room, total - index)
-            while count > 0:
-                chunk = data[index:index + count]
-                escaped = count - len(chunk.translate(
-                    None, YENC_ALWAYS_ESCAPED))
-                if count + escaped <= room:
-                    break
+            # The last character on the line
+            byte = data[index]
+            if byte == YENC_EQUAL:
+                results.append(data[index:index + 2])
+                index += 2
 
-                # Make room for the escape characters and try again
-                count = room - escaped
-
-            if count <= 0:
-                # Not enough room left for the next byte and its escape
-                # character; handle it on its own
-                byte = data[index]
-                if byte in YENC_ALWAYS_ESCAPED:
-                    results.append(_yenc_escape(byte))
-                    column += 2
-
-                else:
-                    results.append(data[index:index + 1])
-                    column += 1
-
+            elif byte == YENC_TAB or byte == YENC_SPACE:
+                # These can't end a line
+                results.append(YENC_ESCAPE_MAP[byte])
                 index += 1
 
             else:
-                # Escape '=' first so the escapes we add are left alone
-                results.append(
-                    chunk.replace(b'=', b'=}')
-                         .replace(b'\x00', b'=@')
-                         .replace(b'\n', b'=J')
-                         .replace(b'\r', b'=M'))
-                column += count + escaped
-                index += count
+                results.append(data[index:index + 1])
+                index += 1
+
+            column = linesize
 
         if column >= linesize:
             results.append(b'\r\n')
@@ -220,9 +226,13 @@ def yenc_decode(data, escape=False):
     - escape tells us the previous block ended with an escape character.
     - Returns a tuple of (decoded_bytes, escape)
     """
-    data = data.replace(b'\r', b'').replace(b'\n', b'')
+    data = data.translate(None, b'\r\n')
     if escape:
         data = b'=' + data
+
+    if b'=' not in data:
+        # Nothing is escaped
+        return data.translate(YENC_DECODE_TABLE), False
 
     # An odd number of trailing escape characters means the last one
     # escapes the first character of the next block
@@ -232,7 +242,7 @@ def yenc_decode(data, escape=False):
         data = data[:-1]
 
     decoded = YENC_ESCAPE_RE.sub(
-        lambda m: bytes(((m.group(1)[0] - 64) & 0xff, )), data,
+        lambda m: YENC_UNESCAPE_MAP[m.group(0)], data,
     ).translate(YENC_DECODE_TABLE)
 
     return decoded, escape
@@ -329,19 +339,11 @@ class CodecYenc(CodecBase):
             content.end(),
         )
 
+        # The crc32 of the whole file (if we're one part of it); this is
+        # only worked out once and then remembered by the parent
+        parent_crc = None
         if isinstance(content._parent, NNTPContent):
-            # yEnc end
-            fmt_yend = b'=yend size=%d part=%d pcrc32=%s crc32=%s' % (
-                len(content), content.part,
-                content.crc32().encode('ascii'),
-                content._parent.crc32().encode('ascii'),
-            )
-
-        else:
-            # yEnc end
-            fmt_yend = b'=yend size=%d part=%d pcrc32=%s' % (
-                len(content), content.part, content.crc32().encode('ascii'),
-            )
+            parent_crc = content._parent.crc32()
 
         # Write =ybegin line
         _encoded.write(fmt_ybegin + EOL)
@@ -355,6 +357,9 @@ class CodecYenc(CodecBase):
         # line we are so lines are broken every `linelen` characters
         column = 0
 
+        # The crc32 of this part is worked out as we read it
+        crc = 0
+
         # We need to parse the content until we either reach
         # the end of the file or get to an 'end' tag
         while True:
@@ -363,6 +368,8 @@ class CodecYenc(CodecBase):
             if not data:
                 # We're done
                 break
+
+            crc = crc32(data, crc)
 
             # Encoded data already has its line breaks in place
             results, column = yenc_encode(data, column, self.linelen)
@@ -374,6 +381,13 @@ class CodecYenc(CodecBase):
         if column:
             # Finish off our last (partial) line
             _encoded.write(EOL)
+
+        # yEnc end
+        fmt_yend = b'=yend size=%d part=%d pcrc32=%08x' % (
+            len(content), content.part, crc & BIN_MASK)
+
+        if parent_crc is not None:
+            fmt_yend += b' crc32=%s' % parent_crc.encode('ascii')
 
         # Write footer
         _encoded.write(fmt_yend + EOL)
@@ -446,17 +460,67 @@ class CodecYenc(CodecBase):
             to descriptor identified (by the stream)
         """
 
+        # Lines we've read ahead that still need to be looked at one at a
+        # time, and the stream position just after the last one we used
+        pending = deque()
+        pos = None
+
         # We need to parse the content until we either reach
         # the end of the file or get to an 'end' tag
         while self.decode_loop():
-            # fall_back ptr
-            ptr = stream.tell()
+            if not pending and self._max_bytes <= 0 \
+                    and self.decoded is not None \
+                    and 'end' not in self._meta \
+                    and ('begin' in self._meta or 'part' in self._meta):
+                # We're in the middle of the encoded data; decode a whole
+                # block of lines at once
+                pos = stream.tell()
+                lines = stream.readlines(YENC_DECODE_BLOCK_SIZE)
+                if not lines:
+                    # We're done for now
+                    return True
 
-            # Read in our data
-            data = stream.readline()
-            if not data:
-                # We're done for now
-                return True
+                block = b''.join(lines)
+                if b'=y' not in block:
+                    decoded, self._escape = \
+                        yenc_decode(block, self._escape)
+
+                    # CRC Calculations
+                    self._calc_crc(decoded)
+
+                    # Line Tracking
+                    self._lines += len(lines)
+                    self._total_lines += len(lines)
+
+                    # Track the number of bytes decoded
+                    self._decoded += len(decoded)
+
+                    # Write data to out stream
+                    self.decoded.write(decoded)
+
+                    # Account for the extra lines we just handled
+                    self.decode_loop(len(lines) - 1)
+                    continue
+
+                # A yEnc keyword is in here; handle these lines one by one
+                pending.extend(lines)
+
+            if pending:
+                # fall_back ptr
+                ptr = pos
+
+                data = pending.popleft()
+                pos += len(data)
+
+            else:
+                # fall_back ptr
+                ptr = stream.tell()
+
+                # Read in our data
+                data = stream.readline()
+                if not data:
+                    # We're done for now
+                    return True
 
             # Total Line Tracking
             self._total_lines += 1
@@ -472,6 +536,7 @@ class CodecYenc(CodecBase):
                     # We already processed this key; uh oh
                     # Fix our stream
                     stream.seek(ptr, SEEK_SET)
+                    pending.clear()
 
                     # Fix our line count
                     self._total_lines -= 1
@@ -558,6 +623,10 @@ class CodecYenc(CodecBase):
 
                 # We're done
                 break
+
+        if pending:
+            # Leave the lines we didn't need for whoever reads next
+            stream.seek(pos, SEEK_SET)
 
         # Reset our meta tracking
         self._meta = {}

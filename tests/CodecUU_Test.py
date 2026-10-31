@@ -338,3 +338,25 @@ class CodecUU_Test(TestBase):
 
         assert decoder.crc32() == '%08x' % crc32(content.getvalue())
         assert decoder.crc32() == content.crc32()
+
+    def test_decoding_lets_other_workers_run(self):
+        """
+        decode_loop() pauses once every `throttle_cycles` lines
+        """
+        import newsreap.codecs.CodecBase as CodecBaseModule
+
+        pauses = []
+        original = CodecBaseModule.sleep
+        CodecBaseModule.sleep = pauses.append
+        try:
+            codec = CodecUU(work_dir=self.test_dir, throttle_cycles=10)
+            for _ in range(25):
+                codec.decode_loop()
+            assert pauses == [0, 0]
+
+            # Several lines handled at once count towards the next pause
+            codec.decode_loop(10)
+            assert pauses == [0, 0, 0]
+
+        finally:
+            CodecBaseModule.sleep = original
