@@ -362,6 +362,13 @@ DEFAULT_POSTING_VARIABLES = {
     # The default subject
     'subject': '{{description}} (%Y-%m-%d)" - "{{filename}}" yEnc '\
                '({{index}}/{{count}})',
+
+    # The password archives are protected with: None (or empty) for none,
+    # 'auto' to make one up for each post, or the password itself
+    'password': None,
+
+    # How long the passwords we make up are; 0 makes none
+    'password_length': 24,
 }
 
 POSTING_KEY = 'posting'

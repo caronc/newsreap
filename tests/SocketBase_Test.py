@@ -21,6 +21,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import pytest
 from os.path import dirname
 from os.path import abspath
 from os.path import join
@@ -104,3 +105,36 @@ class SocketBase_Test(TestBase):
             'tcp://localhost:119'
         assert str(SocketBase(host='localhost', port=563, secure=True)) == \
             'tcps://localhost:563'
+
+
+def test_system_certificates_are_used_by_default(monkeypatch):
+    """
+    Without a CA file, secure connections trust the certificates the system
+    does (wherever this system keeps them); a CA file that doesn't exist is
+    refused
+    """
+    import ssl
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from newsreap.NNTPConnection import NNTPConnection
+
+    loaded = []
+    original = ssl.SSLContext.load_default_certs
+    monkeypatch.setattr(
+        ssl.SSLContext, 'load_default_certs',
+        lambda self, *args: loaded.append('system') or original(self, *args))
+
+    with FakeNNTPServer(secure=True) as server:
+        sock = NNTPConnection(
+            host=server.host, port=server.port, username='valid',
+            password='valid', secure=True, join_group=False)
+        assert sock.connect(timeout=5.0) is True
+        sock.close()
+        assert loaded == ['system']
+
+        sock = NNTPConnection(
+            host=server.host, port=server.port, username='valid',
+            password='valid', secure=True, join_group=False,
+            ca_certs='/no/such/ca-bundle.crt')
+        with pytest.raises(ValueError):
+            sock.connect(timeout=5.0)
+        sock.close()

@@ -1226,6 +1226,16 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert result.output.count('holiday.photos.part02.rar') == 1
         assert nr('search', '--raw', 'holiday').exit_code == 1
 
+        # Raw searches can match the case too, and look at posters
+        raw = lambda *k: nr(  # noqa: E731
+            'search', '--raw', '-g', GROUP, *k).output
+        assert 'part01' not in raw('-c', 'HOLIDAY.PHOTOS')
+        assert 'part01' in raw('-c', 'Holiday.Photos')
+        assert 'part01' in raw('HOLIDAY.PHOTOS')
+        assert 'part01' in raw('%pposter@example')
+        assert 'part01' not in raw('%p-poster@example')
+        assert 'part01' not in raw('%pnobody')
+
         # Save it into a directory of our choosing
         out = tmp_path / 'nzbs'
         out.mkdir()

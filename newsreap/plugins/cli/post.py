@@ -28,6 +28,8 @@ except ImportError:
     from newsreap.Logging import NEWSREAP_CLI
 
 from newsreap.NNTPPostFactory import NNTPPostFactory
+from newsreap.NNTPPostFactory import make_password
+from newsreap.NNTPPostFactory import password_length
 
 logger = logging.getLogger(NEWSREAP_CLI)
 
@@ -66,12 +68,23 @@ NEWSREAP_CLI_PLUGINS = {
               help='The maximum article size before splitting')
 @click.option('--archive-size', '-a', default=None, type=str,
               help='The maximum archive size before splitting')
+@click.option('--password', '-p', default=None, type=str,
+              help='Protect the archives with this password (it is written '
+                   'into the NZB file).')
+@click.option('--generate-password', '-G', is_flag=True,
+              help='Protect the archives with a new 24 character password '
+                   'made up for each post (it is written into the NZB '
+                   'file).')
+@click.option('--no-password', is_flag=True,
+              help="Don't protect the archives with a password (even if the "
+                   "configuration file says to).")
 @click.option('--hooks', '-k', default=None, type=str,
               help='Specify one or more hooks to load')
 @click.argument('paths', nargs=-1)
 @click.pass_obj
 def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
-         archive_size, paths, hooks):
+         archive_size, password, generate_password, no_password, paths,
+         hooks):
     """
     Posts content found in specified paths to usenet.
 
@@ -79,10 +92,54 @@ def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
     NZB-File to be generated from it.  If the specified path is a directory
     then the content within it is posted.
 
+    The archives can be protected with a password (--password), one made
+    up for each post (--generate-password), or none (--no-password, or an
+    empty --password).  Without these, the password setting of the
+    configuration file is used.  Made up passwords are password_length
+    characters long (24 unless the configuration file says otherwise; 0
+    makes none).  The password goes into the NZB file, so it isn't lost.
+
     """
     if not paths:
         logger.error("You must specify at least one path to post.")
         exit(1)
+
+    # How long the passwords we make up are (checked before anything is
+    # done)
+    try:
+        length = password_length(
+            ctx['NNTPSettings'].nntp_posting.get('password_length'))
+
+    except ValueError as e:
+        logger.error("The posting password_length is not valid: %s." % e)
+        exit(1)
+
+    if (password is not None) + generate_password + no_password > 1:
+        logger.error(
+            "Only one of --password, --generate-password and --no-password "
+            "can be used.")
+        exit(1)
+
+    if password == '':
+        # The same as --no-password
+        password = None
+        no_password = True
+
+    if password is None and not (generate_password or no_password):
+        # Use our configuration: nothing for no password, 'auto' to make
+        # one up, or the password itself
+        configured = ctx['NNTPSettings'].nntp_posting.get('password')
+        if configured is not None and str(configured).strip():
+            if str(configured).strip().lower() == 'auto':
+                generate_password = True
+
+            else:
+                password = str(configured)
+
+    if generate_password and not length:
+        # A length of 0 is the same as no password
+        logger.debug('The posting password_length is 0; no password is used.')
+        generate_password = False
 
     session = ctx['NNTPSettings'].session()
     if not session:
@@ -130,7 +187,11 @@ def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
             continue
 
         if prep:
-            if not pf.prepare(archive_size=archive_size):
+            # A new password is made up for each post
+            if not pf.prepare(
+                    archive_size=archive_size,
+                    password=make_password(length) if generate_password
+                    else password):
                 return_code = 1
                 continue
 

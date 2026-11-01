@@ -13,18 +13,25 @@ sudo dnf install \
            python3-dateutil python3-cryptography python3-pytz \
            python3-tqdm python3-lxml
 
-# 7zip support (add /usr/bin/7za)
-sudo dnf install p7zip
+# 7-Zip support (adds /usr/bin/7z)
+sudo dnf install 7zip
 
-# par2 support (add /usr/bin/par2)
+# par2 support (adds /usr/bin/par2)
 sudo dnf install par2cmdline
 
-# rar support (add /usr/bin/rar); rar is not free software so it may need
-# to come from a third party repository such as http://nuxref.com/repo/
-sudo dnf --enablerepo=nuxref* install rar
+# unrar (to extract rar files) isn't free software, so it comes from the
+# RPM Fusion "nonfree" repository; see https://rpmfusion.org/Configuration
+# to add it
+sudo dnf install unrar
 
 # You're done; go ahead and use the newsreap tools
 ```
+
+rar itself (needed to make archives when posting) isn't packaged for
+Fedora at all.  Download "RAR for Linux" from
+[RARLAB](https://www.rarlab.com/download.htm), unpack it and copy `rar`
+(and `unrar`, if you skipped RPM Fusion) into `/usr/local/bin`; newsreap
+looks there too.
 
 ### Ubuntu / Debian
 ```bash
@@ -44,6 +51,11 @@ pip install .
 
 # Developers can install the testing tools too:
 pip install -e ".[dev]"
+
+# Keeping the index on a database server (see index_engine in the
+# configuration file) needs its driver:
+pip install ".[postgresql]"
+pip install ".[mysql]"
 ```
 
 __Note:__ Most dependencies ship pre-built wheels for common platforms. If one

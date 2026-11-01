@@ -876,8 +876,9 @@ class NNTPContent:
                     # Increment our part
                     part += 1
 
-                    # Create a pointer to the parent
-                    obj._parent = weakref.proxy(self)
+                    # Keep the whole file around (its crc32 goes into every
+                    # part when it is yEnc encoded)
+                    obj._parent = self
 
                     # Open the new file
                     obj.open(mode=NNTPFileMode.BINARY_WO_TRUNCATE)

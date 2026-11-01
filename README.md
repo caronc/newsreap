@@ -1,5 +1,5 @@
 [![Tests](https://github.com/caronc/newsreap/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/caronc/newsreap/actions/workflows/tests.yml)
-[![Paypal](http://repo.nuxref.com/pub/img/paypaldonate.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MHANV39UZNQ5E)
+[![Paypal](https://img.shields.io/badge/paypal-donate-green.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MHANV39UZNQ5E)
 
 ## Introduction
 NewsReap is a library written to wrap around the NNTP protocol. It simplifies

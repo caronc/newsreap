@@ -146,6 +146,18 @@ posting:
     # content being posted.
     max_archive_size: auto
 
+    # Protect the archives with a password; it is written into the NZB
+    # file so it isn't lost.  Leave it out for no password, use 'auto' to
+    # make up a new one for each post (letters, numbers and symbols), or
+    # give the password itself.  'nr post --password' and
+    # '--no-password' override this.
+#    password: auto
+
+    # How long the passwords made up for you are (0 to 127); 0 makes none,
+    # the same as leaving the password out.  It doesn't change a password
+    # you give yourself.
+#    password_length: 24
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Database Configuration
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

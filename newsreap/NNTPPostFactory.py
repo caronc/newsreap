@@ -12,7 +12,10 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import os
 import re
+import secrets
+import string
 import weakref
 from collections import deque
 from tqdm import tqdm
@@ -74,6 +77,76 @@ PREP_AUTO_ARCHIVE_RE = re.compile('\\s*auto\\s*', re.I | re.ASCII)
 # Staging
 STAGE_DIR = 'staged'
 
+# The password the archives were made with (kept in the staging root, so a
+# later upload can put it in the NZB-File)
+PASSWORD_FILE = 'password'
+
+# How long the passwords we make up are
+PASSWORD_LENGTH = 24
+
+# The longest password RAR archives can hold (anything longer is cut short
+# by rar, so it would no longer match the one in the NZB-File)
+PASSWORD_MAX_LENGTH = 127
+
+# What our made up passwords are made of: upper and lower case letters,
+# numbers and every special character (no spaces, tabs or other whitespace)
+PASSWORD_CHARACTERS = (
+    string.ascii_uppercase,
+    string.ascii_lowercase,
+    string.digits,
+    string.punctuation,
+)
+
+
+def make_password(length=PASSWORD_LENGTH):
+    """
+    Returns a new random password `length` characters long, with at least
+    one character of each kind (see PASSWORD_CHARACTERS) when it is long
+    enough to hold them all
+    """
+    characters = ''.join(PASSWORD_CHARACTERS)
+    while True:
+        password = ''.join(
+            secrets.choice(characters) for _ in range(length))
+
+        if length < len(PASSWORD_CHARACTERS) or all(
+                any(c in kind for c in password)
+                for kind in PASSWORD_CHARACTERS):
+            return password
+
+
+def password_length(value):
+    """
+    Returns the length of password to make up from a setting (ie: the
+    password_length of the configuration file): None for the default, and
+    0 for none at all
+
+    Raises ValueError if it isn't a whole number from 0 to
+    PASSWORD_MAX_LENGTH.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return PASSWORD_LENGTH
+
+    if isinstance(value, bool):
+        # YAML reads yes/no and true/false as these
+        raise ValueError('it must be a number, not %s' % value)
+
+    try:
+        length = int(str(value).strip())
+
+    except ValueError:
+        raise ValueError("'%s' is not a number" % value) from None
+
+    if length < 0:
+        raise ValueError('it can not be less than 0 (%d)' % length)
+
+    if length > PASSWORD_MAX_LENGTH:
+        raise ValueError(
+            'rar archives can not hold more than %d characters (%d)' % (
+                PASSWORD_MAX_LENGTH, length))
+
+    return length
+
 
 class NNTPPostFactory:
     """
@@ -110,6 +183,9 @@ class NNTPPostFactory:
 
         # A pointer to an NZB-File object if it exists
         self.nzb = None
+
+        # Where the password of the archives is kept (see save_password())
+        self.password_path = None
 
         # A boolean that allows us to enable/disable certain parts of our
         # factory depending on whether or not we loaded content successfully
@@ -263,6 +339,9 @@ class NNTPPostFactory:
         # NZB-File (if one is loaded)
         self.nzb = None
 
+        # Where the password of the archives is kept (see save_password())
+        self.password_path = join(self.staging_root, PASSWORD_FILE)
+
         # The path to where we zip/rar/par etc
         # content is still in a binary format in this dir.  If no
         # prepping occurs, then the reference directory is used instead
@@ -295,10 +374,13 @@ class NNTPPostFactory:
         self._loaded = True
         return True
 
-    def prepare(self, archive_size=None, *args, **kwargs):
+    def prepare(self, archive_size=None, password=None, *args, **kwargs):
         """
         A Wrapper to _prepare() as this allows us to call our post_hooks
         properly each time.
+
+        - password: the password to protect the archives with (None for no
+          password); it is written into the NZB-File when uploaded
 
         """
         if self._loaded is False:
@@ -318,7 +400,8 @@ class NNTPPostFactory:
             if next((r for r in response
                      if r is not False), None) is not False:
                 status = self._prepare(
-                    archive_size=archive_size, *args, **kwargs)
+                    archive_size=archive_size, password=password,
+                    *args, **kwargs)
 
             else:
                 logger.warning("Preparation aborted by pre_prepare() hook.")
@@ -334,7 +417,7 @@ class NNTPPostFactory:
             )
         return status
 
-    def _prepare(self, archive_size=None, *args, **kwargs):
+    def _prepare(self, archive_size=None, password=None, *args, **kwargs):
         """
         Prepares our content
 
@@ -403,8 +486,14 @@ class NNTPPostFactory:
 
         logger.info("Preparing %s for posting." % (self.path))
 
+        # Remember the password for the upload (or that there isn't one)
+        if not self.save_password(password):
+            return False
+
         # Initialize Codecs
-        crar = CodecRar(work_dir=self.staging_root, volume_size=archive_size)
+        crar = CodecRar(
+            work_dir=self.staging_root, volume_size=archive_size,
+            password=password)
         cpar = CodecPar(work_dir=self.staging_root)
 
         # For each entry, prep our stage environment
@@ -415,6 +504,7 @@ class NNTPPostFactory:
         archived_content = crar.encode(name=basename(self.path))
         if archived_content is None:
             logger.error("Could not prepare archive")
+            return False
 
         # We want to create par files now
         logger.debug("Preparing Parchive")
@@ -442,6 +532,55 @@ class NNTPPostFactory:
         self.hooks.call('post_prep', path=self.prep_path)
 
         return True
+
+    def save_password(self, password=None):
+        """
+        Remembers the password the archives are made with (None forgets
+        it); only the user posting can read it
+        """
+        if not rm(self.password_path):
+            logger.error(
+                "Could not remove the stale password '%s'." %
+                self.password_path)
+            return False
+
+        if password is None:
+            # Nothing to remember
+            return True
+
+        try:
+            fd = os.open(
+                self.password_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(password)
+
+        except OSError as e:
+            logger.error(
+                "Could not save the password '%s'." % self.password_path)
+            logger.debug('Password save exception: %s' % str(e))
+            return False
+
+        return True
+
+    def load_password(self):
+        """
+        Returns the password the archives were made with (None if they
+        don't have one)
+        """
+        if not self.password_path or not isfile(self.password_path):
+            return None
+
+        try:
+            with open(self.password_path, encoding='utf-8') as f:
+                # Kept exactly as given (spaces included)
+                return f.read()
+
+        except OSError as e:
+            logger.warning(
+                "Could not read the password '%s'." % self.password_path)
+            logger.debug('Password read exception: %s' % str(e))
+            return None
 
     def stage(self, groups, split_size=None, poster=None, subject=None,
               *args, **kwargs):
@@ -874,6 +1013,11 @@ class NNTPPostFactory:
         if segment is not None:
             # Add our segment
             self.nzb.add(segment)
+
+        # The password the archives need (if they have one)
+        password = self.load_password()
+        if password is not None:
+            self.nzb.meta = dict(self.nzb.meta or {}, password=password)
 
         # Set any last minute items to the NZB-File prior to it being saved
         # to disk
