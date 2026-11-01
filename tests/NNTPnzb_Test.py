@@ -424,6 +424,84 @@ class NNTPnzb_Test(TestBase):
         assert len(filenames) == len(NNTPnzb(nzbfile=nzbfile))
         assert all(f.startswith('Ubuntu-Copy.') for f in filenames)
 
+    def test_saved_files_are_nzb_1_2(self):
+        """
+        Saved NZB-Files declare NZB 1.2 (hosted on GitHub) and still use the
+        1.1 namespace, so older readers can read them
+        """
+        nzbfile = join(self.var_dir, 'Ubuntu-16.04.1-Server-i386.nzb')
+        nzbcopy = join(self.tmp_dir, 'NNTPnzb_Test.dtd', 'Ubuntu.nzb')
+        assert self.touch(nzbcopy) is True
+
+        nzbobj = NNTPnzb(nzbfile=nzbfile)
+        assert nzbobj.load() is True
+        assert nzbobj.save(nzbcopy) is True
+
+        with open(nzbcopy) as f:
+            content = f.read()
+
+        assert '<!DOCTYPE nzb PUBLIC "-//nuxref//DTD NZB 1.2//EN" ' \
+            '"https://raw.githubusercontent.com/caronc/newsreap/master/' \
+            'newsreap/var/nzb-1.2.dtd">' in content
+        assert '<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">' in content
+        assert NNTPnzb(nzbfile=nzbcopy).is_valid() is True
+
+    def test_nzb_1_2_attributes_are_valid(self):
+        """
+        The filename and crc32 attributes NZB 1.2 adds pass validation
+        """
+        nzbfile = join(self.tmp_dir, 'NNTPnzb_Test.dtd', 'v1.2.nzb')
+        assert self.touch(nzbfile) is True
+        with open(nzbfile, 'w') as f:
+            f.write(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">'
+                '<file subject="test" filename="test.rar" crc32="deadbeef">'
+                '<groups><group>alt.binaries.test</group></groups>'
+                '<segments><segment bytes="10" number="1" crc32="00ff00ff">'
+                'part1@example.com</segment></segments></file></nzb>\n')
+
+        assert NNTPnzb(nzbfile=nzbfile).is_valid() is True
+
+    def test_repeated_meta_is_kept(self):
+        """
+        A meta type given more than once (ie: several passwords) keeps
+        every value, in order
+        """
+        nzbfile = join(self.var_dir, 'Ubuntu-16.04.1-Server-i386.nzb')
+        nzbcopy = join(self.tmp_dir, 'NNTPnzb_Test.meta', 'Ubuntu.nzb')
+        assert self.touch(nzbcopy) is True
+
+        nzbobj = NNTPnzb(nzbfile=nzbfile)
+        assert nzbobj.load() is True
+        nzbobj.meta = {
+            'title': 'Ubuntu', 'password': ['first', 'second'],
+            'category': 'Software'}
+        assert nzbobj.save(nzbcopy) is True
+
+        nzbobj = NNTPnzb(nzbfile=nzbcopy)
+        assert len(list(nzbobj)) == 55
+        assert nzbobj.meta == {
+            'title': 'Ubuntu', 'password': ['first', 'second'],
+            'category': 'Software'}
+        assert nzbobj.is_valid() is True
+
+    def test_title_names_the_post(self):
+        """
+        The title meta names the post (before the older name meta)
+        """
+        nzbobj = NNTPnzb()
+        assert nzbobj.title() == ''
+
+        nzbobj.meta = {'name': 'Older'}
+        assert nzbobj.title() == 'Older'
+
+        nzbobj.meta = {'name': 'Older', 'title': ' Newer '}
+        assert nzbobj.title() == 'Newer'
+
+        nzbobj.meta = {'title': ['First', 'Second']}
+        assert nzbobj.title() == 'First'
+
     def test_nzb_is_available_from_the_package(self):
         """
         NNTPnzb can be imported straight from the newsreap package

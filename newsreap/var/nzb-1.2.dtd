@@ -2,12 +2,16 @@
     This is the NZB 1.2 DTD; a simple XML format for describing
     collections of one or more files located on Usenet.
 
-    Namespace = http://www.nuxref.com/2016/nzb
+    It only adds optional attributes to NZB 1.1, so a 1.1 reader can still
+    read a 1.2 file (it just ignores what it doesn't know).  The namespace
+    is the same as 1.1 for the same reason:
+
+      Namespace = http://www.newzbin.com/DTD/2003/nzb
 
     This DTD is identified by the PUBLIC and SYSTEM identifiers:
 
       PUBLIC "-//nuxref//DTD NZB 1.2//EN"
-      SYSTEM "http://www.nuxref.com/DTD/nzb/nzb-1.2.dtd"
+      SYSTEM "https://raw.githubusercontent.com/caronc/newsreap/master/newsreap/var/nzb-1.2.dtd"
 
     Clients are expected to handle extensions to this specification.
     If you're not parsing it with a reasonable XML parser and coping
@@ -27,18 +31,26 @@
 
 <!ELEMENT nzb (head?,file*)>
 <!ATTLIST nzb
-  xmlns      %URI;          #FIXED 'http://nuxref.com/DTD/2003/nzb'
+  xmlns      %URI;          #FIXED 'http://www.newzbin.com/DTD/2003/nzb'
   >
 
 <!-- zero or one header section per nzb, contains metadata for contents
      -->
 <!ELEMENT head (meta)*>
 
-<!-- exactly one metadata element per item of arbitrary metadata.
+<!-- one metadata element per item of metadata; a type can be given more
+     than once (ie: several passwords to try).
 
     type - An identifier for this metadata
-           Some types are pre-defined,
-      see http://docs.newzbin.com/index.php/Newzbin:NZB_Specs
+
+    Known types (any other type is allowed too):
+      title    - the name of the post
+      password - a password for the posted archives (can repeat; each one
+                 is tried)
+      category - a suggested category (ie: "TV")
+      tag      - a free-form label (can repeat)
+      uid      - an id the poster gave the post; it is the same for every
+                 file posted with it, so it ties the files together
     -->
 <!ELEMENT meta (#PCDATA)*>
 <!ATTLIST meta
@@ -52,7 +64,7 @@
     poster - The From: header the file was posted with
     date - A unix timestamp representing the time the file was first seen
 
-    -- v1.2 updates
+    Added in v1.2:
     filename - the filename otherwise placed in the yenc
     crc32 - the 32bit cyclic redundancy check (CRC) otherwise placed in the
             yenc head entry
@@ -86,7 +98,7 @@
     bytes - Byte-count of the article
     number - Segment number
 
-    -- v1.2 updates
+    Added in v1.2:
     crc32 - the 32bit cyclic redundancy check (CRC) otherwise placed in the
             =ypart entry
     -->

@@ -16,6 +16,8 @@ import gevent.monkey
 gevent.monkey.patch_all()
 
 import os
+import subprocess
+import sys
 from datetime import datetime
 from datetime import timedelta
 
@@ -224,6 +226,72 @@ def test_stopping_part_way_resumes(usenet):
     assert cached(settings)[1] == [(1, 300)]
 
 
+def test_killed_scans_get_their_indexes_back(tmp_path):
+    """
+    A scan killed while filling a new database (its indexes dropped for
+    speed) gets them back the next time the database is opened
+    """
+    db_file = str(tmp_path / 'cache' / 'search' / 'test.db')
+    db = NNTPGroupDatabase.from_file(db_file)
+    assert NNTPGroupScanner._drop_indexes(db)
+    db.close()
+
+    db = NNTPGroupDatabase.from_file(db_file)
+    with db._engine.connect() as conn:
+        names = {name for name, in conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type = 'index'")}
+    db.close()
+
+    assert {index.name for index in Article.__table__.indexes} <= names
+
+
+def test_killed_writes_leave_a_working_database(tmp_path):
+    """
+    A process killed part way through saving articles leaves everything it
+    saved before then (and a database that works)
+    """
+    db_file = str(tmp_path / 'test.db')
+    script = (
+        'import os, sys\n'
+        'from sqlalchemy import event\n'
+        'from newsreap import Database\n'
+        'from newsreap.NNTPGroupDatabase import NNTPGroupDatabase\n'
+        'from newsreap.objects.group.Article import Article\n'
+        '# A small cache, so big saves are written out before committing\n'
+        'tuned = Database.sqlite_tuned\n'
+        'def small(engine):\n'
+        '    tuned(engine)\n'
+        '    event.listen(engine, "connect", lambda c, _: c.execute(\n'
+        '        "PRAGMA cache_size = 100"))\n'
+        'Database.sqlite_tuned = small\n'
+        'db = NNTPGroupDatabase.from_file(sys.argv[1])\n'
+        'session = db.session()\n'
+        'def add(start):\n'
+        '    session.add_all(Article(\n'
+        '        message_id="%d@x" % n, article_no=n, subject="s",\n'
+        '        poster="p", size=1, lines=1)\n'
+        '        for n in range(start, start + 5000))\n'
+        '    session.flush()\n'
+        'add(1)\n'
+        'session.commit()\n'
+        '# Killed while saving the next ones\n'
+        'add(5001)\n'
+        'os._exit(9)\n')
+
+    result = subprocess.run(
+        [sys.executable, '-c', script, db_file],
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert result.returncode == 9
+
+    db = NNTPGroupDatabase.from_file(db_file)
+    session = db.session()
+    assert session.query(Article).count() == 5000
+    with db._engine.connect() as conn:
+        assert conn.exec_driver_sql(
+            'PRAGMA integrity_check').scalar() == 'ok'
+    db.close()
+
+
 def test_failed_batch_is_fetched_next_time(usenet):
     """
     A batch the server fails on is left for the next scan
@@ -240,6 +308,53 @@ def test_failed_batch_is_fetched_next_time(usenet):
     assert scanner.scan() is True
     assert xovers(server)[-1] == 'XOVER 101-200'
     assert cached(settings)[1] == [(1, 300)]
+
+
+def clock(settings):
+    """
+    Returns how far our test group has been seen (see
+    NNTPGroupDatabase.clock())
+    """
+    db = NNTPGroupDatabase.from_file(settings.group_database(GROUP))
+    seen = db.clock()
+    db.close()
+    return seen
+
+
+def test_caught_up_scans_move_the_clock(usenet):
+    """
+    A scan that reaches the server's newest article records when it did;
+    a group's clock is never behind its newest cached article
+    """
+    server, settings, manager = usenet
+    scanner = scanner_for(settings, manager)
+
+    # Stopped before reaching the newest article; only the newest cached
+    # article (number 100) counts
+    assert scanner.scan(limit=1) is False
+    assert clock(settings) == POSTED + timedelta(hours=100)
+
+    # Caught up: the time we asked the server counts (it's long after our
+    # made up articles were posted)
+    assert scanner.scan() is True
+    first = clock(settings)
+    assert first > POSTED + timedelta(hours=300)
+
+    # Nothing new is still caught up (and later)
+    assert scanner.scan() is True
+    assert clock(settings) >= first
+
+
+def test_failed_scans_leave_the_clock(usenet):
+    """
+    A scan that missed something doesn't count as caught up
+    """
+    server, settings, manager = usenet
+    server.on(r'^XOVER 201-300$', '503 Timeout', once=True)
+    scanner = scanner_for(settings, manager)
+
+    assert scanner.scan() is False
+    assert clock(settings) == POSTED + timedelta(hours=200)
 
 
 def test_newest_and_dates(usenet):
@@ -402,7 +517,7 @@ def test_update_from_the_command_line(tmp_path):
         result = nr('update', 'search', 'photos')
         assert '%s: already up to date' % GROUP in result.output
 
-        result = nr('search', 'photos', 'photos 2')
+        result = nr('search', '--raw', '-g', 'photos', 'photos 2')
         assert result.exit_code == 0
         assert 'holiday photos 2' in result.output
         assert 'holiday photos 1' not in result.output

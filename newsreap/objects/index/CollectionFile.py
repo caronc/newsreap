@@ -51,6 +51,10 @@ class CollectionFile(ObjectBase):
     # subject didn't say
     file_no = Column(Integer, nullable=False, default=0)
 
+    # Where it was listed in the NZB file it came from (None when it was
+    # scanned; those are sorted the way newznab sorts them)
+    position = Column(Integer)
+
     # How many segments the subject said there would be, how many we found
     # (each part number counted once) and their size in bytes
     segments_expected = Column(Integer, nullable=False, default=1)

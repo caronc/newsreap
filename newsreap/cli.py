@@ -79,6 +79,11 @@
 #   # spread over many groups; they all go into one index.
 #   nr update index test
 #
+#   # Collections only settle once their groups have been scanned past
+#   # them; --settle counts every group as seen up to now (ie: for groups
+#   # you no longer scan)
+#   nr update index test --settle
+#
 #   # List the collections (newest first, filtered by keywords and
 #   # optionally by group or alias) and save any of them as an NZB file
 #   # using the id shown on the left (or its GID)
@@ -89,6 +94,10 @@
 #   # Add NZB files you were given to the index (the only way to put
 #   # together posts with made up names spread over many groups)
 #   nr nzb import ~/Downloads/*.nzb
+#
+#   # Another NZB file of a post we have only adds its details (ie: another
+#   # password); --merge also adds the extra files it lists
+#   nr nzb import ~/Downloads/fixed.nzb --merge
 #
 #   # Remove collections you never want to see again; they don't come
 #   # back when indexing again
@@ -106,20 +115,19 @@
 #   # And then group what was found
 #   nr update index --watched
 #
-#   # Now that you've got content indexed, you can browse for things
-#   # You must specify an alias/group as your first argument
-#   # From there, you can specify your search arguments
-#   nr search test "keyword or string 1" "keyword or string 2" "etc..."
+#   # Now that you've got content indexed, you can search it (across every
+#   # group).  Each keyword must be in a collection's name or one of its
+#   # file subjects; case and accents don't matter unless you ask:
+#   nr search "keyword or string 1" "keyword or string 2" "etc..."
+#   nr search --case-sensitive MiXeD.Case
 #
-#   # Getting to many hits?  Filter them; the below only shows entries
-#   # that scored higher then 30
-#   nr search test --score=30 "keyword or string 1" \
-#                                   "keyword or string 2" "etc..."
+#   # Narrow it down to a group (or alias), leave things out with a dash,
+#   # or look at who posted it with %p
+#   nr search -g test holiday %pChris -- -2019
 #
-#   # You can do ranges too
-#   # The below only shows entries that have scored between -90 and 30
-#   nr search test --score=-90-30 "keyword or string 1" \
-#                                       "keyword or string 2" "etc..."
+#   # Search the cached article headers instead (ie: what isn't indexed
+#   # yet); the below only shows articles that scored 30 or more
+#   nr search --raw -g test --minscore 30 "keyword or string 1"
 #
 #  If you setup you filters right, you can download content by group or
 #  single files.  Just pay attention to the id on the left (in your search)
@@ -145,6 +153,10 @@ from newsreap.NNTPSettings import DEFAULT_CONFIG_FILE_PATHS
 from newsreap.NNTPManager import NNTPManager
 from newsreap.Utils import scan_pylib
 from newsreap.Utils import load_pylib
+from newsreap import __copyright__
+from newsreap import __license__
+from newsreap import __title__
+from newsreap import __version__
 
 # Logging
 from newsreap.Logging import *
@@ -152,8 +164,24 @@ import logging
 logger = logging.getLogger(NEWSREAP_CLI)
 
 
+def print_version(ctx, param, value):
+    """
+    Prints our version (for --version) and exits
+    """
+    if not value or ctx.resilient_parsing:
+        return
+
+    click.echo('%s v%s' % (__title__, __version__))
+    click.echo(__copyright__)
+    click.echo('This code is licensed under the %s License.' % __license__)
+    ctx.exit(0)
+
+
 # General Options
 @click.group(invoke_without_command=True, no_args_is_help=True)
+@click.option('--version', '-V', is_flag=True, is_eager=True,
+              expose_value=False, callback=print_version,
+              help='Show the version and exit.')
 @click.option('--config', '-c',
               help='Specify configuration file.')
 @click.option('--verbose', '-v', count=True,

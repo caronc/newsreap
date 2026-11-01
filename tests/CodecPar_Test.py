@@ -152,7 +152,7 @@ class CodecPar_Test(TestBase):
 
         # Now we want to damage our file
         with open(tmp_file, 'rb+') as f:
-            f.write('garble')
+            f.write(b'garble')
 
         # Verify our content
         result = cr.test(content)

@@ -351,8 +351,11 @@ def track(session, group_id, server_id, scanner):
 @click.command(name='index')
 @click.argument('groups', nargs=-1)
 @click.option('--watched', '-w', is_flag=True, help='All watched groups.')
+@click.option('--settle', is_flag=True,
+              help='Count every group as seen up to now, so collections '
+                   'from groups you no longer scan can settle too.')
 @click.pass_obj
-def update_index(ctx, groups, watched):
+def update_index(ctx, groups, watched, settle):
     """
     Group cached articles into files and collections.
 
@@ -417,7 +420,7 @@ def update_index(ctx, groups, watched):
             session.commit()
 
         # Work out which collections have formed (across every group)
-        if indexer.settle():
+        if indexer.settle(now=utcnow() if settle else None):
             click.echo('%d collection(s) formed' % indexer.formed)
 
     finally:

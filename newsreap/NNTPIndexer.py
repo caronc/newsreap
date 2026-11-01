@@ -28,7 +28,9 @@ found in are just tags on the file it belongs to:
   be removed once indexed (see NNTPGroupDatabase.purge()).
 - A collection is forming while its articles arrive.  It is formed once
   complete, or settled once nothing new arrived for a while (some parts
-  never show up).  Once formed it gets a lasting id (its GID).
+  never show up).  Once formed it gets a lasting id (its GID), worked
+  out the way newznab does it (see gid_order()) so an NZB file of the
+  same post gets the same one.
 - Something posted long after (or before) a collection with the same name
   and poster is a repost and becomes a collection of its own.
 
@@ -42,6 +44,7 @@ gevent.monkey.patch_all()
 import re
 from datetime import datetime
 from datetime import timedelta
+from datetime import UTC
 from hashlib import md5
 from os.path import basename
 from os.path import isfile
@@ -49,26 +52,37 @@ from os.path import splitext
 
 from sqlalchemy import DateTime
 from sqlalchemy import bindparam
+from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import literal_column
+from sqlalchemy import and_
+from sqlalchemy import select
+from sqlalchemy import union
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import text
 
 from .NNTPArticle import NNTPArticle
 from .NNTPEmptyContent import NNTPEmptyContent
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
+from .NNTPIndexDatabase import SEARCH_TABLE
 from .NNTPSegmentedPost import NNTPSegmentedPost
 from .NNTPnzb import NNTPnzb
 from .NNTPnzb import NZBSegmentNumber
+from .NNTPnzb import NZB_META_REPEATS
+from .Utils import bytes_to_strsize
 from .codecs.CodecYenc import CodecYenc
 from .objects.group.Article import Article
 from .objects.index.Collection import Collection
+from .objects.index.Collection import CollectionSource
 from .objects.index.Collection import CollectionState
 from .objects.index.Collection import COLLECTION_FORMED
+from .objects.index.CollectionAlias import CollectionAlias
 from .objects.index.CollectionFile import CollectionFile
+from .objects.index.CollectionMeta import CollectionMeta
 from .objects.index.FileGroup import FileGroup
+from .objects.index.GroupClock import GroupClock
 from .objects.index.Segment import Segment
-from .Utils import utcnow
 
 # Logging
 import logging
@@ -88,6 +102,27 @@ DEFAULT_REPOST_DAYS = 3
 
 # A GID is an md5 written out in hex
 GID_RE = re.compile(r'^[0-9a-f]{32}$', re.IGNORECASE | re.ASCII)
+
+# The segment counter newznab takes out of a subject to name a file
+NEWZNAB_COUNTER_RE = re.compile(r'\((\d+)/(\d+)\)', re.ASCII)
+
+# A search keyword: %s (the default) looks in names and subjects, %p in
+# posters; a leading - leaves out what has it (a leading + is dropped)
+KEYWORD_RE = re.compile(
+    r'^(?P<column>%[sp])?(?P<op>[+-])?(?P<text>.+)$', re.ASCII | re.DOTALL)
+
+# The search index only finds keywords at least this long; shorter ones are
+# looked for in every entry
+SEARCH_MIN_LENGTH = 3
+
+# How many rows go into each statement when adding them on PostgreSQL (it
+# allows 65535 values per statement)
+PG_INSERT_ROWS = 5000
+
+# MySQL's FULLTEXT (ngram) index finds pieces this long; shorter keywords
+# are looked for in every entry (its ngram_token_size, which is 2 unless
+# changed)
+MYSQL_NGRAM_SIZE = 2
 
 # A counter such as (3/50) or [03/10]
 COUNTER_RE = re.compile(
@@ -225,6 +260,43 @@ def make_gid(message_id):
     return md5(message_id.strip().strip('<>').encode('utf-8')).hexdigest()
 
 
+def gid_order(subject):
+    """
+    Returns what a file is sorted by when working out a GID
+
+    This matches the order newznab writes the files of an NZB in (and so
+    the GID it reads back from it):
+    - the subject without its last (a/b) counter (every copy of that
+      counter is removed, as newznab does), with spaces trimmed
+    - case doesn't matter
+    """
+    counters = NEWZNAB_COUNTER_RE.findall(subject)
+    if counters:
+        subject = subject.replace('(%s/%s)' % counters[-1], '')
+
+    return subject.strip().casefold()
+
+
+def parse_keywords(keywords):
+    """
+    Returns (exclude, column, text) for each search keyword given (see
+    KEYWORD_RE); the column is 'subject' or 'poster'
+    """
+    parsed = []
+    for keyword in keywords:
+        result = KEYWORD_RE.match(keyword)
+        if not result:
+            # Nothing to look for
+            continue
+
+        parsed.append((
+            result.group('op') == '-',
+            'poster' if result.group('column') == '%p' else 'subject',
+            result.group('text')))
+
+    return parsed
+
+
 def chunked(items, size=IN_LIST_SIZE):
     """
     Splits items into lists of at most `size` (a generator)
@@ -246,7 +318,8 @@ class NNTPIndexer:
         """
         Prepares an indexer
 
-        - db_file: the index database (see NNTPSettings.index_database())
+        - db_file: the index database; an SQLite file or a database URL
+          (see NNTPSettings.index_database())
         - chunk_size: how many articles are indexed (and saved) at a time
         - settle_hours: how long a collection missing parts waits for new
           articles before it is settled
@@ -281,11 +354,11 @@ class NNTPIndexer:
         yet (unless `create` is set)
         """
         if self._db is None:
-            if not create and not isfile(self.db_file):
+            if not create and not NNTPIndexDatabase.exists(self.db_file):
                 # Nothing was ever indexed
                 return None
 
-            self._db = NNTPIndexDatabase.from_file(self.db_file)
+            self._db = NNTPIndexDatabase.from_engine(self.db_file)
 
         return self._db.session()
 
@@ -362,6 +435,13 @@ class NNTPIndexer:
                 logger.debug('Indexed %d article(s) of %s (up to article %d).'
                              % (len(rows), group, rows[-1].article_no))
 
+            # Remember how far we have seen the group (see settle())
+            seen = cache.clock()
+            clock = session.get(GroupClock, group)
+            if seen is not None and (clock is None or seen > clock.seen):
+                session.merge(GroupClock(name=group, seen=seen))
+                session.commit()
+
         finally:
             cache.close()
 
@@ -371,6 +451,29 @@ class NNTPIndexer:
         """
         Indexes one chunk of articles found in `group`
         """
+        # The articles we already have: a scanned file found in another
+        # group is tagged with this one too; one an NZB file lists is left
+        # just as the NZB file has it
+        owned = {}
+        for ids in chunked([row.message_id for row in rows]):
+            owned.update(
+                (message_id, (file_id, source)) for message_id, file_id, source
+                in session.query(
+                    Segment.message_id, Segment.file_id, Collection.source)
+                .join(CollectionFile, CollectionFile.id == Segment.file_id)
+                .join(Collection, Collection.id == CollectionFile.collection_id)
+                .filter(Segment.message_id.in_(ids)))
+
+        tagged = {file_id for file_id, source in owned.values()
+                  if source == CollectionSource.Scan}
+        if tagged:
+            self._insert_ignore(
+                session, FileGroup,
+                [{'file_id': file_id, 'name': group} for file_id in tagged])
+
+        # Only the rest needs working out
+        rows = [row for row in rows if row.message_id not in owned]
+
         # Work out what each article is part of
         entries = []
         for row in rows:
@@ -443,7 +546,8 @@ class NNTPIndexer:
             self.collections += len(added)
 
         if not kept:
-            # Everything belonged to collections that were removed
+            # Nothing new is left (or it all belonged to collections that
+            # were removed)
             return
 
         # The segments of one file share a collection and their subject
@@ -468,8 +572,8 @@ class NNTPIndexer:
 
         # Tie every article to its file (an article found before, ie: in
         # another group, is only stored once)
-        session.execute(
-            insert(Segment).prefix_with('OR IGNORE'),
+        self._insert_ignore(
+            session, Segment,
             [{'message_id': row.message_id,
               'file_id': files[info['file_key']],
               'part': info['part'],
@@ -477,8 +581,8 @@ class NNTPIndexer:
 
         # Tag every file with the group it was found in
         file_ids = {files[info['file_key']] for _, _, info, _ in kept}
-        session.execute(
-            insert(FileGroup).prefix_with('OR IGNORE'),
+        self._insert_ignore(
+            session, FileGroup,
             [{'file_id': file_id, 'name': group} for file_id in file_ids])
 
         # When each file's articles (in this chunk) were posted
@@ -495,6 +599,47 @@ class NNTPIndexer:
         self._recount(
             session, file_ids, {window['id'] for _, _, _, window in kept},
             dates)
+
+    @staticmethod
+    def _insert_ignore(session, table, rows):
+        """
+        Adds the rows given to a table, skipping the ones it already has
+        (the same primary or unique key)
+        """
+        if not rows:
+            return
+
+        dialect = session.get_bind().dialect.name
+        if dialect == 'postgresql':
+            # Sent as a few large statements; one row at a time is very
+            # slow (and each statement can only hold so many values)
+            for chunk in chunked(rows, PG_INSERT_ROWS):
+                session.execute(
+                    pg_insert(table).values(chunk).on_conflict_do_nothing())
+            return
+
+        if dialect == 'mysql':
+            statement = insert(table).prefix_with('IGNORE')
+
+        else:
+            statement = insert(table).prefix_with('OR IGNORE')
+
+        session.execute(statement, rows)
+
+    @staticmethod
+    def _days(dialect, value):
+        """
+        Returns SQL that turns a date and time into a number of days (with
+        fractions), so two of them can be compared
+        """
+        if dialect == 'postgresql':
+            return '(EXTRACT(EPOCH FROM %s) / 86400.0)' % value
+
+        if dialect == 'mysql':
+            # Our connections use UTC (see Database.open())
+            return '(UNIX_TIMESTAMP(%s) / 86400.0)' % value
+
+        return 'julianday(%s)' % value
 
     def _window(self, windows, posted):
         """
@@ -602,9 +747,19 @@ class NNTPIndexer:
 
     def settle(self, now=None):
         """
-        Works out which collections have formed: the complete ones, and the
-        ones missing parts that nothing new arrived for in a while (they are
-        settled).  Each newly formed collection gets its GID.
+        Works out which scanned collections have formed: the complete ones,
+        and the ones missing parts that nothing new arrived for in a while
+        (they are settled).  Each newly formed collection gets its GID.
+
+        "A while" is measured by how far we have seen the groups it was
+        found in (see GroupClock), not by the time now: a collection only
+        settles once every one of its groups has been seen at least
+        `settle_hours` past its last article.  Collections are never marked
+        incomplete just because we haven't scanned in a while.
+
+        - now: count every group as seen up to this time (UTC) when its
+          clock is behind it; use it to settle what is left of groups you
+          no longer scan
 
         Call it once every group is indexed.  Returns how many collections
         formed (also kept in `formed`).
@@ -616,25 +771,53 @@ class NNTPIndexer:
             # Nothing was ever indexed
             return 0
 
-        # Anything last posted before this has had its time
-        cutoff = (now or utcnow()) - self.settle_after
+        dialect = session.get_bind().dialect.name
+        days = lambda value: self._days(dialect, value)  # noqa: E731
 
-        # Update the collections still forming (and the settled ones; late
-        # parts can still complete them)
+        # The least seen of its groups decides
+        seen = \
+            '(SELECT %s FROM group_clock ' \
+            ' WHERE group_clock.name IN (' \
+            '  SELECT file_group.name FROM file_group ' \
+            '  JOIN collection_file ' \
+            '  ON collection_file.id = file_group.file_id ' \
+            '  WHERE collection_file.collection_id = collection.id))' \
+            % days('MIN(group_clock.seen)')
+
+        values = {
+            'complete': CollectionState.Complete,
+            'settled': CollectionState.Settled,
+            'forming': CollectionState.Forming,
+            'scan': CollectionSource.Scan,
+            'days': self.settle_after.total_seconds() / 86400.0,
+        }
+
+        params = []
+        if now is not None:
+            if now.tzinfo is not None:
+                now = now.astimezone(UTC).replace(tzinfo=None)
+
+            # A group is seen up to now at least (even with no clock)
+            seen = '%s(COALESCE(%s, %s), %s)' % (
+                'MAX' if dialect == 'sqlite' else 'GREATEST',
+                seen, days(':now'), days(':now'))
+            values['now'] = now
+            params.append(bindparam('now', type_=DateTime()))
+
+        # Update the scanned collections still forming (and the settled
+        # ones; late parts can still complete them, but once settled they
+        # stay that way)
         session.execute(text(
             'UPDATE collection SET state = CASE '
             'WHEN segments >= segments_expected AND '
             '  (files_expected = 0 OR files >= files_expected) '
             '  THEN :complete '
-            'WHEN last_posted IS NULL OR last_posted < :cutoff '
+            'WHEN state = :settled OR last_posted IS NULL THEN :settled '
+            'WHEN ' + days('last_posted') + ' < ' + seen + ' - :days '
             '  THEN :settled '
             'ELSE :forming END '
-            'WHERE state IN (:forming, :settled)')
-            .bindparams(bindparam('cutoff', type_=DateTime())), {
-                'complete': CollectionState.Complete,
-                'settled': CollectionState.Settled,
-                'forming': CollectionState.Forming,
-                'cutoff': cutoff})
+            'WHERE source = :scan AND state IN (:forming, :settled)')
+            .bindparams(*params), values)
 
         # Give every newly formed collection its GID
         formed = session.query(Collection)\
@@ -674,20 +857,36 @@ class NNTPIndexer:
         return self.formed
 
     @staticmethod
-    def _gid(session, collection_id):
+    def _files(session, collection_id):
         """
-        Works out a collection's GID from the first segment of its first
-        file (files sorted by subject); None if it has no segments
+        Returns a collection's files in the order an NZB file lists them;
+        the first one is what its GID comes from
+
+        - Files read from an NZB file keep the order it had them in.
+        - Scanned files are sorted the way newznab sorts them (see
+          gid_order()).
         """
-        first = session.query(CollectionFile.id)\
+        files = session.query(CollectionFile)\
             .filter(CollectionFile.collection_id == collection_id)\
-            .order_by(CollectionFile.subject, CollectionFile.id).first()
-        if first is None:
+            .order_by(CollectionFile.id).all()
+
+        return sorted(files, key=lambda entry: (
+            entry.position is None, entry.position or 0,
+            gid_order(entry.subject)))
+
+    @classmethod
+    def _gid(cls, session, collection_id):
+        """
+        Works out a collection's GID from the first segment (lowest part)
+        of its first file; None if it has no segments
+        """
+        files = cls._files(session, collection_id)
+        if not files:
             return None
 
         segment = session.query(Segment.message_id)\
-            .filter(Segment.file_id == first.id)\
-            .order_by(Segment.part, literal_column('segment.rowid')).first()
+            .filter(Segment.file_id == files[0].id)\
+            .order_by(Segment.part, Segment.message_id).first()
 
         return None if segment is None else make_gid(segment.message_id)
 
@@ -705,7 +904,11 @@ class NNTPIndexer:
             .filter(Collection.state != CollectionState.Deleted)
 
         if GID_RE.match(value):
-            return query.filter(Collection.gid == value.lower()).first()
+            # Another NZB file's GID finds the collection we kept for it
+            alias = session.get(CollectionAlias, value.lower())
+            return query.filter(
+                Collection.id == alias.collection_id if alias
+                else Collection.gid == value.lower()).first()
 
         try:
             return query.filter(Collection.id == int(value)).first()
@@ -715,16 +918,19 @@ class NNTPIndexer:
             return None
 
     def find(self, keywords=(), groups=None, complete=None, forming=False,
-             limit=None):
+             limit=None, case_sensitive=False):
         """
-        Returns collections (newest first) whose names contain every
-        keyword (case doesn't matter).  A keyword starting with '-' must not
-        be in the name.
+        Returns collections (newest first) with every keyword in their name
+        or the subject of one of their files (see parse_keywords()):
+        - a keyword starting with '-' must not be in any of them
+        - a keyword starting with '%p' is looked for in the posters instead
 
         - groups: only collections with a file found in one of these groups
         - complete: True for only complete ones, False for only incomplete
           ones, None for both
         - forming: include collections still forming
+        - case_sensitive: only match keywords with the same case (otherwise
+          case, and accents, don't matter)
         """
         session = self.session()
         if session is None:
@@ -741,14 +947,11 @@ class NNTPIndexer:
             states.append(CollectionState.Forming)
 
         query = session.query(Collection).filter(Collection.state.in_(states))
-        for keyword in keywords:
-            if keyword.startswith('-') and len(keyword) > 1:
-                query = query.filter(
-                    ~Collection.name.ilike('%%%s%%' % keyword[1:]))
-
-            else:
-                query = query.filter(
-                    Collection.name.ilike('%%%s%%' % keyword.lstrip('+')))
+        for no, (exclude, column, value) in enumerate(
+                parse_keywords(keywords)):
+            found = Collection.id.in_(self._search(
+                session, no, column, value, case_sensitive))
+            query = query.filter(~found if exclude else found)
 
         if groups:
             # Found in (at least) one of the groups
@@ -761,6 +964,107 @@ class NNTPIndexer:
             Collection.first_posted.desc(), Collection.id.desc())
 
         return query.limit(limit).all() if limit else query.all()
+
+    @staticmethod
+    def summary(entry):
+        """
+        Returns the line that describes a collection in a list: its id, how
+        much of it was found, its size, files and name
+        """
+        percent = 100.0 * entry.segments / entry.segments_expected \
+            if entry.segments_expected else 100.0
+
+        files = '%d/%d' % (entry.files, entry.files_expected) \
+            if entry.files_expected else '%d' % entry.files
+
+        return '[%6d] %5.1f%% %10s %7s file(s)  %s' % (
+            entry.id, min(percent, 100.0), bytes_to_strsize(entry.size),
+            files, entry.name)
+
+    @staticmethod
+    def _search(session, no, column, value, case_sensitive=False):
+        """
+        Returns a query of the collections with `value` in their name or
+        a file subject (column 'subject'), or in a poster (column 'poster')
+
+        - no: makes its parameters unique (one per keyword)
+        - case_sensitive: only the same case counts (otherwise case and
+          accents don't matter)
+
+        See NNTPIndexDatabase.search_index() for how each database finds
+        them quickly.
+        """
+        dialect = session.get_bind().dialect.name
+        if dialect != 'sqlite':
+            # Look in the collection names (or posters) and file subjects
+            # (or posters) themselves
+            columns = (
+                (Collection.id, getattr(
+                    Collection, 'name' if column == 'subject' else column)),
+                (CollectionFile.collection_id, getattr(
+                    CollectionFile, column)),
+            )
+
+            # Searched once as a table of its own; MySQL would otherwise
+            # search again for every collection
+            found = union(*(
+                select(collection_id.label('id')).where(NNTPIndexer._contains(
+                    dialect, searched, value, case_sensitive))
+                for collection_id, searched in columns)).subquery()
+
+            return select(found.c.id)
+
+        params = {}
+        if len(value) >= SEARCH_MIN_LENGTH:
+            # The search index finds it (whatever its case)
+            where = '%s MATCH :match%d' % (column, no)
+            params['match%d' % no] = '"%s"' % value.replace('"', '""')
+
+        else:
+            # Too short for the search index; look through every entry
+            where = 'instr(lower(%s), :lower%d) > 0' % (column, no)
+            params['lower%d' % no] = value.lower()
+
+        if case_sensitive:
+            # Only the ones with the same case
+            where += ' AND instr(%s, :exact%d) > 0' % (column, no)
+            params['exact%d' % no] = value
+
+        return select(literal_column('collection_id'))\
+            .select_from(text(SEARCH_TABLE))\
+            .where(text(where).bindparams(**params))
+
+    @staticmethod
+    def _contains(dialect, column, value, case_sensitive=False):
+        """
+        Returns the condition (on a database server) for `value` being
+        anywhere in `column` (see _search())
+        """
+        # Keep % and _ as they are
+        pattern = '%%%s%%' % value.replace('/', '//')\
+            .replace('%', '/%').replace('_', '/_')
+
+        if dialect == 'postgresql':
+            # Found with the (accent ignoring) search index first
+            found = func.newsreap_unaccent(column).ilike(
+                func.newsreap_unaccent(pattern), escape='/')
+
+            return and_(found, column.like(pattern, escape='/')) \
+                if case_sensitive else found
+
+        if dialect == 'mysql':
+            # The usual (_ci) collations ignore case and accents
+            found = column.like(pattern, escape='/')
+            if len(value) >= MYSQL_NGRAM_SIZE and '"' not in value:
+                # Narrowed down with the search index first
+                found = and_(column.match('"%s"' % value), found)
+
+            return and_(found, column.collate('utf8mb4_bin').like(
+                pattern, escape='/')) if case_sensitive else found
+
+        found = column.ilike(pattern, escape='/')
+        return and_(found, column.like(pattern, escape='/')) \
+            if case_sensitive else found
 
     def groups(self, collection_id):
         """
@@ -792,18 +1096,26 @@ class NNTPIndexer:
         session = self.session()
 
         nzb = NNTPnzb(work_dir=work_dir)
-        nzb.meta = {'name': collection.name}
-        if collection.category:
-            nzb.meta['category'] = collection.category
 
-        if collection.password:
-            nzb.meta['password'] = collection.password
+        # Every detail we have about it (just as an NZB file gave them)
+        nzb.meta = {}
+        for key, entry in session.query(
+                CollectionMeta.type, CollectionMeta.value)\
+                .filter(CollectionMeta.collection_id == collection.id)\
+                .order_by(CollectionMeta.id):
+            # A type given more than once keeps every value
+            nzb.meta.setdefault(key, []).append(entry)
 
-        files = session.query(CollectionFile)\
-            .filter(CollectionFile.collection_id == collection.id)\
-            .order_by(CollectionFile.file_no, CollectionFile.filename)
+        nzb.meta = {
+            key: values[0] if len(values) == 1 else values
+            for key, values in nzb.meta.items()}
 
-        for sort_no, entry in enumerate(files):
+        if not nzb.title():
+            nzb.meta['title'] = collection.name
+
+        # The files go in the order our GID came from, so the GID read back
+        # from the NZB file (ie: by newznab) is the same as ours
+        for sort_no, entry in enumerate(self._files(session, collection.id)):
             groups = sorted(
                 name for name, in session.query(FileGroup.name)
                 .filter(FileGroup.file_id == entry.id))
@@ -814,12 +1126,13 @@ class NNTPIndexer:
                 sort_no=sort_no)
             post.filename = entry.filename
 
-            # One article per part; a part posted twice uses the first
+            # One article per part; a part posted twice uses the lowest
+            # Message-ID (so every database picks the same one)
             seen = set()
             for part, message_id, size in session.query(
                     Segment.part, Segment.message_id, Segment.size)\
                     .filter(Segment.file_id == entry.id)\
-                    .order_by(Segment.part, literal_column('segment.rowid')):
+                    .order_by(Segment.part, Segment.message_id):
 
                 if part in seen:
                     continue
@@ -862,10 +1175,27 @@ class NNTPIndexer:
         session.expunge_all()
         return True
 
-    @staticmethod
-    def _remove(session, collection_id):
+    @classmethod
+    def _remove(cls, session, collection_id):
         """
         Removes a collection's files and marks it as deleted (not committed)
+        """
+        values = {'id': collection_id}
+        cls._clear(session, collection_id)
+        session.execute(text(
+            'DELETE FROM collection_meta WHERE collection_id = :id'), values)
+
+        # Its posting time is kept so what belongs to it is still recognised
+        session.execute(text(
+            'UPDATE collection SET state = :deleted, files = 0, '
+            'segments = 0, size = 0 WHERE id = :id'),
+            dict(values, deleted=CollectionState.Deleted))
+
+    @staticmethod
+    def _clear(session, collection_id):
+        """
+        Removes a collection's files (and their articles and groups), not
+        committed
         """
         # The files of the collection
         files = 'SELECT id FROM collection_file WHERE collection_id = :id'
@@ -878,89 +1208,431 @@ class NNTPIndexer:
         session.execute(text(
             'DELETE FROM collection_file WHERE collection_id = :id'), values)
 
-        # Its posting time is kept so what belongs to it is still recognised
-        session.execute(text(
-            'UPDATE collection SET state = :deleted, files = 0, '
-            'segments = 0, size = 0 WHERE id = :id'),
-            dict(values, deleted=CollectionState.Deleted))
-
-    def import_nzb(self, path, name=None):
+    def import_nzb(self, path, name=None, merge=False):
         """
         Adds the post an NZB file describes as a collection
 
+        An NZB file is the real post, not our best guess, so:
+        - its articles are taken from any scanned collection that had them
+          (what those have left is counted again and re-formed by settle())
+        - a scanned collection it covers completely becomes it (and keeps
+          its id)
+        - scanning never changes it afterwards
+        - every <meta> detail it has is kept (see CollectionMeta)
+
+        An article only belongs to one NZB file's collection, and the first
+        one imported keeps it.  Another NZB file with its articles:
+        - has the same articles (or fewer): only the details it has that we
+          don't are added (see _merge_meta())
+        - has every one of them and more (ie: extra par2 files, or bloat):
+          its details are added too, but its extra files are left out
+          (listed in `left_out`)
+        - has only some of them: it is refused
+        With merge set, it replaces those collections instead (see
+        _replace()).
+        Its GID then finds our collection (see CollectionAlias).
+
         - name: what to call it (defaults to the name the NZB file gives,
           or else its file name)
+        - merge: replace the collections that share its articles with it
+          (see _replace())
 
         Returns (collection, added):
         - collection: the collection (None if the NZB file couldn't be read,
-          or the post was removed before)
-        - added: False if we already had it
+          the post was removed before, or it only shares some articles with
+          a collection we have)
+        - added: True if files were added (False if we already had them)
+
+        Also sets:
+        - details: how many details were added
+        - left_out: the subjects of the files not added (without merge)
+        - merging: True if it replaced collections we had (with merge)
+        - merged / dropped: how many files that collection gained / lost
+        - replaced: the ids of the other collections it replaced (removed)
         """
+        self.details = 0
+        self.merging = False
+        self.merged = 0
+        self.dropped = 0
+        self.replaced = []
+        self.left_out = []
+
         nzb = NNTPnzb(path)
         if not nzb.is_valid():
             logger.warning("'%s' is not a valid NZB file." % path)
             return None, False
 
-        # Every file with its articles (lowest part first)
+        # Every file with its articles (lowest part first), in the order
+        # the NZB file lists them
         posts = [(post, list(post)) for post in nzb]
         posts = [(post, articles) for post, articles in posts if articles]
         if not posts:
             logger.warning("'%s' lists no articles." % path)
             return None, False
 
-        # Its GID comes from the first segment of its first file (files
-        # sorted by subject)
-        first = min(posts, key=lambda entry: entry[0].subject or '')
-        gid = make_gid(first[1][0].id)
+        # Its GID is the one newznab reads from it: the first segment of the
+        # first file, as the NZB file lists them
+        gid = nzb.gid() or make_gid(posts[0][1][0].id)
 
         session = self.session(create=True)
-        existing = session.query(Collection)\
+        message_ids = [
+            article.id.strip().strip('<>')
+            for _, articles in posts for article in articles]
+
+        # Another NZB file of a collection we have uses its GID
+        alias = session.get(CollectionAlias, gid)
+        existing = session.get(Collection, alias.collection_id) if alias \
+            else session.query(Collection)\
             .filter(Collection.gid == gid).first()
 
-        if existing is not None:
-            if existing.state == CollectionState.Deleted:
-                # It was removed (nr delete); it stays that way
-                logger.warning(
-                    "'%s' is collection #%d, which was removed." % (
-                        path, existing.id))
-                return None, False
+        if existing is not None and existing.state == CollectionState.Deleted:
+            # It was removed (nr delete); it stays that way
+            logger.warning(
+                "'%s' is collection #%d, which was removed." % (
+                    path, existing.id))
+            return None, False
 
-            # We already have it
+        if alias is not None and not merge:
+            # It was merged into (or replaced by) a collection before
             return existing, False
 
-        meta = nzb.meta or {}
-        collection = Collection(
-            key='nzb\n%s' % gid, gid=gid,
-            poster=(first[0].poster or '')[:128],
-            name=(name or meta.get('name') or
-                  splitext(basename(path))[0])[:256],
-            files_expected=len(posts),
-            category=meta.get('category'),
-            password=meta.get('password'))
-        session.add(collection)
+        # The collections (from other NZB files) that have its articles
+        owners = self._owners(session, message_ids)
+        if existing is not None and existing.source == CollectionSource.Nzb:
+            owners.setdefault(existing.id, set())
+
+        if owners and merge:
+            # It replaces them
+            return self._replace(
+                session, owners, existing, nzb, posts, gid, message_ids)
+
+        if len(owners) > 1:
+            logger.warning(
+                "'%s' shares articles with collections %s; it was not "
+                "imported (use --merge to replace them with it)." % (
+                    path, ', '.join('#%d' % i for i in sorted(owners))))
+            return None, False
+
+        if owners:
+            (collection_id, owned), = owners.items()
+            return self._overlap(
+                session, session.get(Collection, collection_id), owned,
+                nzb, posts, gid, path)
+
+        # Take its articles from the scanned collections that have them
+        emptied = self._claim(session, message_ids)
+
+        # A scanned collection it covers completely becomes it
+        if existing is not None and existing.id in emptied:
+            collection = existing
+
+        elif emptied:
+            collection = session.get(Collection, emptied[0])
+
+        else:
+            collection = None
+
+        if existing is not None and existing is not collection:
+            # It keeps what the NZB file doesn't list, and gets a GID of its
+            # own once it forms again
+            existing.gid = None
+            existing.state = CollectionState.Forming
+            session.flush()
+
+        for collection_id in emptied:
+            if collection is None or collection_id != collection.id:
+                # Nothing is left of it; it was all a part of this post
+                session.query(Collection)\
+                    .filter(Collection.id == collection_id).delete()
+
+        if collection is None:
+            collection = Collection()
+            session.add(collection)
+
+        collection.key = 'nzb\n%s' % gid
+        collection.gid = gid
+        collection.source = CollectionSource.Nzb
+        collection.poster = (posts[0][0].poster or '')[:128]
+        collection.name = (
+            name or nzb.title() or splitext(basename(path))[0])[:256]
+        collection.files_expected = len(posts)
         session.flush()
 
+        # What the NZB file says about it
+        session.query(CollectionMeta)\
+            .filter(CollectionMeta.collection_id == collection.id).delete()
+        session.add_all(
+            CollectionMeta(collection_id=collection.id, type=key, value=value)
+            for key, value in self._meta(nzb))
+
+        self._add_files(session, collection, posts)
+        self._formed(session, collection)
+
+        return collection, True
+
+    @staticmethod
+    def _meta(nzb):
+        """
+        Returns the (type, value) of every detail an NZB file gives (in its
+        order, without repeats)
+        """
+        meta = []
+        for key, values in (nzb.meta or {}).items():
+            for value in (values if isinstance(values, list) else [values]):
+                entry = (str(key)[:64], str(value)[:1024])
+                if entry not in meta:
+                    meta.append(entry)
+
+        return meta
+
+    @staticmethod
+    def _owners(session, message_ids):
+        """
+        Returns the collections (from NZB files) that have any of the
+        articles given: collection id -> the message ids it has
+        """
+        owners = {}
+        for ids in chunked(dict.fromkeys(message_ids)):
+            for message_id, collection_id in session.query(
+                    Segment.message_id, CollectionFile.collection_id)\
+                    .join(CollectionFile, CollectionFile.id == Segment.file_id)\
+                    .join(Collection,
+                          Collection.id == CollectionFile.collection_id)\
+                    .filter(Collection.source == CollectionSource.Nzb)\
+                    .filter(Segment.message_id.in_(ids)):
+                owners.setdefault(collection_id, set()).add(message_id)
+
+        return owners
+
+    def _overlap(self, session, collection, owned, nzb, posts, gid, path):
+        """
+        Handles an NZB file sharing articles with a collection we have from
+        another one, when it isn't merged (see import_nzb())
+
+        - owned: the message ids of the NZB file the collection has
+        """
+        wanted = {
+            article.id.strip().strip('<>')
+            for _, articles in posts for article in articles}
+
+        # Every article the collection has
+        total = session.query(Segment.message_id)\
+            .join(CollectionFile, CollectionFile.id == Segment.file_id)\
+            .filter(CollectionFile.collection_id == collection.id).count()
+
+        if len(owned) < len(wanted) and len(owned) < total:
+            # Neither one has everything the other has
+            logger.warning(
+                "'%s' only shares some of its articles with collection #%d "
+                "(%s); it was not imported (use --merge to replace it with "
+                "it)." % (path, collection.id, collection.name))
+            return None, False
+
+        if gid != collection.gid and session.get(CollectionAlias, gid) is None:
+            # Its GID finds our collection from now on
+            session.add(CollectionAlias(gid=gid, collection_id=collection.id))
+
+        self._merge_meta(session, collection.id, self._meta(nzb))
+
+        # Fixes and bloat look the same; the files we don't have are only
+        # added when merging
+        self.left_out = [
+            post.subject or '' for post, articles in posts
+            if any(article.id.strip().strip('<>') not in owned
+                   for article in articles)]
+
+        session.commit()
+        return collection, False
+
+    def _replace(self, session, owners, existing, nzb, posts, gid,
+                 message_ids):
+        """
+        Replaces the collections an NZB file shares articles with by it
+        (see import_nzb() with merge set; not undone if it fails part way)
+
+        - the one sharing the most (or the one with its GID) keeps its id
+          and becomes the NZB file's collection
+        - the others are removed (their GIDs find it from now on)
+        - every detail they had is kept, unless the NZB file gives another
+          value for it (passwords and tags are added to, never replaced)
+        - their articles the NZB file doesn't list are let go of; nothing
+          points to the old NZB files any more
+
+        - owners: collection id -> its articles the NZB file lists
+        """
+        if existing is not None and existing.id in owners:
+            # The one with its GID
+            target = existing.id
+
+        else:
+            target = sorted(
+                owners, key=lambda i: (-len(owners[i]), i))[0]
+
+        others = [i for i in sorted(owners) if i != target]
+        self.merging = True
+
+        # The files it had (to report what changed)
+        before = {key for key, in session.query(CollectionFile.key)
+                  .filter(CollectionFile.collection_id == target)}
+
+        # Every detail: ours, then what the others had, then the NZB file's
+        for other in others:
+            self._merge_meta(session, target, [
+                (key, value) for key, value in session.query(
+                    CollectionMeta.type, CollectionMeta.value)
+                .filter(CollectionMeta.collection_id == other)
+                .order_by(CollectionMeta.id)])
+
+        self._merge_meta(session, target, self._meta(nzb), replace=True)
+
+        # What they had is let go of; the NZB file lists what it is now
+        self._clear(session, target)
+        for other in others:
+            self._remove(session, other)
+
+        old_gids = {
+            gid_ for gid_, in session.query(Collection.gid)
+            .filter(Collection.id.in_([target, *others]))
+            .filter(Collection.gid.isnot(None))}
+
+        if others:
+            # Anything that found the others finds ours now
+            session.query(CollectionAlias)\
+                .filter(CollectionAlias.collection_id.in_(others))\
+                .update({CollectionAlias.collection_id: target},
+                        synchronize_session=False)
+
+            session.query(Collection)\
+                .filter(Collection.id.in_(others))\
+                .delete(synchronize_session=False)
+
+        # Our old GIDs (and the others') find it from now on; its own GID
+        # is its own
+        session.query(CollectionAlias)\
+            .filter(CollectionAlias.gid == gid)\
+            .delete(synchronize_session=False)
+
+        known = {alias for alias, in session.query(CollectionAlias.gid)
+                 .filter(CollectionAlias.gid.in_(list(old_gids)))}
+        session.add_all(
+            CollectionAlias(gid=old, collection_id=target)
+            for old in sorted(old_gids - known - {gid}))
+        session.flush()
+
+        # Take its articles from the scanned collections that have them
+        for collection_id in self._claim(session, message_ids):
+            # Nothing is left of it; it was all a part of this post
+            session.query(Collection)\
+                .filter(Collection.id == collection_id).delete()
+
+        collection = session.get(Collection, target)
+        collection.key = 'nzb\n%s' % gid
+        collection.gid = gid
+        collection.source = CollectionSource.Nzb
+        collection.poster = (posts[0][0].poster or '')[:128]
+        if nzb.title():
+            collection.name = nzb.title()[:256]
+        collection.files_expected = len(posts)
+        session.flush()
+
+        self._add_files(session, collection, posts)
+
+        after = {key for key, in session.query(CollectionFile.key)
+                 .filter(CollectionFile.collection_id == target)}
+        self.merged = len(after - before)
+        self.dropped = len(before - after)
+        self.replaced = others
+
+        self._formed(session, collection)
+        return collection, True
+
+    def _merge_meta(self, session, collection_id, meta, replace=False):
+        """
+        Adds the details given (type, value) that a collection doesn't have
+        (not committed)
+
+        - a type it doesn't have (ie: a password) is added
+        - a type expected to repeat (see NZB_META_REPEATS) gets the new
+          values added to the ones it has
+        - any other type keeps its value, unless replace is set
+        """
+        have = {}
+        for key, value in session.query(
+                CollectionMeta.type, CollectionMeta.value)\
+                .filter(CollectionMeta.collection_id == collection_id)\
+                .order_by(CollectionMeta.id):
+            have.setdefault(key, []).append(value)
+
+        # The types we have replaced so far
+        replaced = set()
+
+        for key, value in meta:
+            if value in have.get(key, ()):
+                # We have it already
+                continue
+
+            if key in have and key not in NZB_META_REPEATS \
+                    and key not in replaced:
+                if not replace:
+                    logger.warning(
+                        "Collection #%d keeps its %s '%s' (not '%s')." % (
+                            collection_id, key, have[key][0], value))
+                    continue
+
+                session.query(CollectionMeta)\
+                    .filter(CollectionMeta.collection_id == collection_id)\
+                    .filter(CollectionMeta.type == key).delete()
+                have[key] = []
+                replaced.add(key)
+
+            session.add(CollectionMeta(
+                collection_id=collection_id, type=key, value=value))
+            have.setdefault(key, []).append(value)
+            self.details += 1
+
+        session.flush()
+
+    def _add_files(self, session, collection, posts, position=0):
+        """
+        Adds the files (and their articles) from an NZB file to a collection
+        (not committed)
+
+        - position: where the first one goes in the collection
+
+        Returns how many new files were added (the others already belonged
+        to it, and only got more articles)
+        """
         # Files whose subjects only differ by their counter are one file
         files = {}
         dates = {}
         segments = []
         groups = []
-        for post, articles in posts:
+        added = 0
+        for position, (post, articles) in enumerate(posts, start=position):
             subject = post.subject or ''
             info = parse_subject(subject)
             key = '%d\n%s' % (collection.id, info['base'])
+            expected = max(info['parts'], len(articles))
             if key not in files:
-                files[key] = CollectionFile(
-                    key=key, collection_id=collection.id,
-                    subject=subject[:256], poster=(post.poster or '')[:128],
-                    filename=(info['filename'] or release_name(
-                        info['desc']) or subject)[:256],
-                    file_no=info['file_no'],
-                    segments_expected=max(info['parts'], len(articles)))
-                session.add(files[key])
-                session.flush()
+                entry = session.query(CollectionFile)\
+                    .filter(CollectionFile.key == key).first()
+
+                if entry is None:
+                    entry = CollectionFile(
+                        key=key, collection_id=collection.id,
+                        position=position, subject=subject[:256],
+                        poster=(post.poster or '')[:128],
+                        filename=(info['filename'] or release_name(
+                            info['desc']) or subject)[:256],
+                        file_no=info['file_no'], segments_expected=expected)
+                    session.add(entry)
+                    session.flush()
+                    added += 1
+
+                files[key] = entry
 
             entry = files[key]
+            entry.segments_expected = max(entry.segments_expected, expected)
             dates[entry.id] = (post.utc, post.utc)
             groups.extend(
                 {'file_id': entry.id, 'name': str(group)}
@@ -972,23 +1644,98 @@ class NNTPIndexer:
                  'size': sum(len(content) for content in article)}
                 for article in articles)
 
-        # An article another collection already has stays with it
-        session.execute(insert(Segment).prefix_with('OR IGNORE'), segments)
-        if groups:
-            session.execute(insert(FileGroup).prefix_with('OR IGNORE'), groups)
+        session.flush()
+
+        # An article another NZB file listed stays with that one
+        self._insert_ignore(session, Segment, segments)
+        self._insert_ignore(session, FileGroup, groups)
 
         self._recount(
             session, [entry.id for entry in files.values()], [collection.id],
             dates)
-        session.commit()
 
-        # An NZB file is as complete as the post is going to get
+        return added
+
+    @staticmethod
+    def _formed(session, collection):
+        """
+        Saves a collection from an NZB file; it is as complete as the post
+        is going to get
+        """
+        session.commit()
         session.refresh(collection)
         collection.state = CollectionState.Complete if collection.complete \
             else CollectionState.Settled
         session.commit()
 
-        return collection, True
+    def _claim(self, session, message_ids):
+        """
+        Takes the articles given away from the scanned collections that
+        have them (not committed)
+
+        What those collections have left is counted again; their GID is
+        worked out again once they form (see settle()).  Returns the ids of
+        the collections left with nothing, the one that lost the most
+        articles first.
+        """
+        # Who has them (articles an NZB file listed stay where they are)
+        files = {}
+        lost = {}
+        taken = []
+        for ids in chunked(dict.fromkeys(message_ids)):
+            for message_id, file_id, collection_id in session.query(
+                    Segment.message_id, Segment.file_id,
+                    CollectionFile.collection_id)\
+                    .join(CollectionFile, CollectionFile.id == Segment.file_id)\
+                    .join(Collection,
+                          Collection.id == CollectionFile.collection_id)\
+                    .filter(Collection.source == CollectionSource.Scan)\
+                    .filter(Segment.message_id.in_(ids)):
+
+                files[file_id] = collection_id
+                lost[collection_id] = lost.get(collection_id, 0) + 1
+                taken.append(message_id)
+
+        if not taken:
+            # Nobody had them
+            return []
+
+        for ids in chunked(taken):
+            session.query(Segment).filter(Segment.message_id.in_(ids))\
+                .delete(synchronize_session=False)
+
+        # Count what is left, and remove the files left with nothing
+        self._recount(session, files, lost)
+        for ids in chunked(files):
+            empty = [file_id for file_id, in session.query(CollectionFile.id)
+                     .filter(CollectionFile.id.in_(ids))
+                     .filter(CollectionFile.segments == 0)]
+
+            if empty:
+                session.query(FileGroup)\
+                    .filter(FileGroup.file_id.in_(empty))\
+                    .delete(synchronize_session=False)
+                session.query(CollectionFile)\
+                    .filter(CollectionFile.id.in_(empty))\
+                    .delete(synchronize_session=False)
+
+        self._recount(session, [], lost)
+
+        # They have to form again (with a GID of their own)
+        session.query(Collection)\
+            .filter(Collection.id.in_(list(lost)))\
+            .update({Collection.gid: None,
+                     Collection.state: CollectionState.Forming},
+                    synchronize_session=False)
+
+        # Anything read before now is out of date
+        session.expire_all()
+
+        emptied = [collection_id for collection_id, in session.query(
+            Collection.id).filter(Collection.id.in_(list(lost)))
+            .filter(Collection.files == 0)]
+
+        return sorted(emptied, key=lambda c: (-lost[c], c))
 
     def __str__(self):
         """

@@ -16,7 +16,7 @@
 # adds NZB files to the index:
 #   nr nzb list [keywords] [--group <group|alias>]
 #   nr nzb save <id|gid> [<id|gid> ...] [--output <file or directory>]
-#   nr nzb import <nzb file> [<nzb file> ...]
+#   nr nzb import <nzb file> [<nzb file> ...] [--merge]
 #
 # Collections can span many groups; a group (or alias) only narrows down
 # what is listed.
@@ -41,7 +41,6 @@ except ImportError:
 
 from newsreap.objects.nntp.Common import get_groups
 from newsreap.NNTPIndexer import NNTPIndexer
-from newsreap.Utils import bytes_to_strsize
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
@@ -101,15 +100,21 @@ def open_index(ctx):
               help='Include collections whose articles are still arriving.')
 @click.option('--limit', '-l', type=click.IntRange(min=1),
               help='Show at most this many.')
+@click.option('--case-sensitive', '-c', is_flag=True,
+              help='Keywords must match the case too.')
 @click.pass_obj
-def nzb_list(ctx, keywords, groups, complete, forming, limit):
+def nzb_list(ctx, keywords, groups, complete, forming, limit,
+             case_sensitive):
     """
     List collections (newest first).
 
-    Every keyword must be in a collection's name (case doesn't matter);
-    put a dash in front of a keyword to leave out names that have it:
+    Every keyword must be in a collection's name or one of its file
+    subjects (case doesn't matter unless --case-sensitive is given); put a
+    dash in front of a keyword to leave out the ones that have it:
 
         nr nzb list holiday --group photos -- -2019
+
+    See 'nr search' for more ways to search.
 
     """
     # The groups we're narrowing it down to (if any)
@@ -124,18 +129,8 @@ def nzb_list(ctx, keywords, groups, complete, forming, limit):
 
         for entry in indexer.find(
                 keywords, groups=names, complete=complete, forming=forming,
-                limit=limit):
-
-            # How much of the collection was found
-            percent = 100.0 * entry.segments / entry.segments_expected \
-                if entry.segments_expected else 100.0
-
-            files = '%d/%d' % (entry.files, entry.files_expected) \
-                if entry.files_expected else '%d' % entry.files
-
-            click.echo('[%6d] %5.1f%% %10s %7s file(s)  %s' % (
-                entry.id, min(percent, 100.0),
-                bytes_to_strsize(entry.size), files, entry.name))
+                limit=limit, case_sensitive=case_sensitive):
+            click.echo(indexer.summary(entry))
 
     finally:
         indexer.close()
@@ -214,14 +209,26 @@ def nzb_save(ctx, ids, output, force):
 @click.option('--name', '-n',
               help='What to call the collection (defaults to the name the '
                    'NZB file gives, or else its file name).')
+@click.option('--merge', is_flag=True,
+              help='Replace the collections that share its articles with '
+                   'it; their details (ie: passwords) are kept unless it '
+                   'gives new ones.')
 @click.pass_obj
-def nzb_import(ctx, paths, name):
+def nzb_import(ctx, paths, name, merge):
     """
     Add NZB files to the index as collections.
 
-    An NZB file is often the only way to put together a post spread over
-    many groups with made up file names.  A post we already have isn't
-    added twice.
+    An NZB file is the real post (not our best guess from scanning), so it
+    takes over any scanned collection that has its articles.  It is often
+    the only way to put together a post spread over many groups with made
+    up file names.  A post already imported isn't added twice.
+
+    An article only belongs to one collection; the first NZB file imported
+    keeps it.  Another NZB file of the same post only adds the details it
+    has that we don't (ie: another password).  With --merge it replaces
+    what we had instead: its files become the collection's (extra par2
+    files, or bloat, are added; files it doesn't list are let go of) and
+    the details we had are kept unless it gives new ones.
 
     """
     # Track whether every file could be read
@@ -230,17 +237,40 @@ def nzb_import(ctx, paths, name):
     indexer = open_index(ctx)
     try:
         for path in paths:
-            entry, added = indexer.import_nzb(path, name=name)
+            entry, added = indexer.import_nzb(path, name=name, merge=merge)
             if entry is None:
                 logger.error("Could not import '%s'." % path)
                 failed += 1
+                continue
+
+            if indexer.merging:
+                status = 'merged: %d file(s) added, %d dropped' % (
+                    indexer.merged, indexer.dropped)
+                if indexer.replaced:
+                    status += '; replaced %s' % ', '.join(
+                        '#%d' % i for i in indexer.replaced)
 
             elif added:
-                click.echo("[%6d] %s (imported)" % (entry.id, entry.name))
+                status = 'imported'
 
             else:
-                click.echo("[%6d] %s (already indexed)" % (
-                    entry.id, entry.name))
+                status = 'already indexed'
+
+            if indexer.details:
+                status += ', %d detail(s) added' % indexer.details
+
+            click.echo("[%6d] %s (%s)" % (entry.id, entry.name, status))
+
+            if indexer.left_out:
+                logger.warning(
+                    "'%s' lists %d file(s) collection #%d doesn't have; "
+                    "use --merge to add them:" % (
+                        path, len(indexer.left_out), entry.id))
+                for subject in indexer.left_out:
+                    logger.warning('  %s' % subject)
+
+        # Scanned collections that lost articles to an NZB file form again
+        indexer.settle()
 
     finally:
         indexer.close()

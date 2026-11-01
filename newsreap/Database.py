@@ -17,7 +17,9 @@ gevent.monkey.patch_all()
 
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy import create_engine
+from sqlalchemy import event
 
 from .Utils import parse_url
 
@@ -51,6 +53,43 @@ MEMORY_DATABASE_ENGINE = 'sqlite:///:memory:'
 # messages more feasable
 # configure Session class with desired options
 Session = sessionmaker(autoflush=True, expire_on_commit=False)
+
+
+def sqlite_tuned(engine):
+    """
+    Sets up every connection of an SQLite engine for heavy use (call it
+    before the engine connects)
+
+    - WAL journal: a crash (or power cut) part way through a write never
+      leaves a broken database; at worst the last commit is lost
+    - synchronous NORMAL: doesn't wait on the disk after every commit
+    - temporary tables (ie: for sorting) are kept in memory
+    """
+    @event.listens_for(engine, 'connect')
+    def connect(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute('PRAGMA journal_mode = WAL')
+        cursor.execute('PRAGMA synchronous = NORMAL')
+        cursor.execute('PRAGMA temp_store = MEMORY')
+        cursor.close()
+
+
+def mysql_tuned(engine):
+    """
+    Sets up every connection of a MySQL engine (call it before the engine
+    connects):
+    - dates and times are stored and compared as UTC
+    - each query sees what was committed before it (as PostgreSQL and
+      SQLite do); MySQL otherwise keeps showing what a transaction first
+      saw
+    """
+    @event.listens_for(engine, 'connect')
+    def connect(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET time_zone = '+00:00'")
+        cursor.execute(
+            'SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        cursor.close()
 
 
 class Database:
@@ -145,6 +184,14 @@ class Database:
             # Note: echo is always set to False, logging is handled by NewsReap
             #       and not by SQLAlchemy
             self._engine = create_engine(engine, echo=False)
+            if self._engine.dialect.name == 'sqlite' and \
+                    self._engine.url.database not in (None, '', ':memory:'):
+                # A database file; keep it safe from crashes
+                sqlite_tuned(self._engine)
+
+            elif self._engine.dialect.name == 'mysql':
+                # Our dates and times are UTC
+                mysql_tuned(self._engine)
 
             # Store our session (bound to our own engine)
             self._session = Session(bind=self._engine)
@@ -188,8 +235,11 @@ class Database:
                 # let it fail elsewhere... we've given warning already
                 self._exists = True
 
-            except OperationalError:
-                # Table doesn't exist
+            except (OperationalError, ProgrammingError):
+                # Table doesn't exist (PostgreSQL calls it a programming
+                # error); some databases need the failed query undone
+                # before we can carry on
+                self._session.rollback()
                 self._exists = False
 
         if reset is False:

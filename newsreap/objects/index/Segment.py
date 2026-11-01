@@ -33,7 +33,7 @@ class Segment(ObjectBase):
     __tablename__ = 'segment'
 
     # The article's Message-ID (without its < and >)
-    message_id = Column(String(128), primary_key=True)
+    message_id = Column(String(250), primary_key=True)
 
     # The file it belongs to (many segments : one file)
     file_id = Column(

@@ -57,6 +57,14 @@ keywords = [
 
 [project.optional-dependencies]
 
+# Keep the index (see index_engine in config.yaml) on a database server
+postgresql = [
+    "psycopg2-binary",
+]
+mysql = [
+    "pymysql",
+]
+
 # All packages required to test/build against
 dev = [
     "coverage",

@@ -39,6 +39,18 @@ class CollectionState:
     Deleted = 3
 
 
+class CollectionSource:
+    """
+    Where a collection came from
+    """
+    # Put together from the article headers we scanned (our best guess)
+    Scan = 0
+
+    # Read from an NZB file; this is the real post, so scanning never
+    # changes it
+    Nzb = 1
+
+
 # The states a collection is ready to be downloaded in
 COLLECTION_FORMED = (CollectionState.Complete, CollectionState.Settled)
 
@@ -48,9 +60,9 @@ class Collection(ObjectBase):
     Files a poster posted together (ie: the .rar, .par2 and .nfo files of
     one release), found in one or more groups.
 
-    It keeps everything an NZB file needs (with its files and segments),
-    so it can be saved as one long after the article headers it was built
-    from are gone.  The counts are kept up to date by `nr update index`,
+    It keeps everything an NZB file needs (with its files, segments and
+    CollectionMeta), so it can be saved as one long after the article
+    headers it was built from are gone.  The counts are kept up to date by `nr update index`,
     so listing collections never has to count their segments.
     """
 
@@ -69,6 +81,11 @@ class Collection(ObjectBase):
     # same post always gets the same one, wherever it was found (an NZB
     # file of it gets the same one too).
     gid = Column(String(32), unique=True)
+
+    # Where it came from (see CollectionSource)
+    source = Column(
+        SmallInteger, nullable=False, default=CollectionSource.Scan,
+        index=True)
 
     # Where it is at (see CollectionState)
     state = Column(
@@ -98,10 +115,6 @@ class Collection(ObjectBase):
     # When its first and last article were posted
     first_posted = Column(DateTime, index=True)
     last_posted = Column(DateTime)
-
-    # Extra details an NZB file can carry (ie: from one that was imported)
-    category = Column(String(128))
-    password = Column(String(256))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

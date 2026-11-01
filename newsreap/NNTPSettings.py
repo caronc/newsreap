@@ -309,6 +309,9 @@ SERVER_LIST_KEY = 'servers'
 # Default Database Variables
 DEFAULT_DATABASE_VARIABLES = {
     'engine': None,
+    # Where collections are indexed (and searched); an SQLite file in our
+    # cache directory unless a database URL is given
+    'index_engine': None,
 }
 
 # Keyword used in configuration to host the defined Database
@@ -325,7 +328,7 @@ DEFAULT_PROCESSING_VARIABLES = {
     # A ramdisk greatly increases processing of certain content
     'ramdisk': None,
     # A collection missing parts is settled (as complete as it will get)
-    # once nothing new arrived for this many hours
+    # once its groups have been scanned this many hours past it
     'settle_hours': 4,
     # An article posted this many days away from a collection's posting
     # time starts a new collection (a repost); 0 never splits them
@@ -838,9 +841,14 @@ class NNTPSettings(NNTPDatabase):
 
     def index_database(self):
         """
-        Returns the path of the database every collection found (across all
-        groups) is kept in
+        Returns where every collection found (across all groups) is kept:
+        the index_engine database URL if one is set, otherwise the path of
+        an SQLite file in our cache directory
         """
+        engine = self.nntp_database.get('index_engine')
+        if isinstance(engine, str) and engine.strip():
+            return self.apply_mask(engine.strip())
+
         return join(
             self.base_dir, 'cache', 'index%s' % SQLITE_DATABASE_EXTENSION)
 

@@ -12,10 +12,13 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 __title__ = 'NewsReap'
+__description__ = 'Usenet Indexer and Framework'
 __version__ = '0.0.1'
-__author__ = 'Chris Caron <lead2gold@gmail.com>'
+__author__ = 'Chris Caron'
+__email__ = 'lead2gold@gmail.com'
 __license__ = 'GPLv3'
-__copyright__ = 'Copyright 2015-2017 Chris Caron'
+__copyright__ = 'Copyright (c) 2015-2026, Chris Caron <lead2gold@gmail.com>'
+__status__ = 'Alpha'
 
 # Ensure Content is patched
 import gevent.monkey

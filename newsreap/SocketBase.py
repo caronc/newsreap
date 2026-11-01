@@ -165,8 +165,9 @@ class SocketBase:
         # This is the master list of servers that you trust for verifying
         # your certificates against.  If you're using a self-signed key
         # then this is useless to you (and you shouldn't verify)
-        # You'll need these if you want to verify your host
-        self._ca_certs = kwargs.get('ca_certs', "/etc/ssl/certs/ca-bundle.crt")
+        # You'll need these if you want to verify your host; without a file
+        # of them, the ones the system trusts are used
+        self._ca_certs = kwargs.get('ca_certs')
 
         # These keys are needed for hosting / listen type connections only
         self._keyfile = kwargs.get('keyfile', None)
@@ -1161,6 +1162,12 @@ class SocketBase:
             context.load_verify_locations(self._ca_certs)
 
             # Store our Certificate Requirements
+            context.verify_mode = cert_reqs
+
+        else:
+            # The certificates the system trusts (wherever this system keeps
+            # them)
+            context.load_default_certs()
             context.verify_mode = cert_reqs
 
         # Wrap our socket with the SSLSocket Object

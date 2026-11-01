@@ -47,9 +47,20 @@ import re
 XML_VERSION = "1.0"
 XML_ENCODING = "UTF-8"
 XML_DOCTYPE = 'nzb'
-NZB_DTD_VERSION = '1.1'
-NZB_XML_DTD = 'http://www.newzbin.com/DTD/nzb/nzb-%s.dtd' % NZB_DTD_VERSION
+NZB_DTD_VERSION = '1.2'
+NZB_XML_DTD = 'https://raw.githubusercontent.com/caronc/newsreap/master/' \
+    'newsreap/var/nzb-%s.dtd' % NZB_DTD_VERSION
+
+# NZB 1.2 keeps the 1.1 namespace so older readers can still read it
 NZB_XML_NAMESPACE = 'http://www.newzbin.com/DTD/2003/nzb'
+
+# The meta types that hold the name of the post (the first one found wins);
+# 'title' is the common one, 'name' is what older versions of us wrote
+NZB_META_NAMES = ('title', 'name')
+
+# The meta types that are expected to be given more than once (ie: every
+# password worth trying)
+NZB_META_REPEATS = ('password', 'tag')
 from newsreap import __version__
 from newsreap import __title__
 
@@ -104,16 +115,18 @@ class XMLDTDType:
 
 
 NZB_XML_DTD_MAP = {
-    XMLDTDType.Public: '"-//newzBin//DTD NZB %s//EN" "%s"' % (
+    XMLDTDType.Public: '"-//nuxref//DTD NZB %s//EN" "%s"' % (
             NZB_DTD_VERSION, NZB_XML_DTD,
     ),
-    XMLDTDType.System: '"-//newzBin//DTD NZB %s//EN" "%s"' % (
+    XMLDTDType.System: '"-//nuxref//DTD NZB %s//EN" "%s"' % (
             NZB_DTD_VERSION, basename(NZB_XML_DTD),
     ),
 }
 
-# Path to LOCAL DTD Validation
-NZB_XML_DTD_FILE = join(dirname(__file__), 'var', 'nzb-1.1.dtd')
+# Path to LOCAL DTD Validation; NZB 1.2 only adds optional attributes, so it
+# checks 1.1 files too
+NZB_XML_DTD_FILE = join(
+    dirname(__file__), 'var', 'nzb-%s.dtd' % NZB_DTD_VERSION)
 
 # http://stackoverflow.com/questions/7007427/does-a-valid-xml\
 #       -file-require-an-xml-declaration
@@ -160,7 +173,8 @@ class NNTPnzb(NNTPContent):
         self.xml_root = None
         self.xml_itr_count = 0
 
-        # Meta information placed into (or read from) the <head/> tag
+        # Meta information placed into (or read from) the <head/> tag; a
+        # type given more than once (ie: several passwords) holds a list
         self.meta = None
 
         # Encoding to use when handling the NZB File
@@ -297,12 +311,13 @@ class NNTPnzb(NNTPContent):
                     indent = ''.ljust(self.padding_multiplier*2, self.padding)
 
                 for k, v in self.meta.items():
-                    self.write('%s<meta type="%s">%s</meta>%s' % (
-                        indent,
-                        self.escape_xml(k),
-                        self.escape_xml(v),
-                        eol,
-                    ))
+                    for value in (v if isinstance(v, (list, tuple)) else (v,)):
+                        self.write('%s<meta type="%s">%s</meta>%s' % (
+                            indent,
+                            self.escape_xml(k),
+                            self.escape_xml(value),
+                            eol,
+                        ))
 
                 if pretty:
                     indent = ''.ljust(self.padding_multiplier, self.padding)
@@ -694,7 +709,7 @@ class NNTPnzb(NNTPContent):
 
         """
         # The name from the meta tag
-        _name = self.meta.get('name', '').strip()
+        _name = self.title()
         if not _name:
             if filebase:
                 # Use base provided as a base
@@ -710,6 +725,22 @@ class NNTPnzb(NNTPContent):
             if filename:
                 # Update
                 segment.filename = filename
+
+    def title(self):
+        """
+        Returns the name of the post its meta information gives (or an empty
+        string if it doesn't have one)
+        """
+        for key in NZB_META_NAMES:
+            value = (self.meta or {}).get(key)
+            if isinstance(value, list):
+                # Given more than once; the first one counts
+                value = value[0]
+
+            if value and value.strip():
+                return value.strip()
+
+        return ''
 
     def _valid_by_mode(self, segmented):
         """
@@ -845,8 +876,18 @@ class NNTPnzb(NNTPContent):
             for meta in self.xml_root.xpath('/ns:nzb/ns:head[1]/ns:meta',
                                             namespaces=NZB_LXML_NAMESPACES):
                 # Store the Meta Information Detected
-                self.meta[meta.attrib['type']] = \
-                    self.unescape_xml(meta.text.strip())
+                key = meta.attrib['type']
+                value = self.unescape_xml((meta.text or '').strip())
+
+                if key not in self.meta:
+                    self.meta[key] = value
+
+                elif isinstance(self.meta[key], list):
+                    self.meta[key].append(value)
+
+                else:
+                    # Given more than once; keep them all
+                    self.meta[key] = [self.meta[key], value]
 
         # Acquire the Segments Groups
         groups = [
@@ -861,7 +902,7 @@ class NNTPnzb(NNTPContent):
         _filename = ''
 
         # The name from the meta tag
-        _name = self.meta.get('name', '').strip()
+        _name = self.title()
 
         if not _name and self.filepath is not None:
             # Lets try to generate a name frome our NZB-File

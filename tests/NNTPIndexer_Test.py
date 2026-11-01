@@ -17,21 +17,28 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from os.path import dirname
 from os.path import join
+import os
 
 import pytest
 from click.testing import CliRunner
+from sqlalchemy import create_engine
 
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPIndexer import NNTPIndexer
+from newsreap.NNTPIndexer import gid_order
 from newsreap.NNTPIndexer import make_gid
 from newsreap.NNTPIndexer import parse_subject
 from newsreap.NNTPIndexer import release_name
 from newsreap.NNTPnzb import NNTPnzb
 from newsreap.NNTPnzb import NZBSegmentNumber
 from newsreap.objects.group.Article import Article
+from newsreap.objects.index.Collection import CollectionSource
+from newsreap.objects.index.ObjectBase import ObjectBase as IndexBase
 from newsreap.objects.index.Collection import CollectionState
 
 from tests.FakeNNTPServer import FakeNNTPServer
@@ -44,6 +51,9 @@ POSTED = datetime(2020, 1, 1)
 
 # Long after everything above was posted (so it has all settled)
 LATER = datetime(2021, 1, 1)
+
+# Our test files
+VAR_DIR = join(dirname(__file__), 'var')
 
 
 def release(name, files=3, segments=4, skip=(), poster=POSTER, only=None,
@@ -91,27 +101,96 @@ def cache(db_file, articles, start=1, posted=POSTED):
     return start_no
 
 
+# Database servers the index is tested on too (besides SQLite), given as
+# database URLs; ie:
+#   NEWSREAP_TEST_POSTGRESQL=postgresql+psycopg2://user:pass@host/db
+#   NEWSREAP_TEST_MYSQL=mysql+pymysql://user:pass@host/db
+# Everything in them is removed first.
+INDEX_SERVERS = [
+    name for name in ('postgresql', 'mysql')
+    if os.environ.get('NEWSREAP_TEST_%s' % name.upper())]
+
+
+@pytest.fixture(params=['sqlite', *INDEX_SERVERS])
+def index_engine(request, tmp_path):
+    """
+    Where our index is kept: an SQLite file, or an empty database on each
+    database server given (see INDEX_SERVERS)
+    """
+    if request.param == 'sqlite':
+        return str(tmp_path / 'cache' / 'index.db')
+
+    url = os.environ['NEWSREAP_TEST_%s' % request.param.upper()]
+    engine = create_engine(url)
+    IndexBase.metadata.drop_all(engine)
+    engine.dispose()
+    return url
+
+
 @pytest.fixture
-def paths(tmp_path):
+def paths(tmp_path, index_engine):
     """
     Where our index and our test groups' articles are kept
     """
     return {
-        'index': str(tmp_path / 'cache' / 'index.db'),
+        'index': index_engine,
         GROUP: str(tmp_path / 'cache' / 'search' / 'test.db'),
         OTHER: str(tmp_path / 'cache' / 'search' / 'other.db'),
     }
 
 
+def caught_up(db_file, when=LATER):
+    """
+    Marks a group as scanned up to `when` (as a scan that reached the
+    server's newest article would)
+    """
+    db = NNTPGroupDatabase.from_file(db_file)
+    db.caught_up('test', when)
+    db.close()
+
+
+def nzb_file(path, name, files, total=3, segments=2, meta=()):
+    """
+    Writes an NZB file of a made up release (with the Message-IDs
+    release() gives) and returns its path
+
+    - files: the file numbers it lists (out of `total`)
+    - meta: the (type, value) details of its head
+    """
+    head = ''.join('  <meta type="%s">%s</meta>\n' % entry for entry in meta)
+    body = ''.join(
+        ' <file poster="%s" date="1577836800" subject="%s">\n'
+        '  <groups><group>%s</group></groups>\n  <segments>\n%s'
+        '  </segments>\n </file>\n' % (
+            POSTER, '%s [%02d/%02d] - &quot;%s.part%02d.rar&quot; yEnc '
+            '(1/%d)' % (name, f, total, name.lower(), f, segments), GROUP,
+            ''.join(
+                '   <segment bytes="10" number="%d">%s.%d.%d@example.com'
+                '</segment>\n' % (p, name.lower(), f, p)
+                for p in range(1, segments + 1)))
+        for f in files)
+
+    path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">\n%s%s</nzb>\n' % (
+            '<head>\n%s</head>\n' % head if head else '', body))
+    return str(path)
+
+
 def indexed(paths, *groups, **kwargs):
     """
     Returns an indexer that has indexed (and settled) the groups given
+
+    - seen: when the groups were last caught up with (None to leave them
+      as they are)
     """
-    now = kwargs.pop('now', LATER)
+    seen = kwargs.pop('seen', LATER)
     indexer = NNTPIndexer(paths['index'], **kwargs)
     for group in groups or (GROUP, ):
+        if seen is not None:
+            caught_up(paths[group], seen)
         indexer.index(group, paths[group])
-    indexer.settle(now=now)
+    indexer.settle()
     return indexer
 
 
@@ -177,7 +256,7 @@ def test_articles_become_files_and_collections(paths):
         (15, 5, 3)
     assert str(indexer) == \
         '15 article(s) indexed; 5 new file(s) in 3 new collection(s)'
-    assert indexer.settle(now=LATER) == 3
+    assert indexer.settle() == 3
 
     holiday = indexer.find(['holiday'])[0]
     assert holiday.name == 'Holiday'
@@ -198,7 +277,7 @@ def test_articles_become_files_and_collections(paths):
     # Nothing new; nothing done
     assert indexer.index(GROUP, paths[GROUP]) is True
     assert str(indexer) == 'nothing new to index'
-    assert indexer.settle(now=LATER) == 0
+    assert indexer.settle() == 0
     indexer.close()
 
 
@@ -229,21 +308,30 @@ def test_collections_span_groups(paths):
 
 def test_collections_form_once_settled(paths):
     """
-    A collection missing parts forms once nothing new arrived for a while,
-    and completes when the missing parts turn up later
+    A collection missing parts forms once its group has been seen well past
+    it, and completes when the missing parts turn up later
     """
     missing = {(2, 3), (3, 1)}
     next_no = cache(paths[GROUP], release('Late', skip=missing))
 
-    # Just after it was posted it is still forming
-    indexer = indexed(paths, now=POSTED + timedelta(hours=1))
+    # We have only seen up to its last article; it is still forming (it is
+    # years old by the clock on the wall, but we may simply not have
+    # fetched the rest yet)
+    indexer = indexed(paths, seen=None)
     assert indexer.find() == []
     late = indexer.find(forming=True)[0]
     assert late.state == CollectionState.Forming
     assert late.gid is None
 
+    # An hour later is not long enough
+    caught_up(paths[GROUP], POSTED + timedelta(hours=1))
+    indexer.index(GROUP, paths[GROUP])
+    assert indexer.settle() == 0
+
     # Hours later it has settled (as complete as it will get)
-    assert indexer.settle(now=POSTED + timedelta(hours=5)) == 1
+    caught_up(paths[GROUP], POSTED + timedelta(hours=5))
+    indexer.index(GROUP, paths[GROUP])
+    assert indexer.settle() == 1
     late = indexer.get(late.id)
     assert late.state == CollectionState.Settled
     assert (late.segments, late.segments_expected) == (10, 12)
@@ -260,10 +348,80 @@ def test_collections_form_once_settled(paths):
     indexer.index(GROUP, paths[GROUP])
     assert (indexer.articles, indexer.files, indexer.collections) == \
         (3, 0, 0)
-    indexer.settle(now=LATER)
+    indexer.settle()
     late = indexer.get(late.id)
     assert (late.segments, late.segments_expected) == (12, 12)
     assert late.state == CollectionState.Complete
+    indexer.close()
+
+
+def test_the_least_seen_group_decides(paths):
+    """
+    A collection spread over groups waits for the one seen the least
+    """
+    cache(paths[GROUP], release('Wait', only={1}))
+    cache(paths[OTHER], release('Wait', only={2}))
+
+    # One group was scanned days later; the other only up to the post
+    caught_up(paths[GROUP], POSTED + timedelta(days=2))
+    indexer = indexed(paths, OTHER, seen=None)
+    indexer.index(GROUP, paths[GROUP])
+    indexer.settle()
+    assert indexer.find(forming=True)[0].state == CollectionState.Forming
+
+    # Once the other group is seen past it too, it settles
+    caught_up(paths[OTHER], POSTED + timedelta(days=1))
+    indexer.index(OTHER, paths[OTHER])
+    assert indexer.settle() == 1
+    assert indexer.find()[0].state == CollectionState.Settled
+    indexer.close()
+
+
+def test_settling_can_be_told_the_time(paths):
+    """
+    settle(now=...) counts every group as seen up to then, so collections
+    from groups we no longer scan can settle (and they stay settled)
+    """
+    cache(paths[GROUP], release('Stale', skip={(1, 2)}))
+    indexer = indexed(paths, seen=None)
+    assert indexer.settle() == 0
+
+    # Not long enough after its last article
+    assert indexer.settle(now=POSTED + timedelta(hours=1)) == 0
+    assert indexer.find() == []
+
+    # Long enough (a time with a timezone works too)
+    assert indexer.settle(now=LATER.replace(tzinfo=UTC)) == 1
+    stale = indexer.find()[0]
+    assert stale.state == CollectionState.Settled
+
+    # Its group's own clock is still behind; that doesn't undo it
+    indexer.settle()
+    assert indexer.get(stale.id).state == CollectionState.Settled
+    indexer.close()
+
+
+def test_indexing_again_after_a_crash_adds_nothing(paths):
+    """
+    Articles indexed but not yet marked as indexed in their cache (ie: the
+    program was killed in between) don't make duplicates when indexed again
+    """
+    cache(paths[GROUP], release('Twice', files=2, segments=3))
+    indexer = indexed(paths)
+    before = [(c.id, c.files, c.segments) for c in indexer.find()]
+    assert before == [(1, 2, 6)]
+
+    # As if we were stopped before the cache was told
+    db = NNTPGroupDatabase.from_file(paths[GROUP])
+    session = db.session()
+    session.query(Article).update({Article.indexed: False})
+    session.commit()
+    db.close()
+
+    indexer.index(GROUP, paths[GROUP])
+    assert (indexer.files, indexer.collections) == (0, 0)
+    indexer.settle()
+    assert [(c.id, c.files, c.segments) for c in indexer.find()] == before
     indexer.close()
 
 
@@ -322,6 +480,112 @@ def test_finding_collections(paths):
     indexer.close()
 
 
+def test_searches_look_through_file_subjects(paths, tmp_path):
+    """
+    A keyword can be in a collection's name or in any of its file subjects
+    (an obfuscated post is often only named by its NZB file)
+    """
+    indexer = NNTPIndexer(paths['index'])
+    path = nzb_file(tmp_path / 'post.nzb', 'Xq7Kd', (1, 2), meta=(
+        ('title', 'Mystery.Show'), ))
+    collection_id = indexer.import_nzb(path)[0].id
+
+    ids = lambda *k, **kw: [  # noqa: E731
+        c.id for c in indexer.find(k, **kw)]
+    assert ids('mystery') == [collection_id]
+    assert ids('xq7kd.part02') == [collection_id]
+    assert ids('mystery', 'xq7') == [collection_id]
+    assert ids('mystery', '-part02') == []
+    assert ids('nothing') == []
+
+    # Merging new details renames it; the old name is no longer found
+    path = nzb_file(tmp_path / 'post.nzb', 'Xq7Kd', (1, 2), meta=(
+        ('title', 'Renamed.Show'), ))
+    indexer.import_nzb(path, merge=True)
+    assert ids('renamed') == [collection_id]
+    assert ids('mystery') == []
+
+    # Removed collections aren't found
+    indexer.delete(collection_id)
+    assert ids('renamed') == []
+    assert ids('xq7kd') == []
+    indexer.close()
+
+
+def test_case_is_ignored_unless_asked(paths, tmp_path):
+    """
+    Searches ignore case (and accents) by default; a case sensitive search
+    only finds the same case
+    """
+    indexer = NNTPIndexer(paths['index'])
+    indexer.import_nzb(nzb_file(tmp_path / 'a.nzb', 'Cafe', (1, ), meta=(
+        ('title', 'Café.Society.MiXeD'), )))
+
+    names = lambda *k, **kw: [  # noqa: E731
+        c.name for c in indexer.find(k, **kw)]
+    assert names('mixed') == ['Café.Society.MiXeD']
+    assert names('MIXED') == ['Café.Society.MiXeD']
+    assert names('cafe.society') == ['Café.Society.MiXeD']
+    assert names('mixed', case_sensitive=True) == []
+    assert names('MiXeD', case_sensitive=True) == ['Café.Society.MiXeD']
+    assert names('-MIXED', case_sensitive=True) == ['Café.Society.MiXeD']
+
+    # Keywords too short for the search index still work
+    assert names('xe') == ['Café.Society.MiXeD']
+    assert names('Xe', case_sensitive=True) == ['Café.Society.MiXeD']
+    assert names('XE', case_sensitive=True) == []
+
+    # Quotes and wildcards are only text
+    assert names('"cafe.part01') == ['Café.Society.MiXeD']
+    assert names('Society"') == []
+    assert names('Caf%') == []
+    assert names('%z') == []
+    assert names('Soc_ety') == []
+    indexer.close()
+
+
+def test_searching_by_poster(paths):
+    """
+    %p looks in the posters instead (and %p- leaves them out)
+    """
+    cache(paths[GROUP], [
+        *release('Holiday', files=1, segments=1),
+        *release('Work', files=1, segments=1, poster='boss@work.com'),
+    ])
+    indexer = indexed(paths)
+
+    names = lambda *k: sorted(c.name for c in indexer.find(k))  # noqa: E731
+    assert names('%pboss') == ['Work']
+    assert names('%p-boss') == ['Holiday']
+    assert names('%pboss', 'holiday') == []
+    assert names('%p+poster@') == ['Holiday']
+    indexer.close()
+
+
+def test_index_can_be_kept_on_a_database_server(tmp_path):
+    """
+    The index is an SQLite file in our cache unless index_engine names a
+    database (ie: PostgreSQL or MySQL)
+    """
+    from newsreap.NNTPSettings import NNTPSettings
+
+    settings = NNTPSettings()
+    settings.base_dir = str(tmp_path)
+    assert settings.index_database() == \
+        join(str(tmp_path), 'cache', 'index.db')
+
+    settings.nntp_database['index_engine'] = 'postgresql://u:p@host/index'
+    assert settings.index_database() == 'postgresql://u:p@host/index'
+
+    # A URL to an SQLite file works too
+    path = str(tmp_path / 'elsewhere.db')
+    indexer = NNTPIndexer('sqlite:///%s' % path)
+    assert indexer.session() is None
+    assert indexer.session(create=True) is not None
+    indexer.close()
+    assert NNTPIndexer('sqlite:///%s' % path).session() is not None
+
+
 def test_nothing_indexed(tmp_path):
     """
     Nothing can be found, saved or removed before anything is indexed
@@ -376,7 +640,7 @@ def test_collection_saved_as_nzb(paths, tmp_path):
     assert posts[0].groups == {GROUP}
     assert posts[1].groups == {GROUP, OTHER}
     assert posts[0].utc == POSTED
-    assert nzb.meta == {'name': 'Holiday'}
+    assert nzb.meta == {'title': 'Holiday'}
 
 
 def test_missing_parts_keep_their_numbers(paths, tmp_path):
@@ -471,8 +735,364 @@ def test_nzb_files_are_imported(paths, tmp_path):
 
 
 #
+# Lining up with newznab
+#
+@pytest.mark.parametrize('subject, expected', [
+    ('My.File.rar (1/50)', 'my.file.rar'),
+    ('  "A.nfo" yEnc (1/1)  ', '"a.nfo" yenc'),
+    # Only the last counter is taken out (every copy of it)
+    ('[1/5] Name (1/9) (2/9) (1/9)', '[1/5] name  (2/9)'),
+    ('No Counter', 'no counter'),
+])
+def test_files_sort_like_newznab(subject, expected):
+    """
+    Files sort by their subject without its counter, ignoring case
+    """
+    assert gid_order(subject) == expected
+
+
+def test_gids_match_what_newznab_reads(paths, tmp_path):
+    """
+    A collection's GID is the one newznab (or anyone) reads back from its
+    NZB file: the first segment of the first file listed
+    """
+    # Byte by byte 'B' sorts before 'a', but newznab ignores case; the 'a'
+    # file comes first (and its lowest part, not the first one posted)
+    cache(paths[GROUP], [
+        ('Files - "B.rar" yEnc (1/2)', POSTER, 'b.1@x'),
+        ('Files - "B.rar" yEnc (2/2)', POSTER, 'b.2@x'),
+        ('Files - "a.rar" yEnc (2/2)', POSTER, 'a.2@x'),
+        ('Files - "a.rar" yEnc (1/2)', POSTER, 'a.1@x'),
+    ])
+    indexer = indexed(paths)
+    collection = indexer.find()[0]
+    assert collection.gid == make_gid('a.1@x')
+
+    path = str(tmp_path / 'files.nzb')
+    assert indexer.nzb(collection.id, path) is True
+    indexer.close()
+
+    nzb = NNTPnzb(path)
+    assert nzb.gid() == collection.gid
+    assert [p.subject for p in nzb][0] == 'Files - "a.rar" yEnc (1/2)'
+
+
+def test_imports_keep_the_gid_newznab_gave_them(tmp_path):
+    """
+    An imported NZB file keeps the GID read from it, whatever order its
+    files are in
+    """
+    indexer = NNTPIndexer(str(tmp_path / 'index.db'))
+
+    # The sample NZB file's GID is known
+    collection, added = indexer.import_nzb(
+        join(VAR_DIR, 'Ubuntu-16.04.1-Server-i386.nzb'))
+    assert added is True
+    assert collection.gid == '8c6b3a3bc8d925cd63125f7bea31a5c9'
+
+    # Files listed out of order; the first one listed is what counts
+    path = tmp_path / 'unsorted.nzb'
+    path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">\n'
+        ' <file poster="p@x" date="1577836800" subject="Z.rar (1/1)">\n'
+        '  <groups><group>%s</group></groups>\n'
+        '  <segments><segment bytes="10" number="1">z.1@x</segment>'
+        '</segments>\n </file>\n'
+        ' <file poster="p@x" date="1577836800" subject="A.rar (1/1)">\n'
+        '  <groups><group>%s</group></groups>\n'
+        '  <segments><segment bytes="10" number="1">a.1@x</segment>'
+        '</segments>\n </file>\n'
+        '</nzb>\n' % (GROUP, GROUP))
+
+    collection, added = indexer.import_nzb(str(path))
+    assert added is True
+    assert collection.gid == make_gid('z.1@x')
+    indexer.close()
+
+
+#
+# NZB files are the real post
+#
+def test_nzb_files_take_over_what_we_scanned(paths, tmp_path):
+    """
+    An NZB file covering a scanned collection becomes it (keeping its id
+    and every detail the NZB file has)
+    """
+    cache(paths[GROUP], release('Truth', files=2, segments=2))
+    indexer = indexed(paths)
+    scanned = indexer.find()[0]
+    assert scanned.source == CollectionSource.Scan
+
+    # An NZB file of the post (with details of its own)
+    path = str(tmp_path / 'truth.nzb')
+    indexer.nzb(scanned.id, path)
+    nzb = NNTPnzb(path)
+    posts = list(nzb)
+    nzb = NNTPnzb()
+    nzb.meta = {'title': 'The.Truth', 'password': ['secret', 'other'],
+                'propername': 'The Truth'}
+    for post in posts:
+        nzb.add(post)
+    assert nzb.save(path) is True
+
+    collection, added = indexer.import_nzb(path)
+    assert added is True
+    assert collection.id == scanned.id
+    assert collection.source == CollectionSource.Nzb
+    assert collection.name == 'The.Truth'
+    assert collection.gid == scanned.gid
+    assert (collection.files, collection.segments) == (2, 4)
+    assert len(indexer.find()) == 1
+
+    # Saving it again keeps every detail
+    again = str(tmp_path / 'again.nzb')
+    assert indexer.nzb(collection.id, again) is True
+    nzb = NNTPnzb(again)
+    assert len(list(nzb)) == 2
+    assert nzb.meta == {
+        'title': 'The.Truth', 'password': ['secret', 'other'],
+        'propername': 'The Truth'}
+
+    # Importing it again changes nothing
+    assert indexer.import_nzb(path)[1] is False
+    indexer.close()
+
+
+def test_scanned_leftovers_stay_scanned(paths, tmp_path):
+    """
+    What a scanned collection has that the NZB file doesn't list stays a
+    scanned collection (with a GID of its own once formed again)
+    """
+    cache(paths[GROUP], release('Part', files=3, segments=2))
+    indexer = indexed(paths)
+    scanned = indexer.find()[0]
+    scanned_id, scanned_gid = scanned.id, scanned.gid
+
+    # An NZB file listing only the first two files
+    path = tmp_path / 'part.nzb'
+    files = ''.join(
+        ' <file poster="%s" date="1577836800" subject="%s">\n'
+        '  <groups><group>%s</group></groups>\n  <segments>\n%s'
+        '  </segments>\n </file>\n' % (
+            POSTER, 'Part [%02d/03] - &quot;part.part%02d.rar&quot; yEnc '
+            '(1/2)' % (f, f), GROUP, ''.join(
+                '   <segment bytes="10" number="%d">part.%d.%d@example.com'
+                '</segment>\n' % (p, f, p) for p in (1, 2)))
+        for f in (1, 2))
+    path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">\n%s</nzb>\n'
+        % files)
+
+    collection, added = indexer.import_nzb(str(path))
+    assert added is True
+    assert collection.id != scanned_id
+    assert collection.gid == scanned_gid
+    assert (collection.files, collection.segments) == (2, 4)
+
+    # The scanned one keeps the third file and forms again
+    indexer.settle()
+    leftover = indexer.get(scanned_id)
+    assert (leftover.files, leftover.segments) == (1, 2)
+    assert leftover.source == CollectionSource.Scan
+    assert leftover.gid == make_gid('part.3.1@example.com')
+    indexer.close()
+
+
+def test_scanning_leaves_nzb_collections_alone(paths, tmp_path):
+    """
+    Articles an NZB file lists aren't put anywhere else by later scans,
+    even when found again in another group
+    """
+    cache(paths[GROUP], release('Kept', files=1, segments=2))
+    indexer = indexed(paths)
+    path = str(tmp_path / 'kept.nzb')
+    indexer.nzb(indexer.find()[0].id, path)
+    collection, _ = indexer.import_nzb(path)
+
+    # The same articles show up in another group
+    cache(paths[OTHER], release('Kept', files=1, segments=2))
+    indexer.index(OTHER, paths[OTHER])
+    assert str(indexer) == \
+        '2 article(s) indexed; 0 new file(s) in 0 new collection(s)'
+    indexer.settle()
+
+    found = indexer.find()
+    assert [c.id for c in found] == [collection.id]
+    assert indexer.groups(collection.id) == [GROUP]
+    indexer.close()
+
+
+#
 # Deleting
 #
+def test_another_nzb_file_only_adds_details(paths, tmp_path):
+    """
+    A second NZB file with articles we have (or fewer) isn't a collection
+    of its own; it only adds the details we didn't have
+    """
+    indexer = NNTPIndexer(paths['index'])
+    first = nzb_file(tmp_path / 'first.nzb', 'Dup', (1, 2), meta=(
+        ('title', 'Dup'), ('password', 'one'), ('category', 'TV')))
+    collection, added = indexer.import_nzb(first)
+    assert added is True
+    collection_id = collection.id
+
+    second = nzb_file(tmp_path / 'second.nzb', 'Dup', (2, ), meta=(
+        ('title', 'Other'), ('password', 'two'), ('category', 'Movies'),
+        ('tag', 'hd')))
+    collection, added = indexer.import_nzb(second)
+    assert (collection.id, added) == (collection_id, False)
+    assert (indexer.details, indexer.left_out) == (2, [])
+    assert collection.name == 'Dup'
+    assert len(indexer.find()) == 1
+
+    # Its GID finds our collection
+    assert indexer.get(make_gid('dup.2.1@example.com')).id == collection_id
+
+    # Every password is kept; the rest keep the first NZB file's values
+    path = str(tmp_path / 'saved.nzb')
+    assert indexer.nzb(collection_id, path) is True
+    nzb = NNTPnzb(path)
+    assert len(list(nzb)) == 2
+    assert nzb.meta == {
+        'title': 'Dup', 'password': ['one', 'two'], 'category': 'TV',
+        'tag': 'hd'}
+
+    # Nothing new the second time
+    assert indexer.import_nzb(second)[0].id == collection_id
+    assert indexer.details == 0
+
+    # Once removed, neither NZB file brings it back
+    assert indexer.delete(collection_id) is True
+    assert indexer.import_nzb(second) == (None, False)
+    assert indexer.import_nzb(first) == (None, False)
+    indexer.close()
+
+
+def test_extra_files_are_only_added_when_merging(paths, tmp_path):
+    """
+    Files another NZB file lists on top of ours are left out unless we
+    merge (they could be fixes or bloat)
+    """
+    indexer = NNTPIndexer(paths['index'])
+    first = nzb_file(tmp_path / 'first.nzb', 'More', (1, 2))
+    collection, _ = indexer.import_nzb(first)
+    collection_id, gid = collection.id, collection.gid
+
+    # The third file was also found by scanning
+    cache(paths[GROUP], release('More', files=3, segments=2, only={3}))
+    indexed(paths).close()
+    assert len(indexer.find()) == 2
+
+    bigger = nzb_file(tmp_path / 'bigger.nzb', 'More', (1, 2, 3), meta=(
+        ('title', 'More.Fixed'), ))
+    collection, added = indexer.import_nzb(bigger)
+    assert (collection.id, added) == (collection_id, False)
+    assert indexer.left_out == [
+        'More [03/03] - "more.part03.rar" yEnc (1/2)']
+    assert collection.files == 2
+    assert collection.name == 'first'
+
+    collection, added = indexer.import_nzb(bigger, merge=True)
+    assert (collection.id, added) == (collection_id, True)
+    assert (indexer.merged, indexer.left_out) == (1, [])
+    assert (collection.files, collection.files_expected) == (3, 3)
+    assert collection.name == 'More.Fixed'
+    assert collection.state == CollectionState.Complete
+    assert collection.gid == gid
+
+    # The scanned copy of the third file went with it
+    assert [c.id for c in indexer.find()] == [collection_id]
+
+    # The extra file goes last, so the GID read back stays the same
+    path = str(tmp_path / 'saved.nzb')
+    assert indexer.nzb(collection_id, path) is True
+    nzb = NNTPnzb(path)
+    assert [post.subject[:12] for post in nzb] == [
+        'More [01/03]', 'More [02/03]', 'More [03/03]']
+    assert nzb.gid() == gid
+    indexer.close()
+
+
+def test_nzb_files_sharing_only_some_articles_are_refused(paths, tmp_path):
+    """
+    An NZB file with only some of a collection's articles (and some of its
+    own) is refused unless it is merged; only one of them can have them
+    """
+    indexer = NNTPIndexer(paths['index'])
+    first = nzb_file(tmp_path / 'first.nzb', 'Half', (1, 2))
+    collection_id = indexer.import_nzb(first)[0].id
+
+    other = nzb_file(tmp_path / 'other.nzb', 'Half', (2, 3))
+    assert indexer.import_nzb(other) == (None, False)
+    assert indexer.get(collection_id).files == 2
+    assert indexer.get(make_gid('half.2.1@example.com')) is None
+    assert len(indexer.find()) == 1
+    indexer.close()
+
+
+def test_merging_replaces_what_we_had(paths, tmp_path):
+    """
+    A merged NZB file replaces every collection sharing its articles: one
+    keeps its id, the files it doesn't list are let go of, and the details
+    they had are kept unless it gives new ones
+    """
+    indexer = NNTPIndexer(paths['index'])
+    first = nzb_file(tmp_path / 'first.nzb', 'Mix', (1, 2), total=4, meta=(
+        ('title', 'Mix.Old'), ('password', 'one'), ('category', 'TV')))
+    second = nzb_file(tmp_path / 'second.nzb', 'Mix', (3, 4), total=4, meta=(
+        ('password', 'two'), ('tag', 'hd')))
+    first_id = indexer.import_nzb(first)[0].id
+    second_id = indexer.import_nzb(second)[0].id
+    old_gids = [indexer.get(i).gid for i in (first_id, second_id)]
+
+    # It lists a file of each (and one of its own)
+    fixed = nzb_file(tmp_path / 'fixed.nzb', 'Mix', (2, 3, 5), total=4,
+                     meta=(('title', 'Mix.Fixed'), ('category', 'Movies')))
+    assert indexer.import_nzb(fixed) == (None, False)
+
+    collection, added = indexer.import_nzb(fixed, merge=True)
+    assert (collection.id, added) == (first_id, True)
+    assert indexer.replaced == [second_id]
+    assert (indexer.merged, indexer.dropped) == (2, 1)
+    assert collection.name == 'Mix.Fixed'
+    assert collection.gid == make_gid('mix.2.1@example.com')
+    assert (collection.files, collection.files_expected) == (3, 3)
+
+    # Only what it lists is left; nothing else points to the old ones
+    assert [c.id for c in indexer.find(forming=True)] == [first_id]
+    assert indexer.find(['part01']) == []
+    assert indexer.find(['part04']) == []
+    assert [c.id for c in indexer.find(['part05'])] == [first_id]
+    for gid in old_gids:
+        assert indexer.get(gid).id == first_id
+
+    # Every detail they had is kept (new values replace old ones, and
+    # passwords and tags are added to)
+    path = str(tmp_path / 'saved.nzb')
+    assert indexer.nzb(first_id, path) is True
+    nzb = NNTPnzb(path)
+    assert [post.subject[:11] for post in nzb] == [
+        'Mix [02/04]', 'Mix [03/04]', 'Mix [05/04]']
+    assert nzb.meta == {
+        'title': 'Mix.Fixed', 'password': ['one', 'two'],
+        'category': 'Movies', 'tag': 'hd'}
+
+    # The articles it let go of can be found by scanning again
+    cache(paths[GROUP], release('Mix', files=4, segments=2, only={1}))
+    indexed(paths).close()
+    leftover = [c for c in indexer.find() if c.id != first_id]
+    assert [(c.source, c.files) for c in leftover] == [
+        (CollectionSource.Scan, 1)]
+
+    # Importing either old NZB file again finds the merged one
+    assert indexer.import_nzb(first)[0].id == first_id
+    assert indexer.import_nzb(second)[0].id == first_id
+    indexer.close()
+
+
 def test_deleted_collections_stay_gone(paths, tmp_path):
     """
     A deleted collection is removed and its articles (and NZB files of
@@ -502,7 +1122,7 @@ def test_deleted_collections_stay_gone(paths, tmp_path):
     db.close()
 
     indexer.index(GROUP, paths[GROUP])
-    indexer.settle(now=LATER)
+    indexer.settle()
     assert [c.name for c in indexer.find()] == ['Keep']
 
     # Its NZB file can't bring it back either
@@ -591,6 +1211,21 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert '2/2 file(s)  Holiday.Photos' in result.output
         assert nr('nzb', 'list', '-g', 'nope').exit_code == 1
 
+        # Searching ignores case unless asked not to
+        result = nr('search', 'HOLIDAY', '-g', 'both')
+        assert result.exit_code == 0
+        assert 'Holiday.Photos' in result.output
+        result = nr('search', '--case-sensitive', 'HOLIDAY')
+        assert 'Holiday.Photos' not in result.output
+        result = nr('search', '-c', 'Holiday', '--', '-Work')
+        assert 'Holiday.Photos' in result.output
+
+        # The cached headers can be searched too
+        result = nr('search', '--raw', '-g', GROUP, 'holiday', 'part02')
+        assert result.exit_code == 0
+        assert result.output.count('holiday.photos.part02.rar') == 1
+        assert nr('search', '--raw', 'holiday').exit_code == 1
+
         # Save it into a directory of our choosing
         out = tmp_path / 'nzbs'
         out.mkdir()
@@ -619,10 +1254,29 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert sum(len(post) for post in posts) == 4
         assert posts[1].groups == {GROUP, OTHER}
 
-        # We already have what it describes
+        # The NZB file takes over what we scanned (keeping its id)
+        result = nr('nzb', 'import', nzb_file)
+        assert result.exit_code == 0
+        assert '[     1] Holiday.Photos (imported)' in result.output
+
         result = nr('nzb', 'import', nzb_file)
         assert result.exit_code == 0
         assert '(already indexed)' in result.output
+
+        # An NZB file with an extra file only adds it when merging
+        bigger = globals()['nzb_file'](
+            tmp_path / 'bigger.nzb', 'Holiday.Photos', (1, 2, 3), total=2)
+        result = nr('nzb', 'import', bigger)
+        assert result.exit_code == 0
+        assert '(already indexed)' in result.output
+        result = nr('nzb', 'import', bigger, '--merge')
+        assert result.exit_code == 0
+        assert '[     1] Holiday.Photos (merged: 1 file(s) added, ' \
+            '0 dropped)' in result.output
+        assert '3/3 file(s)' in nr('nzb', 'list').output
+
+        # Settling can be told every group was seen up to now
+        assert nr('update', 'index', 'both', '--settle').exit_code == 0
 
         # Delete it; it doesn't come back
         result = nr('delete', '1')

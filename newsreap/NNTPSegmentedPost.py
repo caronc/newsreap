@@ -726,8 +726,14 @@ class NNTPSegmentedPost:
         """
         Returns a key that can be used for sorting with:
             lambda x : x.key()
+
+        Posts given a sort_no keep that order (ie: the order an NZB file
+        lists them in); the rest are sorted by filename.
         """
-        return '%s' % self.filename
+        if self.sort_no is None:
+            return '%s' % self.filename
+
+        return '%.6d%s' % (self.sort_no, self.filename)
 
     def __iter__(self):
         """

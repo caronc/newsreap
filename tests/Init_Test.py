@@ -168,3 +168,18 @@ def test_no_command_shows_help(config_paths):
     result = CliRunner().invoke(cli, ['-v'], obj={})
     assert result.exit_code == 0
     assert '--init' in result.output
+
+
+@pytest.mark.parametrize('option', ['--version', '-V'])
+def test_version_is_shown(option):
+    """
+    nr --version (or -V) shows the version and exits without doing anything
+    else
+    """
+    from newsreap import __version__
+    from newsreap.cli import cli
+
+    result = CliRunner().invoke(cli, [option, 'update', 'search'], obj={})
+    assert result.exit_code == 0
+    assert result.output.startswith('NewsReap v%s\n' % __version__)
+    assert 'GPLv3' in result.output

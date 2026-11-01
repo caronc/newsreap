@@ -110,8 +110,9 @@ processing:
    # ramdisk: /var/newsreap/swap
 
    # A collection that is missing parts is treated as finished (as
-   # complete as it is going to get) once nothing new arrived for this
-   # many hours.
+   # complete as it is going to get) once every group it was found in has
+   # been scanned this many hours past its last article.  Not scanning for
+   # a while never makes a collection look incomplete.
    settle_hours: 4
 
    # Something posted this many days apart from a collection with the same
@@ -155,3 +156,14 @@ database:
    engine: 'sqlite:///%{base_dir}/newsreap.db'
 #   engine: 'postgresql+psycopg2://user:pass@localhost/newsreap'
 #   engine: 'mysql+mysqldb://user:pass@hostname/newsreap'
+
+   # Where the collections found are indexed (and searched).  By default
+   # it is an SQLite file in the cache directory; give it a database of its
+   # own on a server if you index a lot:
+   #  - PostgreSQL needs the pg_trgm and unaccent extensions (the owner of
+   #    the database can add them; newsreap does it for you)
+   #  - MySQL needs version 8 or newer (for its ngram full text search)
+   # Posts and downloads always keep their own small SQLite file, so they
+   # can pick up where they left off.
+#   index_engine: 'postgresql+psycopg2://user:pass@localhost/newsreap_index'
+#   index_engine: 'mysql+pymysql://user:pass@hostname/newsreap_index'

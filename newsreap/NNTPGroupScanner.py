@@ -44,6 +44,7 @@ from .NNTPGroupDatabase import NNTPGroupDatabase
 from .codecs.CodecArticleIndex import XoverGrouping
 from .objects.group.Article import Article
 from .objects.group.ScannedRange import ScannedRange
+from .Utils import utcnow
 
 # Logging
 import logging
@@ -97,9 +98,11 @@ class NNTPGroupScanner:
         self.window = window
         self.ramdisk = ramdisk
 
-        # The group's first and last article number (from the server)
+        # The group's first and last article number (from the server), and
+        # when (UTC) we asked for them
         self.low = None
         self.high = None
+        self.checked = None
 
         # What our last scan did:
         #  - articles: headers received and saved
@@ -119,6 +122,9 @@ class NNTPGroupScanner:
 
         Returns (low, high), or None if the group couldn't be selected.
         """
+        # Anything posted after this may not be counted in the answer
+        checked = utcnow()
+
         result = self.manager.group(self.group)
         try:
             _, low, high, _ = result
@@ -132,6 +138,7 @@ class NNTPGroupScanner:
             return None
 
         self.low, self.high = low, high
+        self.checked = checked
         return low, high
 
     def plan(self, date_from=None, date_to=None, newest=None, force=False,
@@ -276,6 +283,7 @@ class NNTPGroupScanner:
 
             if not ranges:
                 # Nothing to do
+                self._caught_up(db, session)
                 return True
 
             # What we still need to fetch
@@ -299,7 +307,24 @@ class NNTPGroupScanner:
                 self._create_indexes(db, dropped)
 
             self.pending = wanted - done
-            return self.failed == 0 and self.pending == 0
+            if self.failed or self.pending:
+                return False
+
+            self._caught_up(db, session)
+            return True
+
+    def _caught_up(self, db, session):
+        """
+        Remembers when we last had everything up to the server's newest
+        article (see NNTPGroupDatabase.clock())
+        """
+        if self.high is None or self.checked is None:
+            # We never asked the server
+            return
+
+        if self.high < self.low or self.scanned(session, self.high, self.high):
+            # The newest article (if there is one) is cached
+            db.caught_up(self.server, self.checked)
 
     def _fetch(self, db, session, batches, force=False):
         """
@@ -467,6 +492,9 @@ class _GroupDatabase:
             # Work on a copy in memory
             self.work_file = join(self.ramdisk, basename(self.db_file))
             if isfile(self.db_file):
+                # Opening (and closing) it first saves anything a stopped
+                # run left in its journal into the file we copy
+                NNTPGroupDatabase.from_file(self.db_file).close()
                 copyfile(self.db_file, self.work_file)
 
             elif isfile(self.work_file):
