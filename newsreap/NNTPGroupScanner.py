@@ -43,7 +43,6 @@ from sqlalchemy.exc import OperationalError
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .codecs.CodecArticleIndex import XoverGrouping
 from .objects.group.Article import Article
-from .objects.group.ObjectBase import ObjectBase
 from .objects.group.ScannedRange import ScannedRange
 
 # Logging
@@ -474,18 +473,7 @@ class _GroupDatabase:
                 # Something left behind from an earlier run
                 unlink(self.work_file)
 
-        self.db = NNTPGroupDatabase(
-            engine='sqlite:///%s' % self.work_file, reset=False)
-
-        # Older databases may not have every table yet
-        ObjectBase.metadata.create_all(self.db._engine)
-
-        with self.db._engine.begin() as conn:
-            # Favour speed; our progress is saved after every batch
-            conn.exec_driver_sql('PRAGMA journal_mode = MEMORY')
-            conn.exec_driver_sql('PRAGMA synchronous = OFF')
-            conn.exec_driver_sql('PRAGMA temp_store = MEMORY')
-
+        self.db = NNTPGroupDatabase.from_file(self.work_file)
         return self.db
 
     def __exit__(self, *args):

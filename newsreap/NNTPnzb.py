@@ -14,6 +14,7 @@
 
 from newsreap.SortedSet import sortedset
 from os.path import join
+from os.path import isfile
 from os.path import dirname
 from os.path import basename
 from os.path import splitext
@@ -74,6 +75,26 @@ NZB_PARSE_MODES = (
     NZBParseMode.Simple,
     NZBParseMode.IgnoreAttached,
     NZBParseMode.IgnorePars,
+)
+
+
+class NZBSegmentNumber:
+    """
+    How the segments of each file are numbered when an NZB-File is saved
+    """
+    # Count them (1, 2, 3, ...) in the order they're stored; adding or
+    # removing articles never leaves a gap
+    Position = 'position'
+
+    # Use the number stored in each article (its part number); a missing
+    # part leaves a gap (ie: 1, 2, 4), which is what downloaders expect
+    Article = 'article'
+
+
+# A list of the numbering styles defined above
+NZB_SEGMENT_NUMBERS = (
+    NZBSegmentNumber.Position,
+    NZBSegmentNumber.Article,
 )
 
 
@@ -213,7 +234,8 @@ class NNTPnzb(NNTPContent):
         self._nzb_mode = mode
         return True
 
-    def save(self, nzbfile=None, pretty=True, dtd_type=XMLDTDType.Public):
+    def save(self, nzbfile=None, pretty=True, dtd_type=XMLDTDType.Public,
+             numbering=NZBSegmentNumber.Position):
         """
         Write an nzbfile to the file and path specified. If no path is
         specified, then the one used to open the class is used.
@@ -223,7 +245,16 @@ class NNTPnzb(NNTPContent):
 
         If pretty is set to True then the output is formatted gently
         on the eyes; otherwise it is packed for disk size
+
+        The numbering (see NZBSegmentNumber) sets how the segments of each
+        file are numbered.
         """
+        if numbering not in NZB_SEGMENT_NUMBERS:
+            # We don't know how to number our segments
+            logger.error(
+                "Unsupported NZB segment numbering '%s'." % numbering)
+            return False
+
         if self.open(filepath=nzbfile, mode=NNTPFileMode.BINARY_RW_TRUNCATE):
             eol = '\n'
             indent = ''
@@ -346,19 +377,20 @@ class NNTPnzb(NNTPContent):
                         indent = ''.ljust(
                             self.padding_multiplier*3, self.padding)
 
-                    for attachment in article:
-                        # use enumerated content and not the part assigned.
-                        # this is by design because it gives developers the
-                        # ability to add/remove items from the attachment and
-                        # only use the part numbers for their own personal
-                        # ordering.
+                    # By default we count the articles instead of using
+                    # the part number stored in them; this lets developers
+                    # add/remove articles and only use the part numbers for
+                    # their own ordering
+                    number = article.no \
+                        if numbering == NZBSegmentNumber.Article else part + 1
 
+                    for attachment in article:
                         _bytes = len(attachment)
                         self.write(
                             '%s<segment %snumber="%d">%s</segment>%s' % (
                                 indent,
                                 (('bytes="%d" ' % _bytes) if _bytes else ''),
-                                part+1,
+                                number,
                                 self.escape_xml(article.msgid()),
                                 eol,
                             )
@@ -875,7 +907,7 @@ class NNTPnzb(NNTPContent):
         _file = NNTPSegmentedPost(
             _filename,
             poster=_poster,
-            epoch=self.xml_root.attrib.get('date', '0'),
+            utc=self.xml_root.attrib.get('date', '0'),
             subject=_subject,
             groups=groups,
             work_dir=self.work_dir,
@@ -1014,8 +1046,36 @@ class NNTPnzb(NNTPContent):
         """
         Returns the number of files in the NZB File
         """
-        return len(self.segments) if self._segments_loaded is True\
-            else sum(1 for c in self)
+        if self._segments_loaded is True or not self.filepath \
+                or not isfile(self.filepath):
+            # What we hold in memory (an NZB we're building has no file yet)
+            return len(self.segments)
+
+        # Count the files with a pass of our own; iterating ourselves here
+        # would reset (and use up) an iteration already in progress, such
+        # as the one list() starts before it asks for our length
+        if self._nzb_mode != NZBParseMode.Simple:
+            # Some files are left out by our mode; a second copy of us
+            # applies the same rules
+            return sum(1 for _ in NNTPnzb(
+                self.filepath, encoding=self.encoding,
+                work_dir=self.work_dir, mode=self._nzb_mode,
+                codecs=self._codecs))
+
+        count = 0
+        try:
+            for _, element in etree.iterparse(
+                    self.filepath, tag="{%s}file" % NZB_XML_NAMESPACE):
+                count += 1
+
+                # Free each entry as we go
+                element.clear()
+
+        except (OSError, XMLSyntaxError):
+            # A missing or broken file holds nothing we can count
+            pass
+
+        return count
 
     def __getitem__(self, index):
         """

@@ -15,6 +15,10 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
+from datetime import timedelta
+from os import makedirs
+from os.path import dirname
+
 # Importing these libraries forces them associate themselves
 # with the ObjectBase
 from .objects.group.Article import Article
@@ -26,6 +30,7 @@ from .objects.group.ObjectBase import ObjectBase
 from .objects.group.Vsp import Vsp
 
 from .Database import Database
+from .Utils import utcnow
 
 # The catch wit SQLite when referencing paths is:
 # sqlite:///relative/path/to/where we are now
@@ -47,3 +52,45 @@ class NNTPGroupDatabase(Database):
             engine=engine,
             reset=reset,
         )
+
+    @classmethod
+    def from_file(cls, db_file):
+        """
+        Opens the (SQLite) database stored in db_file, creating it (and its
+        directory) if it doesn't exist yet
+        """
+        makedirs(dirname(db_file), exist_ok=True)
+        db = cls(engine='sqlite:///%s' % db_file, reset=False)
+
+        # Older databases may not have every table yet
+        ObjectBase.metadata.create_all(db._engine)
+
+        with db._engine.begin() as conn:
+            # Favour speed; our callers commit their progress as they go
+            conn.exec_driver_sql('PRAGMA journal_mode = MEMORY')
+            conn.exec_driver_sql('PRAGMA synchronous = OFF')
+            conn.exec_driver_sql('PRAGMA temp_store = MEMORY')
+
+        return db
+
+    def purge(self, days):
+        """
+        Removes the indexed article headers posted more than `days` days ago
+        and returns how many were removed.
+
+        The collections they were indexed into keep everything an NZB file
+        needs, so only the raw headers go.  The ranges they came from stay
+        marked as scanned, so they aren't fetched again.
+        """
+        if not days or days <= 0:
+            # Keep everything
+            return 0
+
+        session = self.session()
+        removed = session.query(Article)\
+            .filter(Article.indexed.is_(True))\
+            .filter(Article.posted_date < utcnow() - timedelta(
+                days=days))\
+            .delete(synchronize_session=False)
+        session.commit()
+        return removed

@@ -74,6 +74,26 @@
 #   # articles you already have again.
 #   nr update search test
 #
+#   # Group the cached articles into files and collections (releases); only
+#   # articles not indexed before are looked at.  A collection can be
+#   # spread over many groups; they all go into one index.
+#   nr update index test
+#
+#   # List the collections (newest first, filtered by keywords and
+#   # optionally by group or alias) and save any of them as an NZB file
+#   # using the id shown on the left (or its GID)
+#   nr nzb list holiday -- -2019
+#   nr nzb list --group test --complete
+#   nr nzb save 42 --output ~/Downloads
+#
+#   # Add NZB files you were given to the index (the only way to put
+#   # together posts with made up names spread over many groups)
+#   nr nzb import ~/Downloads/*.nzb
+#
+#   # Remove collections you never want to see again; they don't come
+#   # back when indexing again
+#   nr delete 42 43
+#
 #   # Newsreap also maintains a watch list which is groups you just always
 #   # intend to index. It can be a conbination of aliases you set up, or
 #   # just a few individual groups. The below adds our 'test' group to
@@ -82,9 +102,9 @@
 #
 #   # We can now update our search by typing this following:
 #   nr -vvv update search --watched
-
-#   # Index the entire group (the whole retention period you have to work with)
-#   nr group index test
+#
+#   # And then group what was found
+#   nr update index --watched
 #
 #   # Now that you've got content indexed, you can browse for things
 #   # You must specify an alias/group as your first argument
@@ -100,12 +120,6 @@
 #   # The below only shows entries that have scored between -90 and 30
 #   nr search test --score=-90-30 "keyword or string 1" \
 #                                       "keyword or string 2" "etc..."
-#
-#   # Want to elminate crap from your database that you know is just
-#   # taking up useless junk (and space, and thus speed because it's indexed):
-#   # use the delete option; it takes all the same parameters and options the
-#   # search function does (--score, etc).
-#   nr delete "keyword or string 1" "etc"
 #
 #  If you setup you filters right, you can download content by group or
 #  single files.  Just pay attention to the id on the left (in your search)

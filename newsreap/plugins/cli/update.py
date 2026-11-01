@@ -16,6 +16,8 @@
 #   - update groups: caches the groups every server carries
 #   - update search: caches the article headers of groups so they can be
 #                    searched offline (see NNTPGroupScanner)
+#   - update index:  groups the cached articles into files and collections
+#                    (see NNTPGroupIndexer)
 
 import logging
 import click
@@ -43,7 +45,6 @@ except ImportError:
     from newsreap.Logging import NEWSREAP_CLI
 
 from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.GroupAlias import GroupAlias
 from newsreap.objects.nntp.GroupTrack import GroupTrack
 from newsreap.objects.nntp.Server import Server
 from newsreap.objects.nntp.Common import get_groups
@@ -51,6 +52,9 @@ from newsreap.objects.nntp.Common import get_groups
 from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPGroupScanner import NNTPGroupScanner
 from newsreap.NNTPGroupScanner import DEFAULT_BATCH_SIZE
+from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
+from newsreap.NNTPIndexer import NNTPIndexer
+from newsreap.Utils import utcnow
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
@@ -241,7 +245,8 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
 
     if days:
         # The last X days
-        since = datetime.now() - timedelta(days=days)
+        # (cached post dates are kept in UTC)
+        since = utcnow() - timedelta(days=days)
         date_from = max(date_from, since) if date_from else since
 
     if date_to:
@@ -343,77 +348,80 @@ def track(session, group_id, server_id, scanner):
     session.commit()
 
 
-# Define our functions below
-# all functions are prefixed with what is identified
-# above or they are simply ignored.
 @click.command(name='index')
 @click.argument('groups', nargs=-1)
 @click.option('--watched', '-w', is_flag=True, help='All watched groups.')
 @click.pass_obj
 def update_index(ctx, groups, watched):
     """
-    TODO Updating Indexes (Generate NZBFiles).
+    Group cached articles into files and collections.
 
-    If a group(s) is/are specified on the command line, then just those
-    are indexed as well.
+    Works through the articles 'nr update search' cached and works out
+    which file (and which collection of files) each one belongs to.  A
+    collection can span many groups.  Only articles not indexed before are
+    looked at.  Use 'nr nzb list' to see the results and 'nr nzb save' to
+    turn any of them into an NZB file.
 
     """
-    session = ctx['NNTPSettings'].session()
+    settings = ctx['NNTPSettings']
+    session = settings.session()
     if not session:
         logger.error("The database is not correctly configured.")
         exit(1)
 
-    # Track our database updates
-    pending_commits = 0
-
-    # PEP8 E712 does not allow us to make a comparison to a boolean value
-    # using the == instead of the keyword 'in'.  However SQLAlchemy
-    # requires us to do just because that's how the amazing tool works.
-    # so to get around the pep8 error, we'll just define a variable equal
-    # to True and then we can compare to it
-    pep8_e712 = True
-
-    if watched:
-        _groups = session.query(Group.name)\
-                         .filter(Group.watch == pep8_e712).all()
-        if not _groups:
-            logger.error("There are no current groups being watched.")
-            exit(1)
-        groups = set(groups) | set([g[0] for g in _groups])
-
+    groups = get_groups(session=session, lookup=groups, watched=watched)
     if not groups:
         logger.error("There were not groups identified for indexing.")
         exit(1)
 
-    # Maintain a list of completed groups; This allows us to not
-    # parse a group twice
-    completed = list()
+    # How we treat collections (see the processing section of the
+    # configuration file)
+    processing = settings.nntp_processing
+    indexer = NNTPIndexer(
+        settings.index_database(),
+        settle_hours=processing['settle_hours'],
+        repost_days=processing['repost_days'])
 
-    for group in groups:
-        _group = group.lower().strip()
-        if not _group:
-            continue
+    # Track whether every group could be indexed
+    complete = True
 
-        _id = session.query(Group.id).filter(Group.name == _group).first()
-        if not _id:
-            # No problem; let us use the alias too
-            _id = session.query(Group.id)\
-                         .join(GroupAlias)\
-                         .filter(GroupAlias.name == _group).first()
-            if not _id:
-                logger.warning("The group '%s' does not exist." % group)
+    try:
+        for name, group_id in groups.items():
+            db_file = settings.group_database(name)
+            if not indexer.index(name, db_file):
+                click.echo(
+                    "%s: nothing cached yet; run 'nr update search %s' "
+                    "first." % (name, name))
+                complete = False
                 continue
 
-        if _id in completed:
-            # We've indexed this group
-            continue
+            click.echo('%s: %s' % (name, indexer))
 
-        # TODO Index Group based on It's placeholders in GroupTrack
+            if processing['raw_retention']:
+                # Usenet is big; let go of the old headers we've indexed
+                cache = NNTPGroupDatabase.from_file(db_file)
+                try:
+                    removed = cache.purge(processing['raw_retention'])
 
-        # Append to completed list (this prevents us from processing entries
-        # twice)
-        completed.append(_id)
+                finally:
+                    cache.close()
 
-    if pending_commits > 0:
-        # commit our results
-        session.commit()
+                if removed:
+                    click.echo('%s: %d old header(s) removed' % (
+                        name, removed))
+
+            # Track when the group was last indexed
+            session.query(GroupTrack)\
+                .filter(GroupTrack.group_id == group_id)\
+                .update({GroupTrack.last_index: datetime.now()})
+            session.commit()
+
+        # Work out which collections have formed (across every group)
+        if indexer.settle():
+            click.echo('%d collection(s) formed' % indexer.formed)
+
+    finally:
+        indexer.close()
+
+    if not complete:
+        exit(1)

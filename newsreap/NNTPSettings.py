@@ -324,6 +324,15 @@ DEFAULT_PROCESSING_VARIABLES = {
     # ramdisk path (optional); leave blank if not set
     # A ramdisk greatly increases processing of certain content
     'ramdisk': None,
+    # A collection missing parts is settled (as complete as it will get)
+    # once nothing new arrived for this many hours
+    'settle_hours': 4,
+    # An article posted this many days away from a collection's posting
+    # time starts a new collection (a repost); 0 never splits them
+    'repost_days': 3,
+    # Article headers are removed from the group caches once indexed and
+    # posted more than this many days ago; 0 keeps them all
+    'raw_retention': 0,
 }
 
 # Keyword used in configuration to host all of the defined NNTP Servers
@@ -826,6 +835,14 @@ class NNTPSettings(NNTPDatabase):
         return join(
             self.base_dir, 'cache', 'search',
             '%s%s' % (safe or '_', SQLITE_DATABASE_EXTENSION))
+
+    def index_database(self):
+        """
+        Returns the path of the database every collection found (across all
+        groups) is kept in
+        """
+        return join(
+            self.base_dir, 'cache', 'index%s' % SQLITE_DATABASE_EXTENSION)
 
     def save(self, cfg_file=None):
         """

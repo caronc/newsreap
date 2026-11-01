@@ -58,6 +58,11 @@ class Article(ObjectBase):
     # the count gets to high.
     deleted = Column(DateTime, default=None, index=True)
 
+    # Set once `nr update index` has put the article into a collection
+    indexed = Column(
+        Boolean, default=False, server_default='0', nullable=False,
+        index=True)
+
     # A flag that can be used to determine if the record should be
     # displayed or not; this over-rides any calculated score.
     hidden = Column(Boolean, default=False, nullable=False, index=True)

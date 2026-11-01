@@ -430,3 +430,32 @@ class NNTPnzb_Test(TestBase):
         """
         from newsreap import NNTPnzb as PackageNNTPnzb
         assert PackageNNTPnzb is NNTPnzb
+
+
+def test_list_reads_every_file():
+    """
+    list() and len() of an NZB agree (len() doesn't disturb an iteration
+    already in progress)
+    """
+    path = join(dirname(abspath(__file__)), 'var',
+                'Ubuntu-16.04.1-Server-i386.nzb')
+
+    nzb = NNTPnzb(path)
+    assert len(list(nzb)) == len(nzb) == 55
+
+    # Counting part way through an iteration leaves it alone
+    files = iter(nzb)
+    next(files)
+    assert len(nzb) == 55
+
+    remaining = 0
+    for _ in range(100):
+        try:
+            next(files)
+
+        except StopIteration:
+            break
+
+        remaining += 1
+
+    assert remaining == 54

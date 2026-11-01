@@ -109,6 +109,22 @@ processing:
    # Then remove the '#' below and point it there.
    # ramdisk: /var/newsreap/swap
 
+   # A collection that is missing parts is treated as finished (as
+   # complete as it is going to get) once nothing new arrived for this
+   # many hours.
+   settle_hours: 4
+
+   # Something posted this many days apart from a collection with the same
+   # name and poster is treated as a repost (a collection of its own).
+   # Set it to 0 to never split them.
+   repost_days: 3
+
+   # Usenet is big; the article headers cached for each group can be
+   # removed once they are indexed and older than this many days.  The
+   # collections keep everything needed to make their NZB files.  0 keeps
+   # every header (needed by 'nr search').
+   raw_retention: 0
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
