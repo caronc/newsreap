@@ -23,12 +23,15 @@ from datetime import timedelta
 from os.path import dirname
 from os.path import join
 import os
+import re
 
 import pytest
 from click.testing import CliRunner
 from sqlalchemy import create_engine
 
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
+from newsreap.NNTPArchivePost import NNTPArchivePost
+from newsreap.NNTPArchiver import NNTPArchiver
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.NNTPIndexer import gid_order
 from newsreap.NNTPIndexer import make_gid
@@ -37,11 +40,13 @@ from newsreap.NNTPIndexer import release_name
 from newsreap.NNTPnzb import NNTPnzb
 from newsreap.NNTPnzb import NZBSegmentNumber
 from newsreap.objects.group.Article import Article
+from newsreap.objects.index.Collection import Collection
 from newsreap.objects.index.Collection import CollectionSource
 from newsreap.objects.index.ObjectBase import ObjectBase as IndexBase
 from newsreap.objects.index.Collection import CollectionState
 
 from tests.FakeNNTPServer import FakeNNTPServer
+from tests.SearchPlan import search_plan
 from tests.conftest import config_for
 
 GROUP = 'alt.binaries.test'
@@ -541,6 +546,87 @@ def test_case_is_ignored_unless_asked(paths, tmp_path):
     assert names('Caf%') == []
     assert names('%z') == []
     assert names('Soc_ety') == []
+    indexer.close()
+
+
+def test_searches_use_the_search_index(paths, tmp_path):
+    """
+    Searching collections uses the database's search index (never reading
+    every name and subject, which is far too slow on a big index)
+    """
+    indexer = NNTPIndexer(paths['index'])
+    indexer.import_nzb(nzb_file(tmp_path / 'a.nzb', 'Holiday', (1, 2)))
+    session = indexer.session()
+    dialect = session.get_bind().dialect.name
+
+    # The search itself (what find() narrows the collections down with)
+    plan = search_plan(session, lambda: session.query(Collection.id).filter(
+        Collection.id.in_(indexer._search(
+            session, 0, 'subject', 'holiday'))).all())
+    if dialect == 'sqlite':
+        # Looked up with MATCH (M) or LIKE (L), not read row by row
+        assert re.search(
+            r'collection_search VIRTUAL TABLE INDEX \d+:[ML]', plan)
+
+    elif dialect == 'postgresql':
+        for index in ('collection_name_search',
+                      'collection_file_subject_search',
+                      'collection_file_filename_search'):
+            assert index in plan
+
+    else:
+        assert 'collection_name_search' in plan
+        assert 'collection_file_subject_search' in plan
+        # The search runs once, not once for every collection
+        assert 'DEPENDENT SUBQUERY' not in plan
+
+    indexer.close()
+
+
+def test_real_file_names_are_learned(paths):
+    """
+    The real file names the archive finds (ie: in a yEnc header) name the
+    files of obfuscated posts, whichever of the two runs first; they can
+    be searched for
+    """
+    def obfuscated(start):
+        # Two articles of a file whose subject says nothing about it
+        return [('x7f9a2b (%d/2)' % p, 'poster@example.com',
+                 'part%d.%d@example.com' % (start, p)) for p in (1, 2)]
+
+    def archived(message_id, name):
+        raw = ('Subject: x\r\n\r\n=ybegin part=1 total=2 line=128 '
+               'size=10 name=%s\r\ndata\r\n=yend size=5\r\n' % name)
+        archiver = NNTPArchiver(paths['index'])
+        session = archiver.session(create=True)
+        archiver.store(session, archiver.convert(
+            NNTPArchivePost(message_id, raw=raw.encode())))
+        NNTPIndexer.learn_filenames(session, {message_id: name})
+        session.commit()
+        archiver.close()
+
+    # Indexed first, then archived
+    cache(paths[GROUP], obfuscated(1))
+    indexer = indexed(paths)
+    assert indexer.find(['holiday'], forming=True) == []
+    indexer.close()
+
+    archived('part1.1@example.com', 'Holiday.Video.mkv')
+    indexer = NNTPIndexer(paths['index'])
+    found = indexer.find(['holiday.video'], forming=True)
+    assert len(found) == 1
+    assert [f.filename for f in indexer._files(
+        indexer.session(), found[0].id)] == ['Holiday.Video.mkv']
+    indexer.close()
+
+    # Archived first, then indexed
+    archived('part2.1@example.com', 'Beach.Trip.mkv')
+    cache(paths[OTHER], obfuscated(2))
+    indexer = indexed(paths, OTHER)
+    found = indexer.find(['beach', 'trip'], forming=True)
+    assert len(found) == 1
+    assert [f.filename for f in indexer._files(
+        indexer.session(), found[0].id)] == ['Beach.Trip.mkv']
     indexer.close()
 
 

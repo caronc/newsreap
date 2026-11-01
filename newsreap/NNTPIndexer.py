@@ -77,6 +77,7 @@ from .objects.index.Collection import Collection
 from .objects.index.Collection import CollectionSource
 from .objects.index.Collection import CollectionState
 from .objects.index.Collection import COLLECTION_FORMED
+from .objects.index.ArchiveFile import ArchiveFile
 from .objects.index.CollectionAlias import CollectionAlias
 from .objects.index.CollectionFile import CollectionFile
 from .objects.index.CollectionMeta import CollectionMeta
@@ -118,6 +119,10 @@ SEARCH_MIN_LENGTH = 3
 # How many rows go into each statement when adding them on PostgreSQL (it
 # allows 65535 values per statement)
 PG_INSERT_ROWS = 5000
+
+# The ways a file is put in an article whose file name tells us the real
+# name of the file it belongs to (see learn_filenames())
+FILENAME_CODECS = ('yenc', 'uuencode')
 
 # MySQL's FULLTEXT (ngram) index finds pieces this long; shorter keywords
 # are looked for in every entry (its ngram_token_size, which is 2 unless
@@ -416,6 +421,10 @@ class NNTPIndexer:
                     break
 
                 self._index_chunk(session, group, rows, collections, files)
+
+                # Real file names the archive found in these articles
+                self._archived_filenames(
+                    session, [row.message_id for row in rows])
                 session.commit()
 
                 # Our totals were updated directly in the database; anything
@@ -640,6 +649,55 @@ class NNTPIndexer:
             return '(UNIX_TIMESTAMP(%s) / 86400.0)' % value
 
         return 'julianday(%s)' % value
+
+    @staticmethod
+    def learn_filenames(session, names):
+        """
+        Gives the files of the articles given their real names (ie: from
+        their yEnc header, which obfuscated subjects don't have); not
+        committed
+
+        - names: Message-ID -> the name of the file it holds
+
+        Returns how many files were renamed.
+        """
+        renamed = 0
+        for ids in chunked(names):
+            for message_id, file_id in session.query(
+                    Segment.message_id, Segment.file_id)\
+                    .filter(Segment.message_id.in_(ids)):
+
+                name = (names[message_id] or '').strip()[:256]
+                if not name:
+                    continue
+
+                renamed += session.query(CollectionFile)\
+                    .filter(CollectionFile.id == file_id)\
+                    .filter(CollectionFile.filename != name)\
+                    .update({CollectionFile.filename: name},
+                            synchronize_session=False)
+
+        return renamed
+
+    def _archived_filenames(self, session, message_ids):
+        """
+        Uses the real file names the archive (see NNTPArchiver) already
+        found in the articles given (not committed)
+        """
+        names = {}
+        for ids in chunked(
+                message_id.strip().strip('<>') for message_id in message_ids):
+            for message_id, filename in session.query(
+                    ArchiveFile.message_id, ArchiveFile.filename)\
+                    .filter(ArchiveFile.message_id.in_(ids))\
+                    .filter(ArchiveFile.codec.in_(FILENAME_CODECS))\
+                    .filter(ArchiveFile.filename != '')\
+                    .order_by(ArchiveFile.id):
+                # The first file of an article is the one it holds
+                names.setdefault(message_id, filename)
+
+        if names:
+            self.learn_filenames(session, names)
 
     def _window(self, windows, posted):
         """
@@ -921,7 +979,8 @@ class NNTPIndexer:
              limit=None, case_sensitive=False):
         """
         Returns collections (newest first) with every keyword in their name
-        or the subject of one of their files (see parse_keywords()):
+        or the subject or name of one of their files (see
+        parse_keywords()):
         - a keyword starting with '-' must not be in any of them
         - a keyword starting with '%p' is looked for in the posters instead
 
@@ -1003,7 +1062,10 @@ class NNTPIndexer:
                     Collection, 'name' if column == 'subject' else column)),
                 (CollectionFile.collection_id, getattr(
                     CollectionFile, column)),
-            )
+            ) + ((
+                # The (real) names of the files too
+                (CollectionFile.collection_id, CollectionFile.filename),
+            ) if column == 'subject' else ())
 
             # Searched once as a table of its own; MySQL would otherwise
             # search again for every collection

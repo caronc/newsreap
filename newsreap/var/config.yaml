@@ -123,8 +123,14 @@ processing:
    # Usenet is big; the article headers cached for each group can be
    # removed once they are indexed and older than this many days.  The
    # collections keep everything needed to make their NZB files.  0 keeps
-   # every header (needed by 'nr search').
+   # every header (needed by 'nr search --raw').  Archive a group ('nr
+   # update archive') before its headers are removed.
    raw_retention: 0
+
+   # 'nr update archive' fetches the articles no bigger than this and keeps
+   # what they say, so a group full of discussion can be searched offline
+   # ('nr search --posts').  Files they hold are only noted, never kept.
+   archive_max_size: 64KB
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server

@@ -336,6 +336,9 @@ DEFAULT_PROCESSING_VARIABLES = {
     # Article headers are removed from the group caches once indexed and
     # posted more than this many days ago; 0 keeps them all
     'raw_retention': 0,
+    # The biggest article 'nr update archive' fetches and keeps (text posts
+    # are almost always much smaller)
+    'archive_max_size': '64KB',
 }
 
 # Keyword used in configuration to host all of the defined NNTP Servers

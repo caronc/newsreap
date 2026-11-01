@@ -63,6 +63,11 @@ class Article(ObjectBase):
         Boolean, default=False, server_default='0', nullable=False,
         index=True)
 
+    # Set once `nr update archive` has fetched (and kept) the article
+    archived = Column(
+        Boolean, default=False, server_default='0', nullable=False,
+        index=True)
+
     # A flag that can be used to determine if the record should be
     # displayed or not; this over-rides any calculated score.
     hidden = Column(Boolean, default=False, nullable=False, index=True)

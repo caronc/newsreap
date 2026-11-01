@@ -26,6 +26,9 @@ from sqlalchemy.exc import OperationalError
 
 # Importing these libraries forces them associate themselves
 # with the ObjectBase
+from .objects.index.ArchiveFile import ArchiveFile
+from .objects.index.ArchiveGroup import ArchiveGroup
+from .objects.index.ArchivedPost import ArchivedPost
 from .objects.index.Collection import Collection
 from .objects.index.CollectionAlias import CollectionAlias
 from .objects.index.CollectionFile import CollectionFile
@@ -51,8 +54,59 @@ SEARCH_COLUMNS = (
     ('collection', 'name'),
     ('collection', 'poster'),
     ('collection_file', 'subject'),
+    ('collection_file', 'filename'),
     ('collection_file', 'poster'),
 )
+
+# SQLite: the full text search index of archived posts (see NNTPArchiver);
+# it finds words (and the start of words), whatever their case or accents
+ARCHIVE_SEARCH_TABLE = 'archive_search'
+
+ARCHIVE_TOKENIZERS = (
+    'unicode61 remove_diacritics 2',
+    # Older versions of SQLite
+    'unicode61 remove_diacritics 1',
+)
+
+# Keeps the archive's search index up to date (it only holds the index;
+# the text stays in archive_post)
+ARCHIVE_TRIGGERS = (
+    'CREATE TRIGGER IF NOT EXISTS archive_search_add '
+    'AFTER INSERT ON archive_post BEGIN '
+    '  INSERT INTO archive_search(rowid, subject, poster, text, filenames) '
+    '  VALUES (new.id, new.subject, new.poster, new.text, new.filenames); '
+    'END',
+
+    'CREATE TRIGGER IF NOT EXISTS archive_search_change '
+    'AFTER UPDATE ON archive_post BEGIN '
+    '  INSERT INTO archive_search(archive_search, rowid, subject, poster, '
+    '    text, filenames) '
+    "  VALUES ('delete', old.id, old.subject, old.poster, old.text, "
+    '    old.filenames); '
+    '  INSERT INTO archive_search(rowid, subject, poster, text, filenames) '
+    '  VALUES (new.id, new.subject, new.poster, new.text, new.filenames); '
+    'END',
+
+    'CREATE TRIGGER IF NOT EXISTS archive_search_remove '
+    'AFTER DELETE ON archive_post BEGIN '
+    '  INSERT INTO archive_search(archive_search, rowid, subject, poster, '
+    '    text, filenames) '
+    "  VALUES ('delete', old.id, old.subject, old.poster, old.text, "
+    '    old.filenames); '
+    'END',
+)
+
+# PostgreSQL: the text an archived post is searched by (its search index is
+# built on the same expression, so searches can use it).  Anything that
+# isn't a letter or a number separates words, as it does on SQLite (its
+# own parser would keep 'holiday-photo.jpg' as one word)
+PG_POST_DOCUMENT = (
+    "to_tsvector('simple'::regconfig, regexp_replace(newsreap_unaccent("
+    "COALESCE(subject, '') || ' ' || COALESCE(text, '') || ' ' || "
+    "COALESCE(filenames, '')), '[^[:alnum:]]+', ' ', 'g'))")
+PG_POSTER_DOCUMENT = (
+    "to_tsvector('simple'::regconfig, regexp_replace(newsreap_unaccent("
+    "COALESCE(poster, '')), '[^[:alnum:]]+', ' ', 'g'))")
 
 # PostgreSQL: ignores the accents of text; it has to be IMMUTABLE so it can
 # be indexed (unaccent() itself isn't)
@@ -92,17 +146,19 @@ SEARCH_TRIGGERS = (
     'CREATE TRIGGER IF NOT EXISTS collection_search_file_add '
     'AFTER INSERT ON collection_file BEGIN '
     '  INSERT INTO collection_search(rowid, subject, poster, collection_id) '
-    "  VALUES (new.id, COALESCE(new.subject, ''), "
-    "    COALESCE(new.poster, ''), new.collection_id); "
+    "  VALUES (new.id, COALESCE(new.subject, '') || ' ' || "
+    "    COALESCE(new.filename, ''), COALESCE(new.poster, ''), "
+    '    new.collection_id); '
     'END',
 
     'CREATE TRIGGER IF NOT EXISTS collection_search_file_change '
-    'AFTER UPDATE OF subject, poster, collection_id ON collection_file '
-    'BEGIN '
+    'AFTER UPDATE OF subject, filename, poster, collection_id '
+    'ON collection_file BEGIN '
     '  DELETE FROM collection_search WHERE rowid = old.id; '
     '  INSERT INTO collection_search(rowid, subject, poster, collection_id) '
-    "  VALUES (new.id, COALESCE(new.subject, ''), "
-    "    COALESCE(new.poster, ''), new.collection_id); "
+    "  VALUES (new.id, COALESCE(new.subject, '') || ' ' || "
+    "    COALESCE(new.filename, ''), COALESCE(new.poster, ''), "
+    '    new.collection_id); '
     'END',
 
     'CREATE TRIGGER IF NOT EXISTS collection_search_file_remove '
@@ -246,6 +302,14 @@ class NNTPIndexDatabase(Database):
                 'USING gin (%s(%s) gin_trgm_ops)' % (
                     table, column, table, PG_UNACCENT, column))
 
+        # Archived posts are searched by their words
+        conn.exec_driver_sql(
+            'CREATE INDEX IF NOT EXISTS archive_post_search ON archive_post '
+            'USING gin (%s)' % PG_POST_DOCUMENT)
+        conn.exec_driver_sql(
+            'CREATE INDEX IF NOT EXISTS archive_post_poster_search ON '
+            'archive_post USING gin (%s)' % PG_POSTER_DOCUMENT)
+
     @staticmethod
     def _mysql_search(conn):
         """
@@ -266,6 +330,21 @@ class NNTPIndexDatabase(Database):
             conn.exec_driver_sql(
                 'ALTER TABLE %s ADD FULLTEXT INDEX %s (%s) WITH PARSER ngram'
                 % (table, name, column))
+
+        # Archived posts are searched by their words (the usual parser)
+        for name, columns in (
+                ('archive_post_search', 'subject, text, filenames'),
+                ('archive_post_poster_search', 'poster')):
+            if conn.exec_driver_sql(
+                    'SELECT 1 FROM information_schema.statistics '
+                    'WHERE table_schema = DATABASE() AND table_name = %s '
+                    'AND index_name = %s LIMIT 1',
+                    ('archive_post', name)).first():
+                continue
+
+            conn.exec_driver_sql(
+                'ALTER TABLE archive_post ADD FULLTEXT INDEX %s (%s)' % (
+                    name, columns))
 
     @staticmethod
     def _sqlite_search(conn):
@@ -296,8 +375,37 @@ class NNTPIndexDatabase(Database):
                 'FROM collection' % SEARCH_TABLE)
             conn.exec_driver_sql(
                 'INSERT INTO %s(rowid, subject, poster, collection_id) '
-                "SELECT id, COALESCE(subject, ''), COALESCE(poster, ''), "
+                "SELECT id, COALESCE(subject, '') || ' ' || "
+                "COALESCE(filename, ''), COALESCE(poster, ''), "
                 'collection_id FROM collection_file' % SEARCH_TABLE)
 
         for trigger in SEARCH_TRIGGERS:
+            conn.exec_driver_sql(trigger)
+
+        if conn.exec_driver_sql(
+                "SELECT 1 FROM sqlite_master WHERE name = '%s'"
+                % ARCHIVE_SEARCH_TABLE).first() is None:
+
+            for tokenizer in ARCHIVE_TOKENIZERS:
+                try:
+                    # Only the index is kept here; the text is read from
+                    # archive_post
+                    conn.exec_driver_sql(
+                        "CREATE VIRTUAL TABLE %s USING fts5(subject, poster, "
+                        "text, filenames, content='archive_post', "
+                        "content_rowid='id', tokenize='%s')" % (
+                            ARCHIVE_SEARCH_TABLE, tokenizer))
+                    break
+
+                except OperationalError:
+                    # This version of SQLite doesn't support it; try the
+                    # next one
+                    continue
+
+            # What is kept already
+            conn.exec_driver_sql(
+                "INSERT INTO %s(%s) VALUES ('rebuild')" % (
+                    ARCHIVE_SEARCH_TABLE, ARCHIVE_SEARCH_TABLE))
+
+        for trigger in ARCHIVE_TRIGGERS:
             conn.exec_driver_sql(trigger)

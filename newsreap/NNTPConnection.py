@@ -433,6 +433,11 @@ class NNTPConnection(SocketBase):
         # The statistics of the action in progress (if any)
         self._action = None
 
+        # How our last article fetch went: 'found', 'missing' (no server had
+        # it) or 'failed' (something went wrong; it may be there); see
+        # fetch_status()
+        self.last_fetch = None
+
         # Used to cache group list responses
         self._grouplist = None
 
@@ -1726,6 +1731,9 @@ class NNTPConnection(SocketBase):
 
         """
 
+        # Until we know better
+        self.last_fetch = 'failed'
+
         if self.join_group and group is not None and group != self.group_name:
             # allow us to switch groups if nessisary
             if self.group(group)[0] is None:
@@ -1788,10 +1796,12 @@ class NNTPConnection(SocketBase):
                      if result is not None), None)
                 if article is not None:
                     # A backup server had it (and tracked fetching it)
+                    self.last_fetch = 'found'
                     return article
 
             # Track the articles the server doesn't have
             self._action.missing += 1
+            self.last_fetch = 'missing'
             return None
 
         else:  # response.code in NNTPResponseCode.SERVER_ERROR:
@@ -1810,10 +1820,12 @@ class NNTPConnection(SocketBase):
                      if result is not None), None)
                 if article is not None:
                     # A backup server had it (and tracked fetching it)
+                    self.last_fetch = 'found'
                     return article
 
             # Track the articles we couldn't fetch
             self._action.failed += 1
+            self.last_fetch = 'failed'
             return None
 
         # If we reach here, we have data we can work with; build our article
@@ -1825,9 +1837,18 @@ class NNTPConnection(SocketBase):
         # whole fetch (not just the command above)
         self._action.fetched += 1
         article.stats = self._action
+        self.last_fetch = 'found'
 
         # Return the content retrieved
         return article
+
+    def fetch_status(self):
+        """
+        Returns how our last article fetch went (see last_fetch); put it
+        after a 'get' in the same NNTPConnectionRequest to learn why an
+        article wasn't returned
+        """
+        return self.last_fetch
 
     def send(self, command, timeout=None, decoders=None, retries=0):
         """

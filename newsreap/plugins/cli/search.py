@@ -32,6 +32,7 @@ from newsreap.objects.nntp.Common import get_groups
 
 from sqlalchemy import func
 
+from newsreap.NNTPArchiver import NNTPArchiver
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.NNTPIndexer import parse_keywords
@@ -102,6 +103,34 @@ def search_raw(ctx, groups, keywords, minscore, maxscore, case_sensitive):
         db.close()
 
 
+def search_posts(ctx, keywords, groups, limit, case_sensitive):
+    """
+    Searches the articles 'nr update archive' kept
+    """
+    archiver = NNTPArchiver(
+        ctx['NNTPSettings'].index_database(), default_hooks=False)
+    try:
+        if archiver.session() is None:
+            click.echo(
+                "Nothing archived yet; run 'nr update archive' first.")
+            return
+
+        for post in archiver.find(
+                keywords, groups=groups, limit=limit,
+                case_sensitive=case_sensitive):
+            click.echo('%s  %-24.24s  %s' % (
+                post.posted.strftime('%Y-%m-%d %H:%M') if post.posted
+                else '????-??-?? ??:??', post.poster, post.subject))
+            click.echo('    <%s>' % post.message_id)
+
+            snippet = archiver.snippet(post, keywords)
+            if snippet:
+                click.echo('    %s' % snippet)
+
+    finally:
+        archiver.close()
+
+
 @click.command(name='search')
 @click.argument('keywords', nargs=-1)
 @click.option('--group', '-g', 'groups', multiple=True,
@@ -118,6 +147,9 @@ def search_raw(ctx, groups, keywords, minscore, maxscore, case_sensitive):
               help='Include collections whose articles are still arriving.')
 @click.option('--limit', '-l', type=click.IntRange(min=1),
               help='Show at most this many.')
+@click.option('--posts', is_flag=True,
+              help="Search the articles 'nr update archive' kept (their "
+                   "subjects, text and file names) instead.")
 @click.option('--raw', is_flag=True,
               help='Search the cached article headers of the groups given '
                    'instead (ie: what is not indexed yet).')
@@ -127,7 +159,7 @@ def search_raw(ctx, groups, keywords, minscore, maxscore, case_sensitive):
               help='The highest article score shown (with --raw).')
 @click.pass_obj
 def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
-           raw, minscore, maxscore):
+           posts, raw, minscore, maxscore):
     """
     Search everything indexed (across every group).
 
@@ -146,7 +178,21 @@ def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
 
     Put -- before the keywords if one of them starts with a dash.
 
+    With --posts, the articles 'nr update archive' kept are searched by
+    their words instead ('holid' finds 'holiday'); read one with
+    'nr archive show <message-id>'.
+
     """
+    if posts and raw:
+        logger.error('Only one of --posts and --raw can be used.')
+        exit(1)
+
+    if posts:
+        search_posts(
+            ctx, keywords, set(lookup_groups(ctx, groups)) if groups
+            else None, limit, not ignore_case)
+        return
+
     if raw:
         if not groups:
             logger.error('Searching with --raw needs a --group.')

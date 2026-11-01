@@ -53,6 +53,7 @@ from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPGroupScanner import NNTPGroupScanner
 from newsreap.NNTPGroupScanner import DEFAULT_BATCH_SIZE
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
+from newsreap.NNTPArchiver import NNTPArchiver
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.Utils import utcnow
 
@@ -428,3 +429,76 @@ def update_index(ctx, groups, watched, settle):
 
     if not complete:
         exit(1)
+
+
+@click.command(name='archive')
+@click.argument('groups', nargs=-1)
+@click.option('--watched', '-w', is_flag=True, help='All watched groups.')
+@click.option('--max-size', '-m', default=None, type=str,
+              help='The biggest article fetched (ie: 64KB); defaults to '
+                   'the archive_max_size setting.')
+@click.option('--force', is_flag=True,
+              help='Ask again for the articles no server had before.')
+@click.option('--hooks', '-k', default=None, type=str,
+              help='More archive hooks to use (see '
+                   'newsreap/hooks/archive/).')
+@click.option('--no-default-hooks', is_flag=True,
+              help="Don't use the built in archive hooks.")
+@click.pass_obj
+def update_archive(ctx, groups, watched, max_size, force, hooks,
+                   no_default_hooks):
+    """
+    Keep the small articles of groups so they can be searched offline.
+
+    Fetches the articles 'nr update search' cached the headers of that are
+    no bigger than --max-size, and keeps what they say (decoded, so it can
+    be searched with 'nr search --posts').  Files they hold (yEnc,
+    uuencode, attachments) are only noted, never kept.  Articles kept
+    before aren't fetched again.
+
+    """
+    settings = ctx['NNTPSettings']
+    session = settings.session()
+    if not session:
+        logger.error("The database is not correctly configured.")
+        exit(1)
+
+    groups = get_groups(session=session, lookup=groups, watched=watched)
+    if not groups:
+        logger.error("There were not groups identified for archiving.")
+        exit(1)
+
+    try:
+        archiver = NNTPArchiver(
+            settings.index_database(), hooks=hooks,
+            default_hooks=not no_default_hooks,
+            max_size=max_size or
+            settings.nntp_processing.get('archive_max_size') or '64KB')
+
+    except ValueError as e:
+        logger.error(str(e))
+        exit(1)
+
+    # Track whether every group could be archived
+    complete = True
+
+    try:
+        for name in groups:
+            if not archiver.archive(
+                    name, settings.group_database(name),
+                    ctx['NNTPManager'], work_dir=settings.work_dir,
+                    force=force):
+                click.echo(
+                    "%s: nothing cached yet; run 'nr update search %s' "
+                    "first." % (name, name))
+                complete = False
+                continue
+
+            click.echo('%s: %s' % (name, archiver))
+
+    finally:
+        archiver.close()
+
+    if not complete:
+        exit(1)
+

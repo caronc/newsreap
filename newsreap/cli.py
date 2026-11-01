@@ -103,6 +103,13 @@
 #   # back when indexing again
 #   nr delete 42 43
 #
+#   # Keep the small articles of a group full of discussion so it can be
+#   # searched offline (files they hold are only noted, never kept), then
+#   # search their words and read one
+#   nr update archive test
+#   nr search --posts "some words"
+#   nr archive show "<message-id@example.com>"
+#
 #   # Newsreap also maintains a watch list which is groups you just always
 #   # intend to index. It can be a conbination of aliases you set up, or
 #   # just a few individual groups. The below adds our 'test' group to
