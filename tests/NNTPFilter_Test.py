@@ -613,10 +613,6 @@ def test_saving_one_rule_keeps_the_rest_of_the_file(tmp_path):
     ('filters:\n  - name: x\n    subject: [unclosed\n', "isn't valid YAML"),
     ('rules:\n  - subject: x\n', "under 'filters:'"),
     ('filters: just text\n', "under 'filters:'"),
-    ('filters:\n  - name: ok\n    subject: x\n  - name: bad\n'
-     '    subject: {regex: "("}\n', r'rule #2 \(bad\)'),
-    ('filters:\n  - name: twice\n    subject: x\n  - name: twice\n'
-     '    subject: y\n', 'more than once'),
 ])
 def test_broken_filters_files_are_refused(tmp_path, content, problem):
     """
@@ -627,6 +623,30 @@ def test_broken_filters_files_are_refused(tmp_path, content, problem):
     path.write_text(content)
     with pytest.raises(ValueError, match=problem):
         NNTPFilter(str(path))
+
+
+@pytest.mark.parametrize('content, problem', [
+    ('filters:\n  - name: ok\n    subject: x\n  - name: bad\n'
+     '    subject: {regex: "("}\n', 'rule #2 (bad)'),
+    ('filters:\n  - name: ok\n    subject: x\n  - name: ok\n'
+     '    subject: y\n', 'more than once'),
+])
+def test_broken_rules_are_left_out(tmp_path, caplog, content, problem):
+    """
+    A rule that doesn't make sense is left out (saying which, and why); the
+    others are still used, and the file isn't written over (it would lose
+    the rule)
+    """
+    path = tmp_path / 'filters.yaml'
+    path.write_text(content)
+    filters = NNTPFilter(str(path))
+    assert [r.name for r in filters] == ['ok']
+    assert len(filters.problems) == 1 and problem in filters.problems[0]
+    assert problem in caplog.text and 'left out' in caplog.text
+
+    with pytest.raises(ValueError, match='fix them first'):
+        filters.save()
+    assert path.read_text() == content
 
 
 def test_filters_files_can_be_empty_or_a_plain_list(tmp_path):

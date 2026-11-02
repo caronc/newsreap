@@ -613,6 +613,6 @@ def test_archive_from_the_command_line(tmp_path):
         assert 'Subject:    Re: Coffee' in result.output
         assert 'References: <talk@x>' in result.output
         assert 'Yes, the coffee is great' in result.output
-        assert 'File:       menu.pdf (yenc, 4.00B, crc32 0badf00d)' in \
+        assert 'Holds:      menu.pdf (yenc, 4.00B, crc32 0badf00d)' in \
             result.output
         assert nr('archive', 'show', 'nope@x').exit_code == 1

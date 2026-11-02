@@ -328,13 +328,13 @@ def test_collections_form_once_settled(paths):
     assert late.state == CollectionState.Forming
     assert late.gid is None
 
-    # An hour later is not long enough
-    caught_up(paths[GROUP], POSTED + timedelta(hours=1))
+    # 20 minutes later is not long enough
+    caught_up(paths[GROUP], POSTED + timedelta(minutes=20))
     indexer.index(GROUP, paths[GROUP])
     assert indexer.settle() == 0
 
-    # Hours later it has settled (as complete as it will get)
-    caught_up(paths[GROUP], POSTED + timedelta(hours=5))
+    # An hour later it has settled (as complete as it will get)
+    caught_up(paths[GROUP], POSTED + timedelta(hours=1))
     indexer.index(GROUP, paths[GROUP])
     assert indexer.settle() == 1
     late = indexer.get(late.id)
@@ -392,7 +392,7 @@ def test_settling_can_be_told_the_time(paths):
     assert indexer.settle() == 0
 
     # Not long enough after its last article
-    assert indexer.settle(now=POSTED + timedelta(hours=1)) == 0
+    assert indexer.settle(now=POSTED + timedelta(minutes=20)) == 0
     assert indexer.find() == []
 
     # Long enough (a time with a timezone works too)
@@ -1276,13 +1276,15 @@ def test_index_and_save_from_the_command_line(tmp_path):
         # Nothing has been cached yet
         result = nr('update', 'index', GROUP)
         assert result.exit_code == 1
-        assert "run 'nr update search %s' first" % GROUP in result.output
+        assert "run 'nr update %s' first" % GROUP in result.output
 
         result = nr('nzb', 'list')
         assert 'Nothing indexed yet' in result.output
 
-        assert nr('update', 'search', GROUP).exit_code == 0
-        assert nr('update', 'search', OTHER).exit_code == 0
+        # Only cached (indexed below)
+        assert nr('update', 'search', '--no-index', GROUP).exit_code == 0
+        assert nr('update', 'search', '--no-index', OTHER).exit_code == 0
+        assert 'Nothing indexed yet' in nr('search').output
 
         assert nr('alias', 'add', 'both', GROUP, OTHER).exit_code == 0
         result = nr('update', 'index', 'both')
@@ -1382,3 +1384,66 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert nr('update', 'index', 'both').exit_code == 0
         assert 'Holiday.Photos' not in nr('nzb', 'list').output
         assert nr('nzb', 'import', nzb_file).exit_code == 1
+
+
+def test_fetched_headers_can_be_searched_right_away(tmp_path):
+    """
+    nr update search indexes what it fetched; nr db status shows what is
+    where; a search that finds nothing says why
+    """
+    from newsreap.cli import cli
+    from newsreap.Utils import utcnow
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000007 0000000001 y\n' % GROUP)
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        # One posted long ago, one still arriving (a part is missing)
+        for no, ((subject, poster, message_id), posted) in enumerate([
+                *((a, POSTED) for a in release(
+                    'Holiday.Photos', files=2, segments=2)),
+                *((a, utcnow()) for a in release(
+                    'Fresh.Upload', files=2, segments=2, skip={(2, 2)}))],
+                1):
+            server.add_overview(
+                GROUP, no, subject, poster, posted + timedelta(minutes=no),
+                message_id, size=1000)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args):
+            return runner.invoke(cli, ['--config', config, *args], obj={})
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('update', 'groups').exit_code == 0
+
+        # Nothing fetched yet
+        assert "run 'nr update <group> --newest 100000' first" in \
+            nr('search').output
+        assert 'Nothing fetched yet' in nr('db', 'status').output
+
+        result = nr('update', 'search', GROUP)
+        assert result.exit_code == 0, result.output
+        assert '%s: 7 article(s) indexed; 4 new file(s) in 2 new ' \
+            'collection(s)' % GROUP in result.output
+        assert 'Holiday.Photos' in nr('search', 'holiday').output
+
+        # What was fetched and indexed, by group
+        result = nr('db', 'status')
+        assert result.exit_code == 0
+        line = result.output.splitlines()[1].split()
+        assert line[:5] == [GROUP, '7', line[2], '2', '(1']
+        assert line[5:7] == ['forming)', '0']
+
+        # A group given as a keyword
+        result = nr('search', GROUP)
+        assert result.output == (
+            "Nothing found.\n'%s' is a group; to look in it: nr search "
+            "-g %s\n" % (GROUP, GROUP))
+
+        # Collections still forming are left out (unless asked for)
+        assert nr('search', 'fresh').output == (
+            'Nothing found.\n1 collection(s) still forming match; add '
+            '--forming to see them.\n')
+        assert 'Fresh.Upload' in nr('search', '--forming', 'fresh').output

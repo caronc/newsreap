@@ -32,8 +32,8 @@ except ImportError:
 
 from newsreap.objects.nntp.Group import Group
 
-from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
-from newsreap.Utils import find
+from newsreap.plugins.cli.status import index_session
+from newsreap.plugins.cli.status import show_groups
 from newsreap.Utils import pushd
 from newsreap.Utils import bytes_to_strsize
 
@@ -135,54 +135,32 @@ def database_reset(ctx):
 @click.pass_obj
 def database_status(ctx):
     """
-    displays details on the current database store
-    """
-    db_path = join(ctx['NNTPSettings'].work_dir, 'cache', 'search')
-    logger.debug('Scanning %s for databases...' % db_path)
-    with pushd(db_path, create_if_missing=True):
-        results = find(
-            db_path,
-            suffix_filter=SQLITE_DATABASE_EXTENSION,
-            fsinfo=True,
-            max_depth=1,
-        )
+    Show what has been fetched and indexed so far (by group).
 
-    # Use our Database first if it exists
-    session = ctx['NNTPSettings'].session()
+    For every group with cached headers (or that is watched): how many
+    headers are cached, how big that cache is, how many collections and
+    archived posts have something from it, and when it was last scanned
+    and indexed.  W marks a watched group.  See 'nr status' for more.
+
+    """
+    settings = ctx['NNTPSettings']
+    session = settings.session()
     if not session:
         logger.error('Could not acquire a database connection.')
         exit(1)
 
-    # PEP8 E712 does not allow us to make a comparison to a boolean value
-    # using the == instead of the keyword 'in'.  However SQLAlchemy
-    # requires us to do just because that's how the amazing tool works.
-    # so to get around the pep8 error, we'll just define a variable equal
-    # to True and then we can compare to it
-    pep8_e712 = True
-
     try:
-        # Get a list of watched groups
-        groups = dict(session.query(Group.name, Group.id)
-                      .filter(Group.watch == pep8_e712).all())
+        session.query(Group.id).first()
 
     except OperationalError:
-        # Get a list of watched groups
-        logger.warning('The database does not appear to be initialized.')
-        logger.info('Try running: "nr db init" first.')
-        exit(0)
+        click.echo(
+            "The database isn't set up yet; run 'nr db init' first.")
+        exit(1)
 
-    if not len(results):
-        logger.info('There are no groups configured to be watched.')
-        exit(0)
+    index, index_db = index_session(settings)
+    try:
+        show_groups(settings, session, index_db)
 
-    for _, meta in results.items():
-        # Open up the database
-        flags = ''
-        if meta['filename'] in groups:
-            flags += 'W'
-
-        print(('%-65s %-10s %s' % (
-            meta['filename'],
-            bytes_to_strsize(meta['size']),
-            flags,
-        )))
+    finally:
+        if index is not None:
+            index.close()

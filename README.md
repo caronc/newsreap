@@ -231,54 +231,101 @@ nr alias add alt.binaries.sounds sounds
 ```
 
 ### Search
-Once you've indexed certain content you can then begin searching it
-for content:
+Fetch the headers of a group, then search them.  Everything is kept on
+your machine; the headers are grouped into files and collections
+(releases) as they arrive, so they can be searched right away:
 ```bash
-# If you want to just scan/search the groups manually; you can now
-# cache these watched groups with the following command:
-nr update search --watched
+# The first time, say how far back to go (a.b. is short for
+# alt.binaries.)
+nr update a.b.test2 --newest 200000
 
-# using the search keyword, all variables specified after it
-# are treated as filters:
-# You can use -/+ tokens to filter your results further by
-# default + is presumed to be infront of anything not otherwise
-# having it identified
-#
-#  + the keyword 'must' exist somewhere in the title (treat it as an 'and')
-#  - the keyword can not be present in the title (treat it as an 'and not')
-#
-#  Entries without either a -/+ are treated as being an 'or'.
-#
-#  If you need to search for a + or -, you'll need to escape them with a
-#  backslash (\).  If you need to identify a backslash in the search; then
-#  escape it with another backslash
-#
-# Searches are not case sensitive
-nr search sintel -porn +720p
+# After that it carries on from where it left off (anything missed, and
+# everything new)
+nr update a.b.test2
 
-# Here is how the escaping works; The following looks for anything
-# with +++ in it's title:
-nr search \+\+\+
+# An overview: where everything is (and how big), the servers, every
+# group with something kept, the aliases, and what the index holds
+nr status
+
+# Everything (newest first, or --oldest-first; a screen at a time on a
+# terminal), or what has keywords in it
+nr search -g a.b.test2
+nr search --oldest-first
+nr search holiday photos
+
+# Collections are searched unless told otherwise; --posts (what
+# --content kept) and --raw (cached headers) can be added, each shown
+# under its own heading
+nr search holiday --collections --posts
+
+# A keyword starting with - leaves out what has it (put -- before it)
+nr search holiday -- -2019
+
+# Collections whose articles are still arriving are left out unless asked
+nr search --forming holiday
+
+# Save one as an NZB file (using the id shown on the left)
+nr nzb save 42 --output ~/Downloads
 ```
 
-### Continued Indexing Usage
-Indexing can be automated and keep up with what gets posted. You can set up watch lists and then
-automate there scanning as often as you want.
+See `nr search --help` for the find-style options (`--isubject '*holiday*'`,
+`--iposter`, `--ifilename`, ...), scores and tags.
+
+### More Than Headers
+Switches pull in more to search with (each one only once, and they can be
+combined):
+```bash
+# Keep what the small articles (64KB or less) say, so their text can be
+# searched with 'nr search --posts'
+nr update a.b.test2 --content
+
+# Read the NZB files people posted into the index
+nr update a.b.test2 --nzb
+
+# Do either with the headers you already have (fetching no new ones)
+nr update a.b.test2 --cached --nzb --content
+
+# Work every score and tag out again after changing filters.yaml
+nr update a.b.test2 --rescore
+
+# Start a group over (everything kept of it is removed first)
+nr update a.b.test2 --reset --days 7
+```
+
+Obfuscated posts (a made up subject for every article) are put together
+from how they were posted: the poster, the shape of the subject and
+Message-ID, and the groups they went to.  How many files one has is
+worked out from its article sizes (every file's last article is shorter)
+and shown as an estimate (~38 files).  Their real file names come from an
+NZB file, or from the articles themselves.
+
+A collection missing parts is treated as done (settled) once its groups
+have been scanned `collection_settle_time` seconds (1800 by default) past
+its last article.
+
+### Articles
+```bash
+# Everything known of articles: their headers, score, the collection and
+# file they are part of, and what they say.  One not kept yet is fetched
+# (whole, so the connection is never broken off) and kept.
+nr show '<message-id@example.com>' another@example.com
+
+# Download them and save what they hold (the names saved are shown)
+nr fetch '<message-id@example.com>' --output ~/Downloads
+```
+
+### Keeping Up
+Watch the groups you care about and fetch them as often as you like:
 
 ```bash
-# Index all of the groups being watched
-nr update index --watched
-
-# Alternative; just index the groups identified
-# You can reference them by their aliases too here (if you set any up)
-nr update index alt.binaries.multimedia sounds
+nr group watch a.b.test2
+nr update --watched
 
 # Consider adding this to a crontab:
-cat << _EOF > /etc/cron.d/nzbindex
-# Index all groups every 20 minutes
-# You don't need root to run this script; it would actually be
-# in your best interest to run this as a non-root user
-*/20 * * * * root nr update index --watched
+cat << _EOF > /etc/cron.d/newsreap
+# Fetch (and index) every watched group every 20 minutes; you don't need
+# root to run this (it's better not to)
+*/20 * * * * someuser nr update --watched
 _EOF
 ```
 

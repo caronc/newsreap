@@ -526,7 +526,7 @@ class NNTPArchiver:
     def find(self, keywords=(), groups=None, kinds=ARCHIVE_SEARCHED,
              limit=None, case_sensitive=False, tags=None, without_tags=None,
              min_score=None, max_score=None, terms=None, scores=None,
-             after=None, before=None):
+             after=None, before=None, oldest=False):
         """
         Returns the posts (newest first) with every keyword in their
         subject, text or file names (see parse_keywords(); %p looks in the
@@ -548,6 +548,7 @@ class NNTPArchiver:
         - scores: score comparisons (ie: '<34, >23') they must pass
         - after / before: only posts posted at or after / before this (a
           date or how long ago, ie: 90d)
+        - oldest: oldest first (instead of newest first)
         """
         session = self.session()
         if session is None:
@@ -588,7 +589,9 @@ class NNTPArchiver:
                 .where(ArchiveGroup.name.in_(list(groups)))))
 
         query = query.order_by(
-            ArchivedPost.posted.desc(), ArchivedPost.id.desc())
+            ArchivedPost.posted.asc(), ArchivedPost.id.asc()) if oldest \
+            else query.order_by(
+                ArchivedPost.posted.desc(), ArchivedPost.id.desc())
 
         return query.limit(limit).all() if limit else query.all()
 

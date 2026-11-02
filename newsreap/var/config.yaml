@@ -114,9 +114,10 @@ processing:
 
    # A collection that is missing parts is treated as finished (as
    # complete as it is going to get) once every group it was found in has
-   # been scanned this many hours past its last article.  Not scanning for
-   # a while never makes a collection look incomplete.
-   settle_hours: 4
+   # been scanned this many seconds past its last article (1800 is half
+   # an hour).  Not scanning for a while never makes a collection look
+   # incomplete.
+   collection_settle_time: 1800
 
    # Something posted this many days apart from a collection with the same
    # name and poster is treated as a repost (a collection of its own).

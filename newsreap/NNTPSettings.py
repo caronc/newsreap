@@ -333,8 +333,8 @@ DEFAULT_PROCESSING_VARIABLES = {
     # A ramdisk greatly increases processing of certain content
     'ramdisk': None,
     # A collection missing parts is settled (as complete as it will get)
-    # once its groups have been scanned this many hours past it
-    'settle_hours': 4,
+    # once its groups have been scanned this many seconds past it
+    'collection_settle_time': 1800,
     # An article posted this many days away from a collection's posting
     # time starts a new collection (a repost); 0 never splits them
     'repost_days': 3,

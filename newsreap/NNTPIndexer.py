@@ -105,11 +105,28 @@ DEFAULT_CHUNK_SIZE = 10000
 
 # A collection missing parts is settled once nothing new arrived for this
 # many hours
-DEFAULT_SETTLE_HOURS = 4
+DEFAULT_SETTLE_TIME = 1800
 
 # Articles posted this many days away from a collection's posting time
 # start a new collection (a repost)
 DEFAULT_REPOST_DAYS = 3
+
+# Obfuscated posts (see signals()) are told apart by when they were posted:
+# a pause this long (in minutes) starts a new one
+DEFAULT_SESSION_MINUTES = 30
+
+# What a collection put together from posting signals (not its subjects)
+# has its key start with
+SESSION_KEY = 'session'
+
+# An article of an obfuscated post this much smaller than its biggest one
+# is the last article of a file (see _estimate_files())
+SHORT_ARTICLE_SHARE = 0.95
+
+# Obfuscated articles that (mostly) all have a different poster have a made
+# up one each: only its shape is used then.  This many have to be seen
+# together before that is decided.
+RANDOM_POSTER_SAMPLE = 20
 
 # A GID is an md5 written out in hex
 GID_RE = re.compile(r'^[0-9a-f]{32}$', re.IGNORECASE | re.ASCII)
@@ -191,6 +208,9 @@ TRIM_RE = re.compile(r'^[\s"\'\-]+|[\s"\'\-]+$', re.ASCII)
 # Reads the usual yEnc subject layout; made once since every article
 # subject goes through it
 YENC_SUBJECT = CodecYenc()
+
+# How many search results are read at a time when they are streamed
+STREAM_SIZE = 500
 
 # The most variables SQLite takes in one statement is far higher than
 # this, but keeping our IN (...) lists small keeps them fast
@@ -285,6 +305,137 @@ def release_name(filename):
     return name or filename
 
 
+
+
+# A word or number in a subject, Message-ID or poster
+TOKEN_RE = re.compile(r'[A-Za-z0-9]+', re.ASCII)
+
+# A run of digits
+DIGITS_RE = re.compile(r'\d+', re.ASCII)
+
+# A run of lower case letters
+LOWER_RUN_RE = re.compile(r'[a-z]+', re.ASCII)
+
+# A name made up of nothing but letters, digits and a few symbols (no
+# spaces); random looking ones are what obfuscated posts use
+RANDOM_NAME_RE = re.compile(r'^[A-Za-z0-9_+=-]{12,}$', re.ASCII)
+
+
+def looks_random(text):
+    """
+    Returns True if a word looks made up (ie: the random names obfuscated
+    posts use): long, without spaces, and either broken up by digits in
+    more than one place or switching case far more often than words joined
+    together do (in HolidayPhotos every capital starts a word)
+    """
+    if not RANDOM_NAME_RE.match(text or ''):
+        return False
+
+    letters = ''.join(c for c in text if c.isalpha())
+    if len(letters) < 4:
+        # Mostly digits (ie: a date or an article number)
+        return False
+
+    if len(DIGITS_RE.findall(text)) >= 2:
+        return True
+
+    # How long the runs of lower case letters are (on average)
+    runs = LOWER_RUN_RE.findall(letters)
+    if not runs or not any(c.isupper() for c in letters):
+        # One case all the way through (a word, or shouting)
+        return False
+
+    return len(runs) >= 4 and sum(map(len, runs)) / len(runs) < 3
+
+
+def token_shape(text):
+    """
+    Returns the shape of some text: its random looking words become 'x',
+    its numbers '9' (within words too), and the rest is kept (lower case)
+    """
+    def shape(found):
+        word = found.group(0)
+        if word.isdigit():
+            return '9'
+
+        if len(word) >= 8 and (looks_random(word) or all(
+                c in '0123456789abcdefABCDEF' for c in word)):
+            return 'x'
+
+        return DIGITS_RE.sub('9', word.lower())
+
+    return TOKEN_RE.sub(shape, text or '')
+
+
+def message_id_shape(message_id):
+    """
+    Returns the shape of a Message-ID (see token_shape()); every article a
+    posting tool makes has the same one (ie: x@ngpost)
+    """
+    return token_shape((message_id or '').strip().strip('<>'))[:64]
+
+
+def subject_template(subject):
+    """
+    Returns a subject with what changes from article to article (counters,
+    numbers, quoted names and random looking words) taken out; the
+    articles of one post share it
+    """
+    if made_up(subject):
+        # A made up name for each one
+        return 'x' + ('(#/#)' if COUNTER_RE.search(subject) else '')
+
+    template = COUNTER_RE.sub('(#/#)', subject or '')
+    template = QUOTED_RE.sub('"*"', template)
+    template = TOKEN_RE.sub(
+        lambda found: 'x' if looks_random(found.group(0)) else
+        found.group(0), template)
+    return DIGITS_RE.sub('9', template)[:128]
+
+
+def xref_key(xref):
+    """
+    Returns a short key for the groups an article was posted to (its Xref
+    as cached); '' if not known
+    """
+    groups = ' '.join(sorted((xref or '').split()))
+    return md5(groups.encode('utf-8')).hexdigest()[:8] if groups else ''
+
+
+def made_up(subject):
+    """
+    Returns True if a subject (its counters left out) is one long word: no
+    spaces, no file name, mixed case or digits.  Real posts describe
+    themselves; obfuscated ones use a made up name for every article (or
+    file).
+    """
+    name = COUNTER_RE.sub('', subject or '').strip()
+    return bool(RANDOM_NAME_RE.match(name)) and (
+        any(c.isdigit() for c in name) or
+        any(c.isupper() for c in name[1:]))
+
+
+def posting_key(row):
+    """
+    Returns how a cached article was posted: the shape of its subject and
+    Message-ID (the posting tool's) and the groups it went to
+    """
+    return '%s\n%s\n%s' % (
+        subject_template(row.subject), message_id_shape(row.message_id),
+        xref_key(row.xref))
+
+
+def is_obfuscated(info):
+    """
+    Returns True if what parse_subject() found can't tell which post an
+    article is part of: no file name, no file counter, and a made up (or
+    no) name (see made_up())
+    """
+    if info['filename'] or info['files']:
+        return False
+
+    name = info['desc'] or info['base']
+    return not COUNTER_RE.sub('', name).strip() or made_up(name)
 
 
 def make_gid(message_id):
@@ -466,31 +617,43 @@ class NNTPIndexer:
     """
 
     def __init__(self, db_file, chunk_size=DEFAULT_CHUNK_SIZE,
-                 settle_hours=DEFAULT_SETTLE_HOURS,
-                 repost_days=DEFAULT_REPOST_DAYS, filters=None):
+                 settle_time=DEFAULT_SETTLE_TIME,
+                 repost_days=DEFAULT_REPOST_DAYS, filters=None,
+                 session_minutes=DEFAULT_SESSION_MINUTES):
         """
         Prepares an indexer
 
         - db_file: the index database; an SQLite file or a database URL
           (see NNTPSettings.index_database())
         - chunk_size: how many articles are indexed (and saved) at a time
-        - settle_hours: how long a collection missing parts waits for new
-          articles before it is settled
+        - settle_time: how long (in seconds) a collection missing parts
+          waits for new articles before it is settled
         - repost_days: how far apart (in days) something is posted from a
           collection with the same name and poster before it counts as a
           repost; 0 never splits them
         - filters: the NNTPFilter that scores and tags articles (and drops
           the ones it no longer wants) as they are indexed; without it, the
           scores and tags given when they were cached are used
+        - session_minutes: how long a pause (in minutes) between the
+          articles of an obfuscated post starts a new one
         """
         self.db_file = db_file
         self.filters = filters or None
         self.chunk_size = max(1, int(chunk_size))
-        self.settle_after = timedelta(hours=max(0.0, float(settle_hours)))
+        self.settle_after = timedelta(
+            seconds=max(0.0, float(settle_time)))
 
         # None never splits a collection
         self.repost_gap = timedelta(days=float(repost_days)) \
             if repost_days and float(repost_days) > 0 else None
+
+        # Where one obfuscated post ends and the next begins
+        self.session_gap = timedelta(minutes=max(
+            1.0, float(session_minutes)))
+
+        # The ways of posting obfuscated articles (see posting_key()) that
+        # give every article a made up poster
+        self.random_posters = set()
 
         # What our last index() did:
         #  - articles: articles indexed
@@ -557,6 +720,9 @@ class NNTPIndexer:
         collections = {}
         files = {}
 
+        # The obfuscated posts whose files can't be told apart
+        self._unsplit = set()
+
         try:
             # Work through the articles in order, a chunk at a time; each
             # chunk is saved before the next one is read, so stopping part
@@ -612,6 +778,11 @@ class NNTPIndexer:
                 self.articles += len(rows)
                 logger.debug('Indexed %d article(s) of %s (up to article %d).'
                              % (len(rows), group, last))
+
+            if self._unsplit:
+                # How many files they are likely to have
+                self._estimate_files(session, self._unsplit)
+                session.commit()
 
             # Remember how far we have seen the group (see settle())
             seen = cache.clock()
@@ -704,16 +875,42 @@ class NNTPIndexer:
 
         # Work out what each article is part of
         entries = []
-        for row in rows:
-            info = parse_subject(row.subject or '')
+        parsed = [(row, parse_subject(row.subject or '')) for row in rows]
+        self._learn_posters(
+            [row for row, info in parsed if is_obfuscated(info)])
+
+        for row, info in parsed:
             poster = row.poster or ''
 
-            # The files of one collection share a poster and a name
-            name = info['desc'] or release_name(info['filename']) or \
-                info['base']
-            info['name'] = name[:256]
-            info['collection_key'] = '%s\n%s\n%d' % (
-                poster, name, info['files'])
+            info['session'] = is_obfuscated(info)
+            if info['session']:
+                # Its subject says nothing about the post it is part of, so
+                # it is put together from how it was posted: the poster, the
+                # shape of its subject and Message-ID (the posting tool's)
+                # and the groups it went to, split where posting paused
+                # (see _window())
+                how = posting_key(row)
+                if how in self.random_posters:
+                    # A made up poster for every article; only where they
+                    # say they are from is the same
+                    poster = '*@%s' % poster.rpartition('@')[2].strip(
+                        ' <>').lower()
+                    info['name'] = 'Obfuscated post (by %s)' % poster
+
+                else:
+                    info['name'] = 'Obfuscated post by %s' % poster
+
+                info['name'] = info['name'][:256]
+                info['collection_key'] = '%s\n%s\n%s' % (
+                    SESSION_KEY, poster, how)
+
+            else:
+                # The files of one collection share a poster and a name
+                name = info['desc'] or release_name(info['filename']) or \
+                    info['base']
+                info['name'] = name[:256]
+                info['collection_key'] = '%s\n%s\n%d' % (
+                    poster, name, info['files'])
 
             entries.append((row, poster, info))
 
@@ -740,7 +937,9 @@ class NNTPIndexer:
         kept = []
         for row, poster, info in entries:
             windows = collections[info['collection_key']]
-            window = self._window(windows, row.posted_date)
+            window = self._window(
+                windows, row.posted_date,
+                self.session_gap if info['session'] else self.repost_gap)
             if window is None:
                 # The first of its kind (or a repost); a new collection
                 window = {
@@ -780,8 +979,18 @@ class NNTPIndexer:
 
         # The segments of one file share a collection and their subject
         # (without its segment counter)
-        for _, _, info, window in kept:
-            info['file_key'] = '%d\n%s' % (window['id'], info['base'])
+        for row, _, info, window in kept:
+            if info['session'] and info['parts'] <= 1:
+                # Nothing says which file it is part of (the articles of
+                # several are mixed together); they wait in one until their
+                # real names are known (see learn_filenames())
+                info['file_key'] = '%d\n%s' % (window['id'], SESSION_KEY)
+                info['part'] = row.article_no
+                info['parts'] = 0
+                info['base'] = '(the files of an obfuscated post)'
+
+            else:
+                info['file_key'] = '%d\n%s' % (window['id'], info['base'])
 
         # Look up (or add) the files we need
         self._resolve(
@@ -827,6 +1036,12 @@ class NNTPIndexer:
         self._recount(
             session, file_ids, {window['id'] for _, _, _, window in kept},
             dates)
+
+        # The obfuscated posts whose files can't be told apart (how many
+        # files they have is worked out once the run is done)
+        self._unsplit.update(
+            window['id'] for _, _, info, window in kept
+            if info['session'] and not info['parts'])
 
         # Each collection gets the best score of its articles, and every tag
         # they were given
@@ -1006,10 +1221,29 @@ class NNTPIndexer:
         if names:
             self.learn_filenames(session, names)
 
-    def _window(self, windows, posted):
+    def _learn_posters(self, rows):
+        """
+        Notes the ways of posting obfuscated articles (see posting_key())
+        that give every article a made up poster: most of the articles
+        posted that way (in a chunk) have a poster of their own
+        """
+        found = {}
+        for row in rows:
+            entry = found.setdefault(posting_key(row), [0, set()])
+            entry[0] += 1
+            entry[1].add(row.poster or '')
+
+        for how, (count, posters) in found.items():
+            if count >= RANDOM_POSTER_SAMPLE and len(posters) > count / 2:
+                self.random_posters.add(how)
+
+    def _window(self, windows, posted, gap):
         """
         Returns the collection (of the ones sharing a key) an article posted
         at `posted` belongs to; None if it is a new one (ie: a repost)
+
+        - gap: how far from a collection's posting times an article can be
+          and still be part of it (None never splits them)
 
         Each entry of `windows` holds a collection's id, state and when its
         first and last articles were posted.
@@ -1018,19 +1252,45 @@ class NNTPIndexer:
             # Nothing shares its key yet
             return None
 
-        if posted is None or self.repost_gap is None:
+        if posted is None or gap is None:
             # We can't (or shouldn't) tell them apart; use the newest
             return windows[-1]
 
         for window in windows:
             if window['first'] is None or (
-                    window['first'] - self.repost_gap <= posted <=
-                    window['last'] + self.repost_gap):
+                    window['first'] - gap <= posted <=
+                    window['last'] + gap):
                 # Posted around the same time
                 return window
 
         # Posted long before or after any of them
         return None
+
+    @staticmethod
+    def _estimate_files(session, collection_ids):
+        """
+        Works out how many files obfuscated posts (whose files can't be
+        told apart) have: every article of a file is the same size apart
+        from its last one, which is shorter, so each short article (well
+        under the post's biggest) ends a file.  Kept as the collection's
+        files_expected; it is only an estimate (shown as ~N).  Not
+        committed.
+        """
+        for collection_id in sorted(collection_ids):
+            articles = session.query(Segment.size)\
+                .join(CollectionFile, CollectionFile.id == Segment.file_id)\
+                .filter(CollectionFile.collection_id == collection_id)
+
+            biggest = articles.with_entities(func.max(Segment.size))\
+                .scalar() or 0
+            short = articles.filter(
+                Segment.size < biggest * SHORT_ARTICLE_SHARE)\
+                .with_entities(func.count()).scalar() or 0
+
+            session.query(Collection)\
+                .filter(Collection.id == collection_id)\
+                .update({Collection.files_expected: short},
+                        synchronize_session=False)
 
     def _recount(self, session, file_ids, collection_ids, dates=None):
         """
@@ -1119,8 +1379,8 @@ class NNTPIndexer:
         "A while" is measured by how far we have seen the groups it was
         found in (see GroupClock), not by the time now: a collection only
         settles once every one of its groups has been seen at least
-        `settle_hours` past its last article.  Collections are never marked
-        incomplete just because we haven't scanned in a while.
+        `settle_time` (seconds) past its last article.  Collections are
+        never marked incomplete just because we haven't scanned in a while.
 
         - now: count every group as seen up to this time (UTC) when its
           clock is behind it; use it to settle what is left of groups you
@@ -1155,6 +1415,9 @@ class NNTPIndexer:
             'forming': CollectionState.Forming,
             'scan': CollectionSource.Scan,
             'days': self.settle_after.total_seconds() / 86400.0,
+            # How many parts an obfuscated post has isn't known; it can only
+            # settle
+            'session': SESSION_KEY + '\n%',
         }
 
         params = []
@@ -1175,7 +1438,8 @@ class NNTPIndexer:
         session.execute(text(
             'UPDATE collection SET state = CASE '
             'WHEN segments >= segments_expected AND '
-            '  (files_expected = 0 OR files >= files_expected) '
+            '  (files_expected = 0 OR files >= files_expected) AND '
+            '  (segments_expected > 0 OR collection.key NOT LIKE :session) '
             '  THEN :complete '
             'WHEN state = :settled OR last_posted IS NULL THEN :settled '
             'WHEN ' + days('last_posted') + ' < ' + seen + ' - :days '
@@ -1285,7 +1549,7 @@ class NNTPIndexer:
     def find(self, keywords=(), groups=None, complete=None, forming=False,
              limit=None, case_sensitive=False, tags=None, without_tags=None,
              min_score=None, max_score=None, terms=None, scores=None,
-             after=None, before=None):
+             after=None, before=None, oldest=False, stream=False):
         """
         Returns collections (newest first) with every keyword in their name
         or the subject or name of one of their files (see
@@ -1310,6 +1574,9 @@ class NNTPIndexer:
         - scores: score comparisons (ie: '<34, >23') they must pass
         - after / before: only collections with something posted at or
           after / before this (a date or how long ago, ie: 90d)
+        - oldest: oldest first (instead of newest first)
+        - stream: return them as they are read (an iterator) instead of a
+          list
 
         Raises ValueError for a condition collections can't be searched
         by (ie: body).
@@ -1359,9 +1626,15 @@ class NNTPIndexer:
                 .filter(FileGroup.name.in_(list(groups)))))
 
         query = query.order_by(
-            Collection.first_posted.desc(), Collection.id.desc())
+            Collection.first_posted.asc(), Collection.id.asc()) if oldest \
+            else query.order_by(
+                Collection.first_posted.desc(), Collection.id.desc())
 
-        return query.limit(limit).all() if limit else query.all()
+        if limit:
+            query = query.limit(limit)
+
+        # Read a few at a time (there can be millions)
+        return query.yield_per(STREAM_SIZE) if stream else query.all()
 
     @staticmethod
     def summary(entry):
@@ -1372,11 +1645,22 @@ class NNTPIndexer:
         percent = 100.0 * entry.segments / entry.segments_expected \
             if entry.segments_expected else 100.0
 
+        if not entry.segments_expected and \
+                (entry.key or '').startswith(SESSION_KEY + '\n'):
+            # How much of an obfuscated post we have isn't known
+            percent = None
+
         files = '%d/%d' % (entry.files, entry.files_expected) \
             if entry.files_expected else '%d' % entry.files
 
-        line = '[%6d] %5.1f%% %10s %7s file(s)  %s' % (
-            entry.id, min(percent, 100.0), bytes_to_strsize(entry.size),
+        if percent is None and entry.files_expected:
+            # The files of an obfuscated post can't be told apart; how many
+            # there are is a guess
+            files = '~%d' % entry.files_expected
+
+        line = '[%6d] %6s %10s %7s file(s)  %s' % (
+            entry.id, '?' if percent is None else
+            '%.1f%%' % min(percent, 100.0), bytes_to_strsize(entry.size),
             files, entry.name)
 
         return line + rank_text(entry)
@@ -1671,6 +1955,134 @@ class NNTPIndexer:
             'DELETE FROM segment WHERE file_id IN (%s)' % files), values)
         session.execute(text(
             'DELETE FROM collection_file WHERE collection_id = :id'), values)
+
+    def forget_group(self, group):
+        """
+        Removes what was found in a group (as if it was never indexed):
+        - the scanned files only it had (and their articles), and the
+          collections that leaves empty (ones removed with nr delete stay
+          removed)
+        - the posts kept from it that no other group has
+        - their scores and tags, and how far the group was seen
+
+        Files other groups have too, and anything read from an NZB file,
+        are kept.  Returns (files, collections, posts) removed.
+        """
+        from .NNTPArticleRanks import NNTPArticleRanks
+        from .objects.index.ArchiveGroup import ArchiveGroup
+        from .objects.index.ArchivedPost import ArchivedPost
+        from .objects.index.NzbImport import NzbImport
+
+        session = self.session()
+        if session is None:
+            # Nothing was ever indexed
+            return 0, 0, 0
+
+        # The scanned files found in it
+        found = [file_id for file_id, in session.query(FileGroup.file_id)
+                 .join(CollectionFile, CollectionFile.id == FileGroup.file_id)
+                 .join(Collection,
+                       Collection.id == CollectionFile.collection_id)
+                 .filter(FileGroup.name == group)
+                 .filter(Collection.source == CollectionSource.Scan)]
+
+        for ids in chunked(found):
+            session.query(FileGroup)\
+                .filter(FileGroup.name == group)\
+                .filter(FileGroup.file_id.in_(ids))\
+                .delete(synchronize_session=False)
+
+        # The ones no other group has
+        kept = set()
+        for ids in chunked(found):
+            kept.update(file_id for file_id, in session.query(
+                FileGroup.file_id).filter(FileGroup.file_id.in_(ids)))
+        lost = [file_id for file_id in found if file_id not in kept]
+
+        collections = set()
+        gone = []
+        for ids in chunked(lost):
+            collections.update(c for c, in session.query(
+                CollectionFile.collection_id)
+                .filter(CollectionFile.id.in_(ids)))
+            gone.extend(m for m, in session.query(Segment.message_id)
+                        .filter(Segment.file_id.in_(ids)))
+            session.query(Segment)\
+                .filter(Segment.file_id.in_(ids))\
+                .delete(synchronize_session=False)
+            session.query(CollectionFile)\
+                .filter(CollectionFile.id.in_(ids))\
+                .delete(synchronize_session=False)
+
+        self._recount(session, (), collections)
+
+        # The collections nothing is left of (children first; the database
+        # servers enforce their links)
+        emptied = []
+        for ids in chunked(sorted(collections)):
+            emptied.extend(c for c, in session.query(Collection.id)
+                           .filter(Collection.id.in_(ids))
+                           .filter(Collection.files == 0)
+                           .filter(Collection.state !=
+                                   CollectionState.Deleted))
+
+        for ids in chunked(emptied):
+            session.query(CollectionMeta)\
+                .filter(CollectionMeta.collection_id.in_(ids))\
+                .delete(synchronize_session=False)
+            session.query(CollectionAlias)\
+                .filter(CollectionAlias.collection_id.in_(ids))\
+                .delete(synchronize_session=False)
+            session.query(Collection)\
+                .filter(Collection.id.in_(ids))\
+                .delete(synchronize_session=False)
+
+        # The posts kept from it (and nowhere else)
+        posts = [m for m, in session.query(ArchiveGroup.message_id)
+                 .filter(ArchiveGroup.name == group)]
+        session.query(ArchiveGroup)\
+            .filter(ArchiveGroup.name == group)\
+            .delete(synchronize_session=False)
+
+        others = set()
+        for ids in chunked(posts):
+            others.update(m for m, in session.query(ArchiveGroup.message_id)
+                          .filter(ArchiveGroup.message_id.in_(ids)))
+        posts = [m for m in posts if m not in others]
+
+        for ids in chunked(posts):
+            session.query(ArchiveFile)\
+                .filter(ArchiveFile.message_id.in_(ids))\
+                .delete(synchronize_session=False)
+            session.query(ArchivedPost)\
+                .filter(ArchivedPost.message_id.in_(ids))\
+                .delete(synchronize_session=False)
+
+        # Their scores and tags (unless they are still known elsewhere),
+        # and the NZB files read from them
+        still = set()
+        for ids in chunked(gone):
+            still.update(m for m, in session.query(ArchivedPost.message_id)
+                         .filter(ArchivedPost.message_id.in_(ids)))
+        for ids in chunked(posts):
+            still.update(m for m, in session.query(Segment.message_id)
+                         .filter(Segment.message_id.in_(ids)))
+
+        NNTPArticleRanks.forget(
+            session, [m for m in [*gone, *posts] if m not in still])
+        for ids in chunked(gone):
+            session.query(NzbImport)\
+                .filter(NzbImport.message_id.in_(ids))\
+                .delete(synchronize_session=False)
+
+        session.query(GroupClock)\
+            .filter(GroupClock.name == group)\
+            .delete(synchronize_session=False)
+        session.commit()
+
+        # Forget everything read before now; some of it no longer exists
+        session.expunge_all()
+        return len(lost), len(emptied), len(posts)
 
     def import_nzb(self, path, name=None, merge=False):
         """

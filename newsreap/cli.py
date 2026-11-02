@@ -60,24 +60,40 @@
 #   # alternatively, if you insist on using the default SQLite database, then
 #   # consider setting up a RAM drive for faster processing of the table
 #   # writes.
-#   nr -vvv update search --date-from=2014 test
+#   nr -vvv update test --date-from=2014
 #
 #   # Index a from/to range if you want.
-#   nr -vvv update search --date-from=2013 --date-to=2014.02 test
+#   nr -vvv update test --date-from=2013 --date-to=2014.02
 #
-#   # Or just the last 7 days, or just the newest 100000 articles
-#   nr update search --days=7 test
-#   nr update search --newest=100000 test
+#   # Or just the last 7 days, or just the newest 100000 articles (a big
+#   # group needs one of these the first time)
+#   nr update test --days=7
+#   nr update test --newest=100000
 #
-#   # Running it again only fetches what is new (or was missed); a run that
-#   # was stopped part way picks up where it left off.  Use --force to fetch
-#   # articles you already have again.
-#   nr update search test
+#   # Running it again carries on from where it left off (what is new,
+#   # and anything a stopped run missed).  A range overlapping what you
+#   # have only fetches the rest; --force fetches it again, and --reset
+#   # starts the group over.
+#   nr update test
+#   nr update test --reset --days=7
 #
-#   # Group the cached articles into files and collections (releases); only
-#   # articles not indexed before are looked at.  A collection can be
-#   # spread over many groups; they all go into one index.
+#   # The headers fetched are grouped into files and collections
+#   # (releases) right away, ready to search; a collection can be spread
+#   # over many groups (they all go into one index).  --no-index only
+#   # fetches them; 'nr update index' groups them later.
+#   nr update test --no-index
 #   nr update index test
+#
+#   # Also keep what the small articles say (--content), read the NZB
+#   # files posted (--nzb), or work the scores out again (--rescore); with
+#   # --cached no new headers are fetched
+#   nr update test --content --nzb
+#   nr update test --cached --nzb
+#   nr update test --rescore
+#
+#   # An overview of everything (setup, storage, groups, aliases, the
+#   # index); 'nr db status' shows just the groups
+#   nr status
 #
 #   # Collections only settle once their groups have been scanned past
 #   # them; --settle counts every group as seen up to now (ie: for groups
@@ -106,9 +122,14 @@
 #   # Keep the small articles of a group full of discussion so it can be
 #   # searched offline (files they hold are only noted, never kept), then
 #   # search their words and read one
-#   nr update archive test
+#   nr update test --content
 #   nr search --posts "some words"
-#   nr archive show "<message-id@example.com>"
+#   nr show "<message-id@example.com>"
+#
+#   # Everything known of an article (only the start of a big one is
+#   # fetched), and saving what articles hold
+#   nr show "<message-id@example.com>" other-id@example.com
+#   nr fetch "<message-id@example.com>" --output ~/Downloads
 #
 #   # Newsreap also maintains a watch list which is groups you just always
 #   # intend to index. It can be a conbination of aliases you set up, or
@@ -116,11 +137,8 @@
 #   # a watch list.
 #   nr group watch test
 #
-#   # We can now update our search by typing this following:
-#   nr -vvv update search --watched
-#
-#   # And then group what was found
-#   nr update index --watched
+#   # We can now fetch (and index) every watched group:
+#   nr -vvv update --watched
 #
 #   # Now that you've got content indexed, you can search it (across every
 #   # group).  Each keyword must be in a collection's name or one of its
@@ -192,6 +210,7 @@ from os.path import isdir
 from os.path import isfile
 
 # Path
+from newsreap.CliOptions import DefaultGroup
 from newsreap.NNTPSettings import CLI_PLUGINS_MAPPING
 
 # Import our file based paths
@@ -368,6 +387,7 @@ for k, v in plugins.items():
 
                 # Default Action Description
                 group_desc = None
+                group_default = None
 
                 if isinstance(_meta, str):
                     fn_prefix = _meta
@@ -383,6 +403,9 @@ for k, v in plugins.items():
 
                     # Get Description (if present)
                     group_desc = _meta.get('desc', None)
+
+                    # The command run when no other one is named (if any)
+                    group_default = _meta.get('default', None)
 
                 if not fn_prefix:
                     # Ignore entry
@@ -433,8 +456,11 @@ for k, v in plugins.items():
                         # the plugin modules we detect and load.
                         _click_group_func = \
                                 click.pass_context(_click_group_func)
-                        _click_group_func = \
-                                cli.group(name=sf)(_click_group_func)
+                        _click_group_func = cli.group(
+                            name=sf, **({
+                                'cls': DefaultGroup,
+                                'default': group_default,
+                            } if group_default else {}))(_click_group_func)
 
                         # Set the flag and fall through
                         command = False
@@ -450,8 +476,9 @@ for k, v in plugins.items():
                     # Flip the store flag
                     store = True
 
-            if store:
-                cli.add_command(_click_group_func)
+                # Each entry is a command (or group) of its own
+                if store:
+                    cli.add_command(_click_group_func)
 
 
 def main():

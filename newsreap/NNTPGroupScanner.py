@@ -38,6 +38,7 @@ from os.path import isfile
 from os.path import join
 from shutil import copyfile
 
+from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 
 from .NNTPArticleRanks import NNTPArticleRanks
@@ -57,6 +58,11 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 DEFAULT_BATCH_SIZE = 25000
 
 
+# A group fetched for the first time without saying how far back to go is
+# only fetched whole if it has no more articles than this
+DEFAULT_FIRST_FETCH = 100000
+
+
 class NNTPGroupScanner:
     """
     Caches the article headers of one group; see the module description
@@ -64,7 +70,8 @@ class NNTPGroupScanner:
 
     def __init__(self, manager, group, db_file, server,
                  batch_size=DEFAULT_BATCH_SIZE, window=None, ramdisk=None,
-                 filters=None, index_db=None):
+                 filters=None, index_db=None,
+                 first_fetch=DEFAULT_FIRST_FETCH):
         """
         Prepares a scanner
 
@@ -81,6 +88,9 @@ class NNTPGroupScanner:
           before they are saved (optional)
         - index_db: the index database the scores and tags filters give
           are kept in (see NNTPArticleRanks); needed for them to be kept
+        - first_fetch: the most articles a group can have to be fetched
+          whole the first time without saying how far back to go (see
+          plan()); 0 for any number
         """
         # What we're scanning and where it's kept
         self.manager = manager
@@ -106,6 +116,11 @@ class NNTPGroupScanner:
         self.ramdisk = ramdisk
         self.filters = filters or None
         self.index_db = index_db
+        self.first_fetch = max(0, int(first_fetch or 0))
+
+        # Set when the group was too big to fetch whole the first time (how
+        # many articles it has)
+        self.too_big = None
 
         # The index database (opened when first needed) and the ranks of
         # the batch being saved
@@ -167,6 +182,13 @@ class NNTPGroupScanner:
         - force: fetch again even what was fetched before
         - session: the group database (to skip what was already fetched)
 
+        With none of the dates or counts given, it carries on from where
+        we started fetching before: whatever is missing since then (ie: a
+        run stopped part way) and everything newer.  The first time, the
+        whole group is only fetched if it isn't too big (see first_fetch);
+        otherwise nothing is planned and `too_big` says how many articles
+        it has.
+
         Returns a list of (low, high) ranges (empty when there is nothing
         to do), or None if the server couldn't tell us what it has.
         """
@@ -174,6 +196,18 @@ class NNTPGroupScanner:
             return None
 
         low, high = self.low, self.high
+
+        self.too_big = None
+        if session is not None and not (newest or date_from or date_to):
+            first = self.first_fetched(session)
+            if first is not None:
+                low = max(low, first)
+
+            elif self.first_fetch and high - low + 1 > self.first_fetch:
+                # Fetching all of it could take days; we need to be told
+                # how far back to go
+                self.too_big = high - low + 1
+                return []
 
         if newest:
             # Only the newest articles
@@ -203,6 +237,14 @@ class NNTPGroupScanner:
             return [(low, high)]
 
         return self.missing(self.scanned(session, low, high), low, high)
+
+    def first_fetched(self, session):
+        """
+        Returns the first article number ever fetched from our server (None
+        if nothing was)
+        """
+        return session.query(func.min(ScannedRange.low))\
+            .filter(ScannedRange.server == self.server).scalar()
 
     def scanned(self, session, low, high):
         """
@@ -298,6 +340,10 @@ class NNTPGroupScanner:
                 return False
 
             if not ranges:
+                if self.too_big:
+                    # We were not told how far back to go
+                    return False
+
                 # Nothing to do
                 self._caught_up(db, session)
                 return True
@@ -519,6 +565,11 @@ class NNTPGroupScanner:
         """
         if self.low is None:
             return '%s: could not be accessed' % self.group
+
+        if self.too_big:
+            return "%s: %s articles; say how far back to start the first " \
+                "time (ie: --newest 200000 or --days 7)" % (
+                    self.group, '{:,}'.format(self.too_big))
 
         if not self.wanted:
             return '%s: already up to date' % self.group

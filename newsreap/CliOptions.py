@@ -159,3 +159,36 @@ def matching(command):
             metavar='PATTERN', help=text)(wrapper)
 
     return wrapper
+
+
+class DefaultGroup(click.Group):
+    """
+    A group of commands that runs one of them (the default) when what
+    follows isn't the name of another; ie: 'nr update a.b.test' runs
+    'nr update run a.b.test' while 'nr update groups' still works
+
+    Its help is the default command's, followed by the other commands.
+    """
+
+    def __init__(self, *args, default=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.default = default
+
+    def parse_args(self, ctx, args):
+        if args and self.default in self.commands and \
+                args[0] not in self.commands and \
+                args[0] not in ctx.help_option_names:
+            args = [self.default, *args]
+
+        return super().parse_args(ctx, args)
+
+    def format_help(self, ctx, formatter):
+        command = self.commands.get(self.default)
+        if command is None:
+            return super().format_help(ctx, formatter)
+
+        # Shown as if it were the group itself
+        sub = click.Context(
+            command, info_name=ctx.info_name, parent=ctx.parent)
+        command.format_help(sub, formatter)
+        self.format_commands(ctx, formatter)

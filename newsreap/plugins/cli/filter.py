@@ -533,6 +533,11 @@ def filter_remove(ctx, names):
     try:
         filters.save(ctx['NNTPSettings'].filters_file())
 
+    except ValueError as e:
+        # Rules were left out when it was read; they would be lost
+        logger.error(str(e))
+        exit(1)
+
     except OSError as e:
         logger.error('Could not save the filters file: %s' % e)
         exit(1)

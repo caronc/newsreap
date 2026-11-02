@@ -418,10 +418,39 @@ def test_ramdisk_copy_is_moved_back(usenet, tmp_path):
     assert list(ramdisk.iterdir()) == []
     assert cached(settings)[1] == [(251, 300)]
 
-    # A second run starts from what was saved
+    # A second run starts from what was saved (and carries on from it;
+    # going further back has to be asked for)
     assert scanner.scan() is True
+    assert cached(settings)[1] == [(251, 300)]
+    assert scanner.scan(newest=300) is True
     assert cached(settings)[1] == [(1, 300)]
     assert list(ramdisk.iterdir()) == []
+
+
+def test_a_first_fetch_of_a_big_group_needs_a_start(usenet):
+    """
+    The first time, a group with more articles than first_fetch has to be
+    told how far back to go; afterwards a run carries on from there (what
+    is new, and anything missed)
+    """
+    _, settings, manager = usenet
+    scanner = scanner_for(settings, manager)
+    scanner.first_fetch = 100
+
+    assert scanner.scan() is False
+    assert scanner.too_big == 300
+    assert str(scanner) == (
+        'alt.binaries.test: 300 articles; say how far back to start the '
+        'first time (ie: --newest 200000 or --days 7)')
+    assert cached(settings)[1] == []
+
+    assert scanner.scan(newest=20) is True
+    assert scanner.too_big is None
+    assert cached(settings)[1] == [(281, 300)]
+
+    # Nothing new since
+    assert scanner.scan() is True
+    assert str(scanner) == 'alt.binaries.test: already up to date'
 
 
 def test_unknown_group(usenet):

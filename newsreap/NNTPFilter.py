@@ -320,12 +320,16 @@ class NNTPFilter(NNTPFilterBase):
         - rules: rules (NNTPFilterRule or their YAML form) to start with
         - now: what relative times (ie: 90d) count back from (UTC)
 
-        Raises ValueError (saying where) for a rule that doesn't make sense.
+        Raises ValueError (saying why) if the filters file can't be read;
+        a rule in it that doesn't make sense is left out (see problems).
         """
         super().__init__()
 
         # Our rules (by name, in the order they are listed)
         self._rules = {}
+
+        # Why each rule of the filters file that was left out was
+        self.problems = []
 
         # The filters file we came from (if any)
         self.path = abspath(expanduser(path)) if path else None
@@ -344,8 +348,9 @@ class NNTPFilter(NNTPFilterBase):
         """
         Loads the rules of a filters file
 
-        Raises ValueError (saying which rule, and why) if any of them
-        doesn't make sense; nothing is loaded then.
+        A rule that doesn't make sense is left out (saying which one, and
+        why; see problems) and the rest are loaded.  Raises ValueError if
+        the file itself can't be read.
         """
         try:
             with open(path, encoding='utf-8') as fp:
@@ -381,26 +386,35 @@ class NNTPFilter(NNTPFilterBase):
                 "The filters file %s must list its rules under '%s:'" % (
                     path, FILTERS_KEY))
 
-        # Read every rule before keeping any of them
         rules = {}
+        problems = []
         for no, entry in enumerate(entries, start=1):
             try:
                 rule = NNTPFilterRule.from_dict(entry, now=self.now)
 
             except (ValueError, TypeError) as e:
                 name = entry.get('name') if isinstance(entry, dict) else None
-                raise ValueError('%s: rule #%d%s: %s' % (
-                    path, no, ' (%s)' % name if name else '', e)) from None
+                problems.append('%s: rule #%d%s: %s' % (
+                    path, no, ' (%s)' % name if name else '', e))
+                continue
 
             if rule.name in rules or (not reset and rule.name in self._rules):
-                raise ValueError(
+                problems.append(
                     "%s: rule #%d: the name '%s' is used more than once" % (
                         path, no, rule.name))
+                continue
 
             rules[rule.name] = rule
 
+        for problem in problems:
+            # Said loudly; the other rules are still used
+            logger.error('%s (the rule was left out)' % problem)
+
         if reset:
             self._rules = {}
+            self.problems = []
+
+        self.problems.extend(problems)
 
         self._rules.update(rules)
         self._plans = {}
@@ -544,7 +558,16 @@ class NNTPFilter(NNTPFilterBase):
     def save(self, path=None):
         """
         Writes every rule to the filters file (replacing what it held)
+
+        Raises ValueError if rules were left out when it was read (they
+        would be lost); they have to be fixed first.
         """
+        if self.problems:
+            raise ValueError(
+                '%d rule(s) of %s were left out (%s); fix them first, as '
+                'writing the file again would lose them' % (
+                    len(self.problems), self.path, '; '.join(self.problems)))
+
         path = abspath(expanduser(path or self.path))
         temporary = path + '.tmp'
 

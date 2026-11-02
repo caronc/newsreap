@@ -683,7 +683,7 @@ def test_filters_from_the_command_line(tmp_path):
         result = nr('search', '--tag', 'recovery')
         assert result.exit_code == 0, result.output
         assert '{+10 recovery}' in result.output
-        assert nr('search', '--tag', 'nope').output == ''
+        assert nr('search', '--tag', 'nope').output == 'Nothing found.\n'
 
         # Tags and scores narrow down every kind of search (any of the
         # tags given more than once; all of the ones in 'a, b')
@@ -811,18 +811,19 @@ def test_filters_from_the_command_line(tmp_path):
         assert len(NNTPFilter(str(filters_file))) == 1
 
 
-def test_broken_filters_stop_commands_before_they_start(tmp_path):
+def test_broken_rules_are_left_out_and_broken_files_stop(tmp_path):
     """
-    A filters file with a mistake stops nr update (saying where) before
+    A rule with a mistake is left out (saying where) and the rest are used;
+    a filters file that can't be read at all stops nr update before
     anything is fetched
     """
     from newsreap.cli import cli
 
     with FakeNNTPServer() as server:
         server.add_overview(GROUP, 1, 'Hello', POSTER, POSTED, 'a@x')
+        server.add_overview(GROUP, 2, 'Spam', POSTER, POSTED, 'b@x')
         config = config_for(server, tmp_path / 'config.yaml')
-        (tmp_path / 'filters.yaml').write_text(
-            'filters:\n  - name: bad\n    subject: {regex: "("}\n')
+        filters = tmp_path / 'filters.yaml'
 
         runner = CliRunner()
 
@@ -832,7 +833,9 @@ def test_broken_filters_stop_commands_before_they_start(tmp_path):
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
 
-        for command in (('update', 'search', GROUP),
+        filters.write_text(
+            'filters:\n  - name: x\n    subject: [unclosed\n')
+        for command in (('update', GROUP),
                         ('update', 'index', GROUP),
                         ('update', 'archive', GROUP),
                         ('filter', 'purge'),
@@ -841,6 +844,17 @@ def test_broken_filters_stop_commands_before_they_start(tmp_path):
             assert result.exit_code == 1, command
 
         assert not [c for c in server.commands() if c.startswith('XOVER')]
+
+        filters.write_text(
+            'filters:\n  - name: bad\n    subject: {regex: "("}\n'
+            '  - name: spam\n    subject: Spam\n')
+        result = nr('update', GROUP)
+        assert result.exit_code == 0, result.output
+        assert '1 dropped by filters' in result.output
+
+        # It can't be written over (the rule would be lost)
+        assert nr('filter', 'remove', 'spam').exit_code == 1
+        assert 'name: bad' in filters.read_text()
 
 
 def test_the_filters_file_can_be_moved(tmp_path):

@@ -16,6 +16,8 @@ import logging
 import click
 import sys
 
+from os import listdir
+from os.path import isdir
 from os.path import isfile
 from os.path import dirname
 from os.path import abspath
@@ -28,8 +30,10 @@ except ImportError:
     from newsreap.Logging import NEWSREAP_CLI
 
 from newsreap.objects.group.Article import Article
+from newsreap.objects.index.Collection import Collection
 from newsreap.objects.nntp.Common import get_groups
 
+from itertools import chain
 from itertools import islice
 from types import SimpleNamespace
 
@@ -69,6 +73,22 @@ NEWSREAP_CLI_PLUGINS = {
 }
 
 
+def page(lines):
+    """
+    Shows lines of results a screen at a time (as 'less' does) when they
+    go to a terminal, or all of them when they don't (ie: into a file);
+    returns False if there were none
+    """
+    lines = iter(lines)
+    first = next(lines, None)
+    if first is None:
+        return False
+
+    click.echo_via_pager(
+        '%s\n' % line for line in chain([first], lines))
+    return True
+
+
 def lookup_groups(ctx, groups):
     """
     Returns the names of the groups the aliases or group names given refer
@@ -91,10 +111,10 @@ def lookup_groups(ctx, groups):
     return names
 
 
-def search_raw(ctx, groups, keywords, rank, terms, case_sensitive):
+def raw_lines(ctx, groups, keywords, rank, terms, case_sensitive):
     """
-    Searches the article headers 'nr update search' cached (the ones not
-    indexed yet, or not let go of yet)
+    Searches the article headers 'nr update' cached (the ones not indexed
+    yet, or not let go of yet); yields the lines found
     """
     # Where the articles' scores and tags are (if anything was ever indexed)
     index = None
@@ -104,6 +124,21 @@ def search_raw(ctx, groups, keywords, rank, terms, case_sensitive):
         index = NNTPIndexDatabase.from_engine(index_db)
         index_session = index.session()
 
+    try:
+        yield from raw_group_lines(
+            ctx, groups, keywords, rank, terms, case_sensitive,
+            index_session)
+
+    finally:
+        if index is not None:
+            index.close()
+
+
+def raw_group_lines(ctx, groups, keywords, rank, terms, case_sensitive,
+                    index_session):
+    """
+    Yields the cached headers of each group that match (see raw_lines())
+    """
     for name in groups:
         db_file = ctx['NNTPSettings'].group_database(name)
         if not isfile(db_file):
@@ -147,7 +182,8 @@ def search_raw(ctx, groups, keywords, rank, terms, case_sensitive):
             after=rank.get('after'), before=rank.get('before'))\
             .order_by(Article.article_no)
 
-        click.echo('%s:' % name)
+        # The group's name before the first one found
+        heading = '%s:' % name
         entries = iter(query.yield_per(RAW_PAGE_SIZE))
         while True:
             page = list(islice(entries, RAW_PAGE_SIZE))
@@ -168,34 +204,39 @@ def search_raw(ctx, groups, keywords, rank, terms, case_sensitive):
                         scores=rank.get('scores')):
                     continue
 
-                click.echo('  [%.5d] %s%s' % (
+                if heading:
+                    yield heading
+                    heading = None
+
+                yield '  [%.5d] %s%s' % (
                     entry.article_no, entry.subject, rank_text(
                         SimpleNamespace(
-                            score=score, tags=tags_to_text(tags)))))
+                            score=score, tags=tags_to_text(tags))))
 
         session.close()
         db.close()
 
-    if index is not None:
-        index.close()
 
-
-def search_posts(ctx, keywords, groups, limit, rank, terms,
-                 case_sensitive):
+def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
+               oldest=False, notes=None):
     """
-    Searches the articles 'nr update archive' kept
+    Searches the articles 'nr update --content' kept; yields the lines
+    found (what to say if there is nothing to search is added to notes)
     """
     archiver = NNTPArchiver(
         ctx['NNTPSettings'].index_database(), default_hooks=False)
     try:
         if archiver.session() is None:
-            click.echo(
-                "Nothing archived yet; run 'nr update archive' first.")
+            if notes is not None:
+                notes.append(
+                    "Nothing archived yet; run 'nr update <group> "
+                    "--content' first.")
             return
 
         found = archiver.find(
             keywords, groups=groups, limit=limit,
-            case_sensitive=case_sensitive, terms=terms, **rank)
+            case_sensitive=case_sensitive, terms=terms, oldest=oldest,
+            **rank)
 
         # Their scores and tags (kept with every article's)
         ranks = NNTPArticleRanks.load(
@@ -203,16 +244,16 @@ def search_posts(ctx, keywords, groups, limit, rank, terms,
 
         for post in found:
             score, tags = ranks.get(post.message_id, (0, frozenset()))
-            click.echo('%s  %-24.24s  %s%s' % (
+            yield '%s  %-24.24s  %s%s' % (
                 post.posted.strftime('%Y-%m-%d %H:%M') if post.posted
                 else '????-??-?? ??:??', post.poster, post.subject,
                 rank_text(SimpleNamespace(
-                    score=score, tags=tags_to_text(tags)))))
-            click.echo('    <%s>' % post.message_id)
+                    score=score, tags=tags_to_text(tags))))
+            yield '    <%s>' % post.message_id
 
             snippet = archiver.snippet(post, keywords, terms)
             if snippet:
-                click.echo('    %s' % snippet)
+                yield '    %s' % snippet
 
     finally:
         archiver.close()
@@ -234,22 +275,31 @@ def search_posts(ctx, keywords, groups, limit, rank, terms,
               help='Include collections whose articles are still arriving.')
 @click.option('--limit', '-l', type=click.IntRange(min=1),
               help='Show at most this many.')
+@click.option('--oldest-first', '-O', 'oldest', is_flag=True,
+              help='Oldest first (instead of newest first).')
+@click.option('--collections', is_flag=True,
+              help='Search the collections (what is searched unless --posts '
+                   'or --raw is given; add it to search them too).')
 @click.option('--posts', is_flag=True,
-              help="Search the articles 'nr update archive' kept (their "
-                   "subjects, text and file names) instead.")
+              help="Search the articles 'nr update --content' kept (their "
+                   "subjects, text and file names).")
 @click.option('--raw', is_flag=True,
               help='Search the cached article headers of the groups given '
-                   'instead (ie: what is not indexed yet).')
+                   '(ie: what is not indexed yet).')
 @ranked
 @matching
 @click.pass_obj
 def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
-           posts, raw, rank, terms):
+           oldest, collections, posts, raw, rank, terms):
     """
     Search everything indexed (across every group).
 
     Each keyword must be in a collection's name or one of its file subjects
-    (newest first).  Case and accents don't matter unless --case-sensitive
+    (newest first, or oldest first with --oldest-first); with none,
+    everything is listed.  On a terminal they are shown a screen at a time
+    (as 'less' does); piped or saved to a file, all of them are written
+    out.  Collections whose articles are still arriving are only shown
+    with --forming.  Case and accents don't matter unless --case-sensitive
     is given; Usenet subjects are rarely written the same way twice.
 
     Keywords can start with:
@@ -281,54 +331,125 @@ def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
     body too; cached headers (--raw) only a subject, poster and
     Message-ID.  Give Message-IDs without their < and >.
 
-    With --posts, the articles 'nr update archive' kept are searched by
+    With --posts, the articles 'nr update --content' kept are searched by
     their words instead ('holid' finds 'holiday'); read one with
-    'nr archive show <message-id>'.
+    'nr show <message-id>'.  --collections, --posts and --raw can be
+    combined; each one found is shown under its own heading.
 
     """
-    if posts and raw:
-        logger.error('Only one of --posts and --raw can be used.')
-        exit(1)
+    # What is searched (collections unless told otherwise)
+    kinds = [kind for kind, wanted in (
+        ('collections', collections), ('posts', posts), ('raw', raw))
+        if wanted] or ['collections']
 
     # What each kind of search can look at
-    fields = POST_FIELDS if posts else RAW_FIELDS if raw \
-        else COLLECTION_FIELDS
-    for term in terms:
-        if term.field not in fields:
-            logger.error('--%s only works with --posts.' % term.option)
-            exit(1)
+    for kind in kinds:
+        fields = {'collections': COLLECTION_FIELDS, 'posts': POST_FIELDS,
+                  'raw': RAW_FIELDS}[kind]
+        for term in terms:
+            if term.field not in fields:
+                logger.error("--%s can't be used to search %s%s." % (
+                    term.option, 'cached headers' if kind == 'raw' else kind,
+                    ' (only --posts)' if term.field == 'body' else ''))
+                exit(1)
 
-    if posts:
-        search_posts(
-            ctx, keywords, set(lookup_groups(ctx, groups)) if groups
-            else None, limit, rank, terms, not ignore_case)
-        return
-
-    if raw:
-        if not groups:
-            logger.error('Searching with --raw needs a --group.')
-            exit(1)
-
-        search_raw(
-            ctx, lookup_groups(ctx, groups), keywords, rank, terms,
-            not ignore_case)
-        return
+    if 'raw' in kinds and not groups:
+        logger.error('Searching with --raw needs a --group.')
+        exit(1)
 
     # The groups we're narrowing it down to (if any)
-    names = set(lookup_groups(ctx, groups)) if groups else None
+    names = lookup_groups(ctx, groups) if groups else None
 
-    indexer = NNTPIndexer(ctx['NNTPSettings'].index_database())
-    try:
+    # What to say if nothing is found
+    notes = []
+    sections = []
+    indexer = None
+    options = None
+
+    if 'collections' in kinds:
+        indexer = NNTPIndexer(ctx['NNTPSettings'].index_database())
         if indexer.session() is None:
-            click.echo(
-                "Nothing indexed yet; run 'nr update index' first.")
-            return
+            notes.append(nothing_indexed(ctx))
 
-        for entry in indexer.find(
-                keywords, groups=names, complete=complete, forming=forming,
-                limit=limit, case_sensitive=not ignore_case, terms=terms,
-                **rank):
-            click.echo(indexer.summary(entry))
+        else:
+            options = dict(
+                keywords=keywords, groups=set(names) if names else None,
+                complete=complete, limit=limit,
+                case_sensitive=not ignore_case, terms=terms, **rank)
+            sections.append(('Collections', (
+                indexer.summary(entry) for entry in indexer.find(
+                    forming=forming, oldest=oldest, stream=True,
+                    **options))))
+
+    if 'posts' in kinds:
+        sections.append(('Posts', post_lines(
+            ctx, keywords, set(names) if names else None, limit, rank,
+            terms, not ignore_case, oldest=oldest, notes=notes)))
+
+    if 'raw' in kinds:
+        sections.append(('Cached headers', raw_lines(
+            ctx, names, keywords, rank, terms, not ignore_case)))
+
+    def lines():
+        for title, found in sections:
+            first = next(found, None)
+            if first is None:
+                continue
+
+            if len(kinds) > 1:
+                # Each kind under its own heading
+                yield '%s:' % title
+
+            yield first
+            yield from found
+
+    try:
+        if not page(lines()):
+            click.echo('Nothing found.')
+            for note in notes:
+                click.echo(note)
+
+            if options is not None:
+                for hint in search_hints(
+                        ctx, indexer, keywords, forming, options):
+                    click.echo(hint)
 
     finally:
-        indexer.close()
+        if indexer is not None:
+            indexer.close()
+
+
+def nothing_indexed(ctx):
+    """
+    Returns what to say when nothing is indexed yet
+    """
+    cache_dir = dirname(ctx['NNTPSettings'].group_database('_'))
+    if isdir(cache_dir) and listdir(cache_dir):
+        return "Nothing indexed yet; run 'nr update index' first."
+
+    return "Nothing fetched yet; run 'nr update <group> --newest 100000' " \
+        "first (see 'nr group list' for the groups)."
+
+
+def search_hints(ctx, indexer, keywords, forming, options):
+    """
+    Returns why a search may have found nothing (and what to try instead)
+    """
+    if not indexer.session().query(Collection.id).first():
+        yield nothing_indexed(ctx)
+        return
+
+    session = ctx['NNTPSettings'].session()
+    for keyword in keywords:
+        # A group given where the keywords go
+        if '.' in keyword and session and \
+                get_groups(session=session, lookup=keyword):
+            yield "'%s' is a group; to look in it: nr search -g %s" % (
+                keyword, keyword)
+
+    if not forming:
+        # Collections whose articles are still arriving are left out
+        count = len(indexer.find(forming=True, **options))
+        if count:
+            yield '%d collection(s) still forming match; add --forming ' \
+                'to see them.' % count

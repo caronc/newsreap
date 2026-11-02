@@ -24,8 +24,10 @@ import click
 import sys
 
 from os import access
+from os import unlink
 from os import W_OK
 from os.path import isdir
+from os.path import isfile
 from os.path import dirname
 from os.path import abspath
 from datetime import datetime
@@ -52,7 +54,10 @@ from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPGroupScanner import NNTPGroupScanner
 from newsreap.NNTPGroupScanner import DEFAULT_BATCH_SIZE
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
+from newsreap.NNTPArchiver import DEFAULT_ARCHIVE_MAX_SIZE
 from newsreap.NNTPArchiver import NNTPArchiver
+from newsreap.NNTPPurger import NNTPPurger
+from newsreap.NNTPNzbReader import NNTPNzbReader
 from newsreap.NNTPFilterRule import parse_time
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.Utils import utcnow
@@ -65,7 +70,9 @@ NEWSREAP_CLI_PLUGINS = {
     # cli short hand group: function prefix
     'update': {
         'prefix': 'update',
-        'desc': 'Cache/Index to Database management',
+        'desc': 'Fetch what is new in groups, ready to search',
+        # 'nr update a.b.test' is 'nr update run a.b.test'
+        'default': 'run',
     },
 }
 
@@ -221,54 +228,84 @@ def update_groups(ctx):
         exit(1)
 
 
-@click.command(name='search')
-@click.argument('groups', nargs=-1)
-@click.option('--date-from', '-f',
-              help='Only articles posted on or after this date (ie: '
-                   '2024, 2024-02-01, or how long ago: 90d).')
-@click.option('--date-to', '-t',
-              help='Only articles posted on or before this date (the same '
-                   'as --date-from).')
-@click.option('--days', '-d', type=click.IntRange(min=1),
-              help='Only articles posted in the last X days.')
-@click.option('--newest', '-n', type=click.IntRange(min=1),
-              help='Only the newest X articles.')
-@click.option('--batch-size', '-b', type=click.IntRange(min=1),
-              help='Article headers fetched per request '
-                   '(default: header_batch_size from the configuration).')
-@click.option('--batches', '-c', type=click.IntRange(min=1),
-              help='Only process this many batches (per group).')
-@click.option('--force', is_flag=True,
-              help='Fetch articles again even if they were fetched before.')
-@click.option('--watched', '-w', is_flag=True, help='All watched groups.')
-@click.pass_obj
-def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
-                  batches, force, watched):
+# Options shared by the commands that fetch headers
+HEADER_OPTIONS = (
+    click.option('--date-from', '-f',
+                 help='Only articles posted on or after this date (ie: '
+                      '2024, 2024-02-01, or how long ago: 90d).'),
+    click.option('--date-to', '-t',
+                 help='Only articles posted on or before this date (the '
+                      'same as --date-from).'),
+    click.option('--days', '-d', type=click.IntRange(min=1),
+                 help='Only articles posted in the last X days.'),
+    click.option('--newest', '-n', type=click.IntRange(min=1),
+                 help='Only the newest X articles.'),
+    click.option('--batch-size', '-b', type=click.IntRange(min=1),
+                 help='Article headers fetched per request (default: '
+                      'header_batch_size from the configuration).'),
+    click.option('--batches', '-c', type=click.IntRange(min=1),
+                 help='Only process this many batches (per group).'),
+)
+
+# Options shared by the commands that keep the content of articles
+CONTENT_OPTIONS = (
+    click.option('--max-size', '-m', default=None, type=str,
+                 help='The biggest article (or NZB file) fetched (ie: '
+                      '64KB); defaults to the archive_max_size setting.'),
+    click.option('--hooks', '-k', default=None, type=str,
+                 help='More archive hooks to use (see '
+                      'newsreap/hooks/archive/).'),
+    click.option('--no-default-hooks', is_flag=True,
+                 help="Don't use the built in archive hooks."),
+)
+
+
+def options(*decorators):
     """
-    Cache the article headers of groups for searching.
-
-    Articles are cached into their own database (one per group) due to the
-    sheer size of the content within each group.
-
-    Only what hasn't been fetched before is fetched, so running this again
-    picks up new articles (and anything a previous run missed or didn't get
-    to).  Narrow down what is fetched with the date and count options.
-
+    Applies a list of click options to a command
     """
-    # Use our Database first if it exists
+    def wrapper(command):
+        for decorator in reversed(decorators):
+            command = decorator(command)
+        return command
+    return wrapper
+
+
+def prepare(ctx, groups, watched):
+    """
+    Returns (session, groups): our database session and the groups asked
+    for (name -> id); exits if there are none
+    """
     session = ctx['NNTPSettings'].session()
     if not session:
         logger.error('Could not acquire a database connection.')
         exit(1)
 
-    if not ctx['NNTPSettings'].nntp_servers:
-        logger.error("There are no servers defined.")
+    # Every one given has to be a group (or alias) we know of
+    unknown = [name for name in groups
+               if not get_groups(session=session, lookup=name)]
+    if unknown:
+        for name in unknown:
+            logger.error(
+                "There is no group (or alias) named '%s'; see 'nr group "
+                "list' (or fetch the list with 'nr update groups')." % name)
         exit(1)
 
-    # What we drop (and how we score and tag the rest)
-    filters = load_filters(ctx['NNTPSettings'])
+    groups = get_groups(session=session, lookup=groups, watched=watched)
+    if not groups:
+        logger.error(
+            "No groups were given; name them (see 'nr group list'), or use "
+            "--watched for the watched ones.")
+        exit(1)
 
-    # Prepare our dates
+    return session, groups
+
+
+def header_dates(date_from, date_to, days):
+    """
+    Returns the (from, to) posting dates headers are fetched for; exits if
+    they don't make sense
+    """
     if date_from is not None:
         date_from = parse_date(date_from, 'from')
 
@@ -287,6 +324,23 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
         )
         exit(1)
 
+    return date_from, date_to
+
+
+def fetch_headers(ctx, session, groups, date_from=None, date_to=None,
+                  newest=None, batch_size=None, batches=None, force=False):
+    """
+    Fetches (and caches) the headers of the groups given (name -> id);
+    filters drop, score and tag them as they arrive.  Returns False if not
+    everything could be fetched
+    """
+    if not ctx['NNTPSettings'].nntp_servers:
+        logger.error("There are no servers defined.")
+        exit(1)
+
+    # What we drop (and how we score and tag the rest)
+    filters = load_filters(ctx['NNTPSettings'])
+
     # Articles are always fetched from our primary server
     s = ctx['NNTPSettings'].nntp_servers[0]
     server = lookup_server(session, s['host'])
@@ -294,11 +348,6 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
         logger.error(
             "The NNTP Server '%s' isn't in the database yet; run "
             "'nr db init' to add it." % s['host'])
-        exit(1)
-
-    groups = get_groups(session=session, lookup=groups, watched=watched)
-    if not groups:
-        logger.error("There were not groups identified for indexing.")
         exit(1)
 
     # Get our RamDisk if we got one
@@ -316,8 +365,10 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
         batch_size = ctx['NNTPSettings'].nntp_processing.get(
             'header_batch_size', DEFAULT_BATCH_SIZE)
 
-    # Track whether every group was fully fetched
+    # Track whether every group was fully fetched, and the ones too big to
+    # fetch whole the first time
     complete = True
+    too_big = []
 
     for name, group_id in groups.items():
         scanner = NNTPGroupScanner(
@@ -333,8 +384,12 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
         try:
             if not scanner.scan(
                     date_from=date_from, date_to=date_to, newest=newest,
-                    force=force, limit=batches):
+                    force=force, limit=batches) and not scanner.too_big:
                 complete = False
+
+            if scanner.too_big:
+                # It says why; running it again won't help
+                too_big.append(name)
 
         finally:
             # Even when stopped early, track what we know about the group
@@ -342,6 +397,194 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
                 track(session, group_id, server.id, scanner)
 
             click.echo(str(scanner))
+
+    if too_big:
+        exit(1)
+
+    return complete
+
+
+def reset_groups(ctx, session, groups):
+    """
+    Removes everything kept of the groups given (name -> id): their cached
+    headers, how far they were fetched, and what was indexed and kept from
+    them (see NNTPIndexer.forget_group())
+    """
+    settings = ctx['NNTPSettings']
+    indexer = NNTPIndexer(settings.index_database())
+    try:
+        for name, group_id in groups.items():
+            path = settings.group_database(name)
+            for found in (path, path + '-journal', path + '-wal',
+                          path + '-shm'):
+                if isfile(found):
+                    unlink(found)
+
+            session.query(GroupTrack)\
+                .filter(GroupTrack.group_id == group_id)\
+                .delete(synchronize_session=False)
+            session.commit()
+
+            files, collections, posts = indexer.forget_group(name)
+            click.echo(
+                '%s: reset (%d file(s), %d collection(s) and %d post(s) '
+                'removed)' % (name, files, collections, posts))
+
+    finally:
+        indexer.close()
+
+
+@click.command(name='run', hidden=True)
+@click.argument('groups', nargs=-1)
+@click.option('--watched', '-w', is_flag=True, help='All watched groups.')
+@options(*HEADER_OPTIONS)
+@click.option('--content', is_flag=True,
+              help='Also keep what the small articles say (see --max-size) '
+                   "so 'nr search --posts' can search their text.")
+@click.option('--nzb', is_flag=True,
+              help='Also read the NZB files posted (no bigger than '
+                   '--max-size) into the index.')
+@click.option('--rescore', is_flag=True,
+              help="Work every score and tag out again from the saved rules "
+                   "(ie: after changing filters.yaml); no new headers are "
+                   "fetched.")
+@click.option('--cached', is_flag=True,
+              help='Fetch no new headers; work with the ones already '
+                   'cached (ie: --nzb or --content on what you have).')
+@click.option('--reset', is_flag=True,
+              help='Remove everything kept of the groups first (their '
+                   'headers, and what was indexed and kept from them), '
+                   'then fetch them as if for the first time.')
+@options(*CONTENT_OPTIONS)
+@click.option('--force', is_flag=True,
+              help='Do it again even if it was done before (fetch the '
+                   'headers asked for again, ask again for articles no '
+                   'server had, read NZB files again).')
+@click.option('--no-index', is_flag=True,
+              help="Only cache the headers; group them into collections "
+                   "later with 'nr update index'.")
+@click.option('--settle', is_flag=True,
+              help='Count every group as seen up to now, so collections '
+                   'from groups you no longer scan can settle too.')
+@click.pass_obj
+def update_run(ctx, groups, watched, date_from, date_to, days, newest,
+               batch_size, batches, content, nzb, rescore, cached, reset,
+               max_size, hooks, no_default_hooks, force, no_index, settle):
+    """
+    Fetch what is new in groups, ready to search.
+
+    Each step only does what wasn't done before, using what is already
+    kept and fetching only what is missing:
+
+    \b
+      1. the article headers are fetched (and cached, one database per
+         group); filters drop, score and tag them as they arrive
+      2. they are grouped into files and collections (unless --no-index)
+      3. --content: the small articles are fetched and what they say is
+         kept, so their text can be searched (nr search --posts)
+      4. --nzb: the NZB files posted are read into the index
+      5. --rescore: every score and tag is worked out again
+
+    Without dates or counts, a group fetched before carries on from where
+    it left off (anything missed, and everything new).  The first time, a
+    big group needs to be told how far back to go (--newest, --days or
+    --date-from).  A range overlapping what was fetched only fetches the
+    rest, unless --force is given; --reset starts the group over.  With
+    --cached or --rescore no new headers are fetched.
+
+    The switches can be combined:
+
+    \b
+        nr update a.b.test --newest 200000
+        nr update a.b.test
+        nr update a.b.test --cached --nzb --content
+        nr update --watched --rescore
+        nr update a.b.test --reset --days 7
+
+    """
+    session, groups = prepare(ctx, groups, watched)
+
+    # No new headers are fetched
+    offline = rescore or cached
+    if offline and (date_from or date_to or days or newest or batches or
+                    reset):
+        logger.error(
+            '--%s fetches no new headers; leave out the date and count '
+            'options (and --reset).' % ('rescore' if rescore else 'cached'))
+        exit(1)
+
+    if reset:
+        reset_groups(ctx, session, groups)
+
+    # Track whether every step could be done
+    complete = True
+
+    if not offline:
+        date_from, date_to = header_dates(date_from, date_to, days)
+        complete = fetch_headers(
+            ctx, session, groups, date_from=date_from, date_to=date_to,
+            newest=newest, batch_size=batch_size, batches=batches,
+            force=force)
+
+    if not no_index or settle:
+        # Ready for 'nr search' (whatever was fetched, even if not all of
+        # it)
+        complete = index_groups(
+            ctx['NNTPSettings'], session, groups, settle=settle) and complete
+
+    if content:
+        complete = fetch_content(
+            ctx, groups, max_size=max_size, force=force, hooks=hooks,
+            default_hooks=not no_default_hooks) and complete
+
+    if nzb:
+        complete = read_nzbs(
+            ctx, groups, max_size=max_size, force=force) and complete
+
+    if rescore:
+        rescore_groups(ctx, groups)
+
+    if not complete:
+        logger.warning(
+            'Not everything was done; run the same command again to do the '
+            'rest.')
+        exit(1)
+
+
+@click.command(name='search')
+@click.argument('groups', nargs=-1)
+@options(*HEADER_OPTIONS)
+@click.option('--force', is_flag=True,
+              help='Fetch articles again even if they were fetched before.')
+@click.option('--watched', '-w', is_flag=True, help='All watched groups.')
+@click.option('--no-index', is_flag=True,
+              help="Only cache the headers; group them into collections "
+                   "later with 'nr update index'.")
+@click.pass_obj
+def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
+                  batches, force, watched, no_index):
+    """
+    Fetch the headers of groups (the same as 'nr update').
+
+    The headers are cached (one database per group, as there are so many)
+    and then grouped into files and collections (as 'nr update index'
+    does), ready for 'nr search'.
+
+    Only what hasn't been fetched before is fetched, so running this again
+    picks up new articles (and anything a previous run missed or didn't get
+    to).  Narrow down what is fetched with the date and count options.
+
+    """
+    session, groups = prepare(ctx, groups, watched)
+    date_from, date_to = header_dates(date_from, date_to, days)
+
+    complete = fetch_headers(
+        ctx, session, groups, date_from=date_from, date_to=date_to,
+        newest=newest, batch_size=batch_size, batches=batches, force=force)
+
+    if not no_index:
+        # Ready for 'nr search' (whatever was fetched, even if not all of it)
+        index_groups(ctx['NNTPSettings'], session, groups)
 
     if not complete:
         logger.warning(
@@ -393,27 +636,30 @@ def update_index(ctx, groups, watched, settle):
     Works through the articles 'nr update search' cached and works out
     which file (and which collection of files) each one belongs to.  A
     collection can span many groups.  Only articles not indexed before are
-    looked at.  Use 'nr nzb list' to see the results and 'nr nzb save' to
+    looked at.  'nr update search' already does this (unless --no-index
+    is given).  Use 'nr nzb list' to see the results and 'nr nzb save' to
     turn any of them into an NZB file.
 
     """
-    settings = ctx['NNTPSettings']
-    session = settings.session()
-    if not session:
-        logger.error("The database is not correctly configured.")
+    session, groups = prepare(ctx, groups, watched)
+    if not index_groups(
+            ctx['NNTPSettings'], session, groups, settle=settle):
         exit(1)
 
-    groups = get_groups(session=session, lookup=groups, watched=watched)
-    if not groups:
-        logger.error("There were not groups identified for indexing.")
-        exit(1)
 
+def index_groups(settings, session, groups, settle=False):
+    """
+    Indexes the articles cached for the groups given (name -> group id);
+    returns False if one of them had nothing cached
+
+    - settle: count every group as seen up to now (see --settle)
+    """
     # How we treat collections (see the processing section of the
     # configuration file)
     processing = settings.nntp_processing
     indexer = NNTPIndexer(
         settings.index_database(),
-        settle_hours=processing['settle_hours'],
+        settle_time=processing['collection_settle_time'],
         repost_days=processing['repost_days'],
         filters=load_filters(settings))
 
@@ -425,8 +671,8 @@ def update_index(ctx, groups, watched, settle):
             db_file = settings.group_database(name)
             if not indexer.index(name, db_file):
                 click.echo(
-                    "%s: nothing cached yet; run 'nr update search %s' "
-                    "first." % (name, name))
+                    "%s: nothing cached yet; run 'nr update %s' first." % (
+                        name, name))
                 complete = False
                 continue
 
@@ -458,53 +704,56 @@ def update_index(ctx, groups, watched, settle):
     finally:
         indexer.close()
 
-    if not complete:
-        exit(1)
+    return complete
 
 
 @click.command(name='archive')
 @click.argument('groups', nargs=-1)
 @click.option('--watched', '-w', is_flag=True, help='All watched groups.')
-@click.option('--max-size', '-m', default=None, type=str,
-              help='The biggest article fetched (ie: 64KB); defaults to '
-                   'the archive_max_size setting.')
+@options(*CONTENT_OPTIONS)
 @click.option('--force', is_flag=True,
               help='Ask again for the articles no server had before.')
-@click.option('--hooks', '-k', default=None, type=str,
-              help='More archive hooks to use (see '
-                   'newsreap/hooks/archive/).')
-@click.option('--no-default-hooks', is_flag=True,
-              help="Don't use the built in archive hooks.")
 @click.pass_obj
-def update_archive(ctx, groups, watched, max_size, force, hooks,
-                   no_default_hooks):
+def update_archive(ctx, groups, watched, max_size, hooks, no_default_hooks,
+                   force):
     """
-    Keep the small articles of groups so they can be searched offline.
+    Keep what the small articles of groups say (as 'nr update --content').
 
-    Fetches the articles 'nr update search' cached the headers of that are
-    no bigger than --max-size, and keeps what they say (decoded, so it can
-    be searched with 'nr search --posts').  Files they hold (yEnc,
-    uuencode, attachments) are only noted, never kept.  Articles kept
-    before aren't fetched again.
+    Fetches the articles 'nr update' cached the headers of that are no
+    bigger than --max-size, and keeps what they say (decoded, so it can be
+    searched with 'nr search --posts').  Files they hold (yEnc, uuencode,
+    attachments) are only noted, never kept.  Articles kept before aren't
+    fetched again.
 
+    """
+    _, groups = prepare(ctx, groups, watched)
+    if not fetch_content(
+            ctx, groups, max_size=max_size, force=force, hooks=hooks,
+            default_hooks=not no_default_hooks):
+        exit(1)
+
+
+def max_article_size(settings, max_size):
+    """
+    Returns the biggest article fetched for its content (as given, or the
+    archive_max_size setting)
+    """
+    return max_size or settings.nntp_processing.get('archive_max_size') \
+        or DEFAULT_ARCHIVE_MAX_SIZE
+
+
+def fetch_content(ctx, groups, max_size=None, force=False, hooks=None,
+                  default_hooks=True):
+    """
+    Keeps what the small articles of the groups given say; returns False
+    if a group had nothing cached
     """
     settings = ctx['NNTPSettings']
-    session = settings.session()
-    if not session:
-        logger.error("The database is not correctly configured.")
-        exit(1)
-
-    groups = get_groups(session=session, lookup=groups, watched=watched)
-    if not groups:
-        logger.error("There were not groups identified for archiving.")
-        exit(1)
-
     try:
         archiver = NNTPArchiver(
             settings.index_database(), hooks=hooks,
-            default_hooks=not no_default_hooks,
-            max_size=max_size or
-            settings.nntp_processing.get('archive_max_size') or '64KB',
+            default_hooks=default_hooks,
+            max_size=max_article_size(settings, max_size),
             filters=load_filters(settings))
 
     except ValueError as e:
@@ -521,8 +770,8 @@ def update_archive(ctx, groups, watched, max_size, force, hooks,
                     ctx['NNTPManager'], work_dir=settings.work_dir,
                     force=force):
                 click.echo(
-                    "%s: nothing cached yet; run 'nr update search %s' "
-                    "first." % (name, name))
+                    "%s: nothing cached yet; run 'nr update %s' first." % (
+                        name, name))
                 complete = False
                 continue
 
@@ -531,6 +780,83 @@ def update_archive(ctx, groups, watched, max_size, force, hooks,
     finally:
         archiver.close()
 
-    if not complete:
+    return complete
+
+
+def read_nzbs(ctx, groups, max_size=None, force=False):
+    """
+    Reads the NZB files posted to the groups given into the index; returns
+    False if one of them has nothing indexed yet
+    """
+    settings = ctx['NNTPSettings']
+    indexer = NNTPIndexer(settings.index_database())
+    try:
+        reader = NNTPNzbReader(
+            indexer, max_size=max_article_size(settings, max_size))
+
+    except ValueError as e:
+        indexer.close()
+        logger.error(str(e))
         exit(1)
 
+    # Track whether every group could be read
+    complete = True
+
+    try:
+        for name in groups:
+            if not reader.read(
+                    name, ctx['NNTPManager'], settings.work_dir,
+                    force=force):
+                click.echo(
+                    "%s: nothing indexed yet; run 'nr update %s' first." % (
+                        name, name))
+                complete = False
+                continue
+
+            click.echo('%s: %s' % (name, reader))
+            if reader.failed:
+                complete = False
+
+    finally:
+        indexer.close()
+
+    return complete
+
+
+@click.command(name='nzb')
+@click.argument('groups', nargs=-1)
+@click.option('--watched', '-w', is_flag=True, help='All watched groups.')
+@click.option('--max-size', '-m', default=None, type=str,
+              help='The biggest NZB file fetched (ie: 64KB); defaults to '
+                   'the archive_max_size setting.')
+@click.option('--force', is_flag=True,
+              help='Read them again even if they were read before.')
+@click.pass_obj
+def update_nzb(ctx, groups, watched, max_size, force):
+    """
+    Read the NZB files posted to groups (as 'nr update --nzb').
+
+    The NZB files the index found (no bigger than --max-size) are fetched
+    and what they describe is added to the index (as 'nr nzb import'
+    does).  Each one is only read once.
+
+    """
+    _, groups = prepare(ctx, groups, watched)
+    if not read_nzbs(ctx, groups, max_size=max_size, force=force):
+        exit(1)
+
+
+def rescore_groups(ctx, groups):
+    """
+    Works every score and tag of the groups given out again from the saved
+    rules (nothing is removed)
+    """
+    from newsreap.plugins.cli.filter import load_filters as saved_rules
+    from newsreap.plugins.cli.filter import run
+
+    # With no rules saved, every score and tag goes back to nothing
+    purger = NNTPPurger(
+        saved_rules(ctx),
+        index_db=ctx['NNTPSettings'].index_database(),
+        rescore=True, drop=False, groups=sorted(groups))
+    run(ctx, purger, sorted(groups))
