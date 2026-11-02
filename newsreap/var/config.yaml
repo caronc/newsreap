@@ -43,8 +43,11 @@ servers:
     # Use a secure (TLS) connection; match this to the port above
     secure: True
 
-    # Check the server's certificate is signed by a trusted authority
-    verify_cert: False
+    # Check the server's certificate is signed by a trusted authority and
+    # is for the host above.  For a server with a self signed certificate,
+    # point ca_certs at a copy of it instead of turning this off.
+    verify_cert: True
+    # ca_certs: /path/to/server.crt
 
     # Ask the server to compress what it sends us (if it can).  This is
     # safe to leave on; we fall back to no compression on our own.
@@ -80,7 +83,7 @@ servers:
 #    username: myusername
 #    password: mypassword
 #    secure: True
-#    verify_cert: False
+#    verify_cert: True
 #    compress: True
 #    join_group: False
 #    use_body: False

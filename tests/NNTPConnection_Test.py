@@ -41,6 +41,7 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from tests.TestBase import TestBase
 
+from tests.FakeNNTPServer import CERT_FILE
 from tests.FakeNNTPServer import FakeNNTPServer
 
 from newsreap.NNTPConnection import NNTPConnection
@@ -128,6 +129,7 @@ class NNTPConnection_Test(TestBase):
             password='valid',
             secure=True,
             join_group=False,
+            ca_certs=CERT_FILE,
         )
         assert sock.connect(timeout=5.0) is True
         assert sock._iostream == NNTPIOStream.RFC3977_GZIP
@@ -140,6 +142,7 @@ class NNTPConnection_Test(TestBase):
             password='valid',
             secure=True,
             join_group=False,
+            ca_certs=CERT_FILE,
         )
         # Invalid Username
         assert sock.connect(timeout=5.0) is False
@@ -151,6 +154,7 @@ class NNTPConnection_Test(TestBase):
             password='invalid',
             secure=True,
             join_group=False,
+            ca_certs=CERT_FILE,
         )
         # Invalid Password
         assert sock.connect(timeout=5.0) is False

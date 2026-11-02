@@ -20,6 +20,7 @@ import re
 
 import pytest
 
+from tests.FakeNNTPServer import CERT_FILE
 from tests.FakeNNTPServer import FakeNNTPServer
 
 
@@ -28,6 +29,7 @@ def connect_to(server, **kwargs):
     Returns an NNTPConnection pointed at a FakeNNTPServer.
 
     - Logs in with the server's (valid) test account unless told otherwise.
+    - Trusts the server's (self signed) certificate.
     - Retries happen right away so tests don't sit waiting.
     """
     from newsreap.NNTPConnection import NNTPConnection
@@ -40,6 +42,7 @@ def connect_to(server, **kwargs):
         'secure': server.secure,
         'join_group': server.join_group,
         'retry_wait': 0,
+        'ca_certs': CERT_FILE,
     }
     options.update(kwargs)
     return NNTPConnection(**options)
@@ -83,7 +86,8 @@ def config_for(server, path, **processing):
             ('port: 563', 'port: %d' % server.port),
             ('username: myusername', 'username: valid'),
             ('password: mypassword', 'password: valid'),
-            ('secure: True', 'secure: %s' % server.secure)):
+            ('secure: True', 'secure: %s' % server.secure),
+            ('# ca_certs: /path/to/server.crt', 'ca_certs: %s' % CERT_FILE)):
         content = content.replace(old, new, 1)
 
     for key, value in processing.items():

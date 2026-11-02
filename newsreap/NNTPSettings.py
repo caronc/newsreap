@@ -26,7 +26,7 @@
 #       host: awesome.nntp.server.com
 #       port: 563
 #       secure: True
-#       verify_cert: False
+#       verify_cert: True
 #       compress: True
 #       join_group: False
 #       use_body: False
@@ -286,7 +286,10 @@ DEFAULT_SERVER_VARIABLES = {
     'host': None,
     'port': 119,
     'secure': None,
-    'verify_cert': False,
+    'verify_cert': True,
+    # A file of the certificates to trust instead of the system's (ie: a
+    # server's own self signed certificate)
+    'ca_certs': None,
     'iostream': NNTPIOStream.RFC3977_GZIP,
     'join_group': True,
     'use_head': True,

@@ -170,8 +170,11 @@ class NNTPSettings_Test(TestBase):
             NNTPIOStream.RFC3977_GZIP
 
         for i in range(0, len(servers)):
-            assert len(settings.nntp_servers[i]) == \
-                    len(DEFAULT_SERVER_VARIABLES)
+            # Every setting with a default is there (and nothing else)
+            assert set(settings.nntp_servers[i]) <= \
+                set(DEFAULT_SERVER_VARIABLES)
+            assert {k for k, v in DEFAULT_SERVER_VARIABLES.items()
+                    if v is not None} <= set(settings.nntp_servers[i])
             # Confirm we don't worry about invalid entries allowing future
             # configuration files to be backwards compatible with the old
             assert invalid_entry not in settings.nntp_servers[i]

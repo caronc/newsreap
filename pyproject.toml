@@ -42,6 +42,8 @@ dependencies = [
     "gevent>=1.5",
     "python-dateutil",
     "cryptography",
+    # Root certificate authority bundle
+    "certifi",
     "lxml>=3.0",
     "tqdm",
 ]

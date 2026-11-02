@@ -21,9 +21,9 @@ from gevent import Timeout
 from gevent.select import select
 from gevent.select import error as SelectError
 
+import certifi
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.x509.oid import NameOID
 
 import gevent.monkey
 gevent.monkey.patch_all()
@@ -32,7 +32,6 @@ from os.path import isfile
 from datetime import datetime
 
 import errno
-import re
 
 # Hook Manager
 from .HookManager import HookManager
@@ -54,16 +53,11 @@ socket.setdefaulttimeout(10.0)
 #   - a human readable name
 #   - the TLS version the connection is locked to (None lets the client and
 #     server agree on the best version they both support)
+# The secure protocols we use: (protocol, name, oldest TLS version allowed).
+# The newest version both sides support is used; older (broken) versions
+# are never fallen back to, as someone in the middle could force them.
 SECURE_PROTOCOL_PRIORITY = (
-    # The first element is the default priority
-    # the remainders are tried next
-    (ssl.PROTOCOL_TLSv1_2, 'TLS v1.2', ssl.TLSVersion.TLSv1_2),
-    (ssl.PROTOCOL_TLSv1_1, 'TLS v1.1', ssl.TLSVersion.TLSv1_1),
-    (ssl.PROTOCOL_TLSv1, 'TLS v1.0', ssl.TLSVersion.TLSv1),
-
-    # The following are not 100% secure but are sometimes
-    # the only option
-    (ssl.PROTOCOL_SSLv23, 'SSL v2.0/3.0', None),
+    (ssl.PROTOCOL_TLS_CLIENT, 'TLS v1.2+', ssl.TLSVersion.TLSv1_2),
 )
 
 
@@ -109,9 +103,13 @@ class SocketBase:
                             Specify the encryption Cypher to use here
                             too.
 
-            verify_cert     Attempt to verify the SSL certificate or fail
-                            if we can't.  This is used to help detect against
-                            the man-in-the-middle attacks.
+            verify_cert     The server's certificate must be signed by an
+                            authority we trust and be for the host we
+                            connect to (this protects against someone
+                            pretending to be the server)
+
+            ca_certs        A file of the certificates to trust instead of
+                            the system's (ie: a server's self signed one)
 
     """
 
@@ -125,6 +123,11 @@ class SocketBase:
             self.port = int(port)
         except:
             self.port = 0
+
+        # An IPv6 address may be given wrapped in brackets, as in a URL
+        if isinstance(host, str) and host.startswith('[') \
+                and host.endswith(']'):
+            host = host[1:-1]
 
         self.host = host
         self.bindaddr = bindaddr
@@ -340,7 +343,8 @@ class SocketBase:
             return data
         return b''
 
-    def bind(self, timeout=None, retries=3, retry_wait=10.0):
+    def bind(self, timeout=None, retries=3, retry_wait=10.0,
+             family=socket.AF_INET):
         """
           Perform socket binding if nessisary but otherwise this
           performs the connection itself
@@ -354,7 +358,7 @@ class SocketBase:
 
         while not established:
             # Create a new socket
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket = socket.socket(family, socket.SOCK_STREAM)
 
             # Set Reuse Address flag
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -365,14 +369,15 @@ class SocketBase:
                 # Store local connection details
                 return True
 
-            if not self.bindaddr:
-                self.bindaddr = '0.0.0.0'
+            # Any local address of the same family
+            bindaddr = self.bindaddr or (
+                '::' if family == socket.AF_INET6 else '0.0.0.0')
             if not self.bindport:
                 self.bindport = 0
 
             try:
-                bind_str = '%s:%s' % (self.bindaddr, self.bindport)
-                self.socket.bind((self.bindaddr, self.bindport))
+                bind_str = '%s:%s' % (bindaddr, self.bindport)
+                self.socket.bind((bindaddr, self.bindport))
                 logger.debug("Socket bound to %s" % bind_str)
                 # Store local connection details
                 return True
@@ -443,30 +448,50 @@ class SocketBase:
         cur_time = datetime.now()
 
         while True:
-            if not self.bind(timeout=timeout, retries=3):
-                return False
+            try:
+                # Every address the host answers on, IPv4 and IPv6 alike
+                found = socket.getaddrinfo(
+                    self.host, int(self.port), 0, socket.SOCK_STREAM)
 
-            # Keep alive flag
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            except socket.gaierror as e:
+                if e.errno == errno.EINTR:
+                    raise
+
+                raise SocketRetryLimit(
+                    "Could not find host %s (%s)" % (self.host, e.strerror))
 
             try:
-                # Simple protocol that returns if good, otherwise
-                # it throws an exception,  So the next line is always
-                # to break out of the loop (had we not already thrown
-                # an exception
-                self.socket.connect((
-                    socket.gethostbyname(self.host),
-                    int(self.port),
-                ))
+                # Each address is tried in turn until one of them answers
+                for no, (family, _, _, _, address) in enumerate(found, 1):
+                    if not self.bind(
+                            timeout=timeout, retries=3, family=family):
+                        return False
+
+                    # Keep alive flag
+                    self.socket.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+                    try:
+                        self.socket.connect(address)
+                        break
+
+                    except socket.error as e:
+                        if e.errno == errno.EINTR or no == len(found):
+                            raise
+
+                        logger.debug("Could not connect to %s: %s" % (
+                            address[0], e))
+                        self.close()
 
                 # Disable Blocking
                 self.socket.setblocking(False)
 
-                # Store local details of our socket
+                # Store local details of our socket (IPv6 addresses carry
+                # two more fields we don't need)
                 (self._local_addr, self._local_port) = \
-                    self.socket.getsockname()
+                    self.socket.getsockname()[:2]
                 (self._remote_addr, self._remote_port) = \
-                    self.socket.getpeername()
+                    self.socket.getpeername()[:2]
 
                 logger.info(
                     "Connection established to %s:%d" % (
@@ -494,10 +519,10 @@ class SocketBase:
             except ssl.SSLError as e:
                 # Secure Connection Failed
                 self.close()
-                logger.debug(
-                    "Failed to secure connection using %s / errno=%s" % (
+                logger.warning(
+                    "Failed to secure connection using %s: %s" % (
                         SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
-                        e.errno,
+                        e.reason or e,
                     ),
                 )
 
@@ -672,8 +697,9 @@ class SocketBase:
         self.socket = conn
 
         # Update our local information
-        (self._local_addr, self._local_port) = self.socket.getsockname()
-        (self._remote_addr, self._remote_port) = self.socket.getpeername()
+        (self._local_addr, self._local_port) = self.socket.getsockname()[:2]
+        (self._remote_addr, self._remote_port) = \
+            self.socket.getpeername()[:2]
 
         logger.info(
             "Connection established to %s:%d" % (
@@ -1080,8 +1106,7 @@ class SocketBase:
         raise SocketRetryLimit('There are no protocols left to try.')
 
     def __encrypt_socket(self, timeout=None, retry_wait=1.00,
-                         verify=True, cert_reqs=ssl.CERT_NONE,
-                         server_side=False):
+                         verify=True, server_side=False):
         """
         Wrap an existing Python socket and return an SSLSocket Object.
         this is iternally called if we're dealing with a secure
@@ -1093,18 +1118,11 @@ class SocketBase:
 
         This function has no return value; it either encryptes the socket
         or throws a SocketException() error.
-            cert_reqs can be:
-                ssl.CERT_REQUIRED:  certificate verification manditory; no
-                                     certificate means to fail.
-                ssl.CERT_OPTIONAL:  certificate verifcation performed but
-                                     only if one was detected.
-                ssl.CERT_NONE:      No certificate verification performed
 
-            verify can kick in if ssl.CERT_NONE is specified (otherwise
-            it's not nesisary).  It handles those with self-signed certificates
-            by doing it's best to perform some very basic checks that can help
-            abort the connection when dealing with a man-in-the-middle attack.
-
+        verify (connecting only): the server's certificate must be signed by
+        an authority we trust (the system's, or the ca_certs file given) and
+        be for the host we connected to.  A certificate that fails raises
+        SocketRetryLimit (saying why).
         """
         # Disable Blocking
         self.socket.setblocking(False)
@@ -1117,21 +1135,9 @@ class SocketBase:
         self.__ssl_version()
         version = SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][2]
 
-        context = ssl.SSLContext(
-            ssl.PROTOCOL_TLS_SERVER if server_side
-            else ssl.PROTOCOL_TLS_CLIENT)
-
-        # Certificates are checked by our own verification process below;
-        # by default the connection itself does not require one
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-
-        if version is not None:
-            # Lock the connection to a specific TLS version
-            context.minimum_version = version
-            context.maximum_version = version
-
         if server_side:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
             # Verify our certificates/keys exist or abort
             # These checks are nessisary otherwise you'll get strange errors
             # like:
@@ -1153,27 +1159,37 @@ class SocketBase:
             context.load_cert_chain(self._certfile, self._keyfile)
 
         elif self._ca_certs:
-            # if we have a ca_certs reference, then let's store them now
+            # Only the certificates in the file given are trusted
             if not isfile(self._ca_certs):
                 raise ValueError(
                     'Could not locate CA Certificates: %s' %
                     self._ca_certs,
                 )
-            context.load_verify_locations(self._ca_certs)
-
-            # Store our Certificate Requirements
-            context.verify_mode = cert_reqs
+            context = ssl.create_default_context(cafile=self._ca_certs)
 
         else:
             # The certificates the system trusts (wherever this system keeps
-            # them)
-            context.load_default_certs()
-            context.verify_mode = cert_reqs
+            # them), and certifi's bundle for systems Python can't find them
+            # on
+            context = ssl.create_default_context()
+            context.load_verify_locations(certifi.where())
 
-        # Wrap our socket with the SSLSocket Object
+        if not server_side and not verify:
+            # Any certificate is accepted
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+
+        # The oldest version we accept, and no TLS compression (it leaks
+        # what is sent; see the CRIME attack)
+        context.minimum_version = version
+        context.options |= ssl.OP_NO_COMPRESSION
+
+        # Wrap our socket with the SSLSocket Object; the host name is also
+        # sent to the server (some host many names on one address)
         self.socket = context.wrap_socket(
             self.socket,
             server_side=server_side,
+            server_hostname=None if server_side else self.host,
             do_handshake_on_connect=False,
             suppress_ragged_eofs=True,
         )
@@ -1187,11 +1203,20 @@ class SocketBase:
             # or we'll time out and gracefully exit.
             try:
                 # This command does a lot of the magic
-                self.socket.do_handshake()
+                try:
+                    self.socket.do_handshake()
+
+                except ssl.SSLCertVerificationError as e:
+                    # Trying again (or another protocol) won't help
+                    self.close()
+                    raise SocketRetryLimit(
+                        "The certificate of %s could not be verified (%s); "
+                        "if it is self signed, set ca_certs to it (or "
+                        "verify_cert to False)" % (
+                            self.host, e.verify_message or e.reason))
 
                 logger.info("Secured connection using %s." % (
-                    SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
-                ))
+                    self.socket.version()))
 
                 if not server_side:
                     # Store our peer certificate
@@ -1231,66 +1256,6 @@ class SocketBase:
                                 "Could not acquire site certificate.",
                             )
                         logger.warning("Could not acquire site certificate.")
-
-                    if verify and cert_reqs == ssl.CERT_NONE:
-                        # Our own verification process which certainly isn't
-                        # bulletproof, but can help with self-signed
-                        # certificates and still offer 'some' security
-                        try:
-                            cert_host = \
-                                self.peer_certificate.subject\
-                                    .get_attributes_for_oid(
-                                        NameOID.COMMON_NAME)\
-                                    .pop().value
-
-                            # Perform a reverse lookup on our remote IP Address
-                            (host, alias, ips) = \
-                                socket.gethostbyaddr(self._remote_addr)
-
-                            # certificate syntax; a simple flick and we make it
-                            # a regex supported expression
-                            cert_host = cert_host\
-                                .replace('.', '\\.')\
-                                .replace('*\\.', '.*\\.')
-
-                            # If we get here, we've got a hostname to work with
-                            host_match_re = re.compile(
-                                cert_host,
-                                re.IGNORECASE | re.ASCII,
-                            )
-
-                            matched_host = next(
-                                (h for h in [host] + alias + ips
-                                 if host_match_re.match(h) is not None), False)
-
-                            if not matched_host:
-                                raise SocketRetryLimit(
-                                    "Certificate for '%s' and does not "
-                                    "match." % (
-                                        cert_host,
-                                    )
-                                )
-
-                        except socket.herror as e:
-                            if e.errno == 2:
-                                raise SocketRetryLimit(
-                                    "Certificate for '%s' could not be "
-                                    "resolved." % (
-                                        self._remote_addr,
-                                    )
-                                )
-
-                            # raise anything else
-                            raise
-
-                        # TODO: Store fingerprint (if not stored already)
-                        #       If already stored, then verify that it hasn't
-                        #       changed.
-
-                        except IndexError:
-                            raise SocketRetryLimit(
-                                'Certificate hostname not defined!',
-                            )
 
                 # We're done
                 self.connected = True

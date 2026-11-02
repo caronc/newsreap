@@ -497,8 +497,9 @@ class NNTPConnection(SocketBase):
                         # Track the connections we open
                         stats.connections += 1
 
-        except SocketRetryLimit:
+        except SocketRetryLimit as e:
             # We can not establish a connection and never will
+            logger.error('Could not connect to %s: %s' % (self.host, e))
             return False
 
         finally:

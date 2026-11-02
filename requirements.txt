@@ -12,5 +12,6 @@ SQLAlchemy >= 1.4
 gevent >= 1.5
 python-dateutil
 cryptography
+certifi
 lxml >= 3.0
 tqdm

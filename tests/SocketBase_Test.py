@@ -107,11 +107,11 @@ class SocketBase_Test(TestBase):
             'tcps://localhost:563'
 
 
-def test_system_certificates_are_used_by_default(monkeypatch):
+def test_system_certificates_are_used_by_default(monkeypatch, caplog):
     """
     Without a CA file, secure connections trust the certificates the system
-    does (wherever this system keeps them); a CA file that doesn't exist is
-    refused
+    does (and certifi's); a server they don't vouch for is refused, saying
+    why
     """
     import ssl
     from tests.FakeNNTPServer import FakeNNTPServer
@@ -127,14 +127,86 @@ def test_system_certificates_are_used_by_default(monkeypatch):
         sock = NNTPConnection(
             host=server.host, port=server.port, username='valid',
             password='valid', secure=True, join_group=False)
+        assert sock.connect(timeout=5.0) is False
+        assert loaded == ['system']
+        assert 'certificate of 127.0.0.1 could not be verified' in caplog.text
+        assert 'set ca_certs' in caplog.text
+
+
+def test_certificates_can_be_trusted_or_not_checked():
+    """
+    A server's own (self signed) certificate is trusted when ca_certs points
+    at it; verify_cert=False accepts any certificate; a CA file that doesn't
+    exist is refused
+    """
+    from tests.FakeNNTPServer import CERT_FILE
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from newsreap.NNTPConnection import NNTPConnection
+
+    with FakeNNTPServer(secure=True) as server:
+        def connection(**kwargs):
+            return NNTPConnection(
+                host=server.host, port=server.port, username='valid',
+                password='valid', secure=True, join_group=False, **kwargs)
+
+        sock = connection(ca_certs=CERT_FILE)
         assert sock.connect(timeout=5.0) is True
         sock.close()
-        assert loaded == ['system']
 
-        sock = NNTPConnection(
-            host=server.host, port=server.port, username='valid',
-            password='valid', secure=True, join_group=False,
-            ca_certs='/no/such/ca-bundle.crt')
+        sock = connection(verify_cert=False)
+        assert sock.connect(timeout=5.0) is True
+        sock.close()
+
+        sock = connection(ca_certs='/no/such/ca-bundle.crt')
         with pytest.raises(ValueError):
             sock.connect(timeout=5.0)
         sock.close()
+
+
+def test_secure_connections_use_modern_tls():
+    """
+    TLS 1.2 or newer is used (never anything older), without compression
+    """
+    import ssl
+    from tests.FakeNNTPServer import CERT_FILE
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from newsreap.NNTPConnection import NNTPConnection
+
+    with FakeNNTPServer(secure=True) as server:
+        sock = NNTPConnection(
+            host=server.host, port=server.port, username='valid',
+            password='valid', secure=True, join_group=False,
+            ca_certs=CERT_FILE)
+        assert sock.connect(timeout=5.0) is True
+        assert sock.socket.version() in ('TLSv1.2', 'TLSv1.3')
+        assert sock.socket.compression() is None
+        assert sock.socket.context.minimum_version == ssl.TLSVersion.TLSv1_2
+        sock.close()
+
+
+def test_every_address_of_a_host_is_tried():
+    """
+    A host name is looked up for all of its addresses (IPv4 and IPv6); each
+    is tried until one answers, and an IPv6 address may be in brackets
+    """
+    from tests.FakeNNTPServer import CERT_FILE
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from newsreap.NNTPConnection import NNTPConnection
+
+    assert SocketBase(host='[::1]', port=119).host == '::1'
+
+    with FakeNNTPServer(secure=True) as server:
+        # localhost may answer on ::1 first, where nothing is listening
+        sock = NNTPConnection(
+            host='localhost', port=server.port, username='valid',
+            password='valid', secure=True, join_group=False,
+            ca_certs=CERT_FILE)
+        assert sock.connect(timeout=5.0) is True
+        assert sock.remote_connection_info() == ('127.0.0.1', server.port)
+        sock.close()
+
+    # A host that can't be found is refused (not retried)
+    sock = NNTPConnection(
+        host='no-such-host.invalid', port=119, username='valid',
+        password='valid', secure=False, join_group=False)
+    assert sock.connect(timeout=5.0) is False
