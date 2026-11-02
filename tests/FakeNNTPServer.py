@@ -48,6 +48,11 @@ KEY_FILE = join(VAR_PATH, 'ssl', 'localhost.key')
 # The default group listing returned by LIST ACTIVE
 GROUP_LIST_FILE = join(VAR_PATH, 'group.list')
 
+# What LIST OVERVIEW.FMT says our overview (XOVER) lines hold (RFC 3977)
+OVERVIEW_FMT = (
+    'Subject:', 'From:', 'Date:', 'Message-ID:', 'References:', ':bytes',
+    ':lines', 'Xref:full')
+
 EOL = b'\r\n'
 
 
@@ -153,7 +158,8 @@ class FakeNNTPServer:
 
     def __init__(self, secure=False, join_group=True, users=None,
                  welcome='200 newsreap test server ready (posting ok)',
-                 compression=True, posting=True, group_list=GROUP_LIST_FILE):
+                 compression=True, posting=True, group_list=GROUP_LIST_FILE,
+                 overview_fmt=OVERVIEW_FMT):
 
         self.secure = secure
 
@@ -174,6 +180,9 @@ class FakeNNTPServer:
 
         # The content returned by LIST ACTIVE
         self.group_list = group_list
+
+        # What LIST OVERVIEW.FMT returns (None: the command isn't supported)
+        self.overview_fmt = overview_fmt
 
         # Every command received (in order)
         self.received = []
@@ -245,18 +254,23 @@ class FakeNNTPServer:
         return self
 
     def add_overview(self, group, number, subject, poster, date,
-                     message_id, size=1000, lines=10):
+                     message_id, size=1000, lines=10, extras=None):
         """
         Adds an overview (XOVER) entry for article `number` in `group`.
 
         - date is a datetime (or the text exactly as a server sends it)
+        - extras: the fields after the first seven (as text); an Xref of
+          the group by default
         """
         if not isinstance(date, str):
             date = date.strftime('%d %b %Y %H:%M:%S +0000')
 
-        line = '%d\t%s\t%s\t%s\t<%s>\t\t%d\t%d\tXref: fake %s:%d' % (
+        if extras is None:
+            extras = ['Xref: fake %s:%d' % (group, number)]
+
+        line = '%d\t%s\t%s\t%s\t<%s>\t\t%d\t%d' % (
             number, subject, poster, date, message_id.strip('<>'), size,
-            lines, group, number)
+            lines) + ''.join('\t%s' % extra for extra in extras)
 
         entries = self.overview.setdefault(group, [])
         bisect.insort(entries, (number, line))
@@ -507,6 +521,13 @@ class FakeNNTPServer:
             return '480 Authentication required'
 
         if word == 'LIST':
+            if args.upper() == 'OVERVIEW.FMT':
+                if self.overview_fmt is None:
+                    return '503 Not supported'
+                return Reply('215 Order of fields in overview database',
+                             body=''.join(
+                                 '%s\r\n' % f for f in self.overview_fmt))
+
             if args.upper() in ('', 'ACTIVE'):
                 with open(self.group_list, 'rb') as fp:
                     return Reply(

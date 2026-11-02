@@ -64,7 +64,9 @@ from .NNTPSettings import NNTP_SLOW_RATE_WINDOW
 from .codecs.CodecBase import CodecBase
 from .codecs.CodecHeader import CodecHeader
 from .codecs.CodecArticleIndex import CodecArticleIndex
+from .codecs.CodecArticleIndex import OVERVIEW_EXTRAS
 from .codecs.CodecArticleIndex import XoverGrouping
+from .codecs.CodecArticleIndex import overview_extras
 from .codecs.CodecGroups import CodecGroups
 from .codecs.CodecUU import CodecUU
 from .codecs.CodecYenc import CodecYenc
@@ -278,6 +280,10 @@ class NNTPConnection(SocketBase):
         else:
             kwargs['secure'] = False
             self.protocol = 'nntp'
+
+        # What the fields after the first seven of an overview (XOVER)
+        # line are; asked for once (see overview_format())
+        self._overview_fmt = None
 
         # Default Filters
         self.filters = []
@@ -1166,6 +1172,35 @@ class NNTPConnection(SocketBase):
         # Return results
         return response
 
+    def overview_format(self):
+        """
+        Returns what the fields after the first seven of an overview (XOVER)
+        line are, as LIST OVERVIEW.FMT says (ie: ('Xref:full', )); asked
+        for once and kept.  OVERVIEW_EXTRAS is used when the server can't
+        say.
+        """
+        if self._overview_fmt is not None:
+            return self._overview_fmt
+
+        response = self.send('LIST OVERVIEW.FMT')
+        if response is not None and response.code == 215:
+            try:
+                lines = response.body.getvalue().decode(
+                    self.encoding, 'replace').splitlines()
+
+            except (AttributeError, TypeError):
+                # Nothing came back to read
+                lines = []
+
+            self._overview_fmt = overview_extras(lines)
+
+        else:
+            # An older server; nearly all of them send an Xref
+            logger.debug('LIST OVERVIEW.FMT not supported by %s.' % self)
+            self._overview_fmt = OVERVIEW_EXTRAS
+
+        return self._overview_fmt
+
     def xover(self, group=None, start=None, end=None,
               sort=XoverGrouping.BY_POSTER_TIME):
         """
@@ -1274,6 +1309,9 @@ class NNTPConnection(SocketBase):
             if next((r for r in _response
                      if r is not False), None) is not False:
 
+                # What the server says its overview lines hold
+                fields = self.overview_format()
+
                 response = self.send(
                     'XOVER %d-%d' % (start, end),
                     decoders=[
@@ -1282,6 +1320,7 @@ class NNTPConnection(SocketBase):
                             sort=sort,
                             encoding=self.encoding,
                             work_dir=self.work_dir,
+                            fields=fields,
                         ),
                     ],
                     retries=NNTP_XOVER_RETRIES,
@@ -2776,8 +2815,12 @@ class NNTPConnection(SocketBase):
         self._dot_line = False
         self.article_fname = None
 
-        # Reset our Buffers
+        # Reset our Buffers (back to the start too; truncating alone leaves
+        # the position where it was, and what is written next would follow
+        # a gap of NUL bytes)
+        self._buffer.seek(0)
         self._buffer.truncate(0)
+        self._data.seek(0)
         self._data.truncate(0)
         self._data_len = 0
 

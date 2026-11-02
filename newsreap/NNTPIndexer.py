@@ -64,6 +64,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import text
 
 from .NNTPArticle import NNTPArticle
+from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPEmptyContent import NNTPEmptyContent
 from .NNTPFilterRule import parse_time
 from .NNTPFilterRule import score_tests
@@ -564,7 +565,7 @@ class NNTPIndexer:
                 rows = cached.query(
                     Article.message_id, Article.article_no,
                     Article.subject, Article.poster, Article.size,
-                    Article.posted_date, Article.score, Article.tags)\
+                    Article.posted_date, Article.xref)\
                     .filter(Article.indexed.is_(False))\
                     .order_by(Article.article_no)\
                     .limit(self.chunk_size).all()
@@ -575,7 +576,7 @@ class NNTPIndexer:
 
                 # What our filters make of them
                 last = rows[-1].article_no
-                ranks, dropped = self._rank(group, rows)
+                ranks, dropped = self._rank(session, group, rows)
                 if dropped:
                     rows = [row for row in rows
                             if row.message_id not in dropped]
@@ -624,31 +625,50 @@ class NNTPIndexer:
 
         return True
 
-    def _rank(self, group, rows):
+    def _rank(self, session, group, rows):
         """
         Returns (ranks, dropped) for a chunk of cached articles:
         - ranks: Message-ID -> (score, tags)
         - dropped: the Message-IDs our filters remove
+
+        With filters, every article is judged again (in every group its
+        Xref lists, with anything else the index knows about it) and its
+        rank saved (see NNTPArticleRanks); otherwise the ranks saved before
+        are used.  Not committed.
         """
+        if self.filters is None:
+            # As they were worked out before
+            ranks = NNTPArticleRanks.load(
+                session, [row.message_id for row in rows])
+            return {row.message_id: ranks.get(row.message_id, (0, frozenset()))
+                    for row in rows}, set()
+
+        # What else we know about them (only when a rule needs it)
+        known = NNTPArticleRanks.known(
+            session, [row.message_id for row in rows],
+            bodies=self.filters.uses('body'),
+            filenames=self.filters.uses('filename'))
+
         ranks = {}
         dropped = set()
         for row in rows:
-            if self.filters is None:
-                # As they were given when cached
-                ranks[row.message_id] = (
-                    row.score or 0, tags_from_text(row.tags))
-                continue
-
+            extra = known.get(row.message_id, {})
             verdict = self.filters.check(
-                group, subject=row.subject, poster=row.poster,
-                message_id=row.message_id, posted=row.posted_date,
-                size=row.size)
+                [group, *(row.xref or '').split()], subject=row.subject,
+                poster=row.poster, message_id=row.message_id,
+                posted=row.posted_date, size=row.size,
+                body=extra.get('body'), filenames=extra.get('filenames'))
 
             if verdict.drop is not None:
                 dropped.add(row.message_id)
                 continue
 
             ranks[row.message_id] = (verdict.score, verdict.tags)
+
+        # Kept in one place (and worked out again from 0 every time)
+        NNTPArticleRanks.save(session, ranks)
+        if dropped:
+            NNTPArticleRanks.forget(session, dropped)
 
         return ranks, dropped
 
@@ -812,7 +832,7 @@ class NNTPIndexer:
         # they were given
         best = {}
         for row, _, _, window in kept:
-            score, tags = (ranks or {}).get(row.message_id, (0, ()))
+            score, tags = (ranks or {}).get(row.message_id, (0, frozenset()))
             found = best.get(window['id'])
             if found is None:
                 best[window['id']] = (score, set(tags))
@@ -822,6 +842,46 @@ class NNTPIndexer:
 
         self.score_collections(
             session, best, {window['id'] for window in added})
+
+    @classmethod
+    def rank_collections(cls, session, collection_ids):
+        """
+        Works the score and tags of the collections given out again from
+        their articles' (see NNTPArticleRanks): the best score, and every
+        tag; not committed
+        """
+        from .objects.index.ArticleRank import ArticleRank
+
+        # collection id -> [best score, tags, articles with a rank]
+        found = {collection_id: [None, set(), 0]
+                 for collection_id in collection_ids}
+        for ids in chunked(found):
+            for collection_id, score, tags in session.query(
+                    CollectionFile.collection_id, ArticleRank.score,
+                    ArticleRank.tags)\
+                    .join(Segment, Segment.file_id == CollectionFile.id)\
+                    .join(ArticleRank,
+                          ArticleRank.message_id == Segment.message_id)\
+                    .filter(CollectionFile.collection_id.in_(ids)):
+                entry = found[collection_id]
+                entry[0] = score if entry[0] is None else max(entry[0], score)
+                entry[1] |= tags_from_text(tags)
+                entry[2] += 1
+
+            # An article without a rank scores 0
+            for collection_id, articles in session.query(
+                    CollectionFile.collection_id, func.count(Segment.message_id))\
+                    .join(Segment, Segment.file_id == CollectionFile.id)\
+                    .filter(CollectionFile.collection_id.in_(ids))\
+                    .group_by(CollectionFile.collection_id):
+                entry = found[collection_id]
+                if entry[0] is None or articles > entry[2]:
+                    entry[0] = max(entry[0] or 0, 0)
+
+        best = {collection_id: (entry[0] or 0, entry[1])
+                for collection_id, entry in found.items()}
+        cls.score_collections(session, best, replace=True)
+        return best
 
     @staticmethod
     def score_collections(session, best, new=(), replace=False):

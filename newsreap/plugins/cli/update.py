@@ -30,7 +30,6 @@ from os.path import dirname
 from os.path import abspath
 from datetime import datetime
 from datetime import timedelta
-from dateutil.parser import parse
 
 from sqlalchemy import insert
 from sqlalchemy import update as sql_update
@@ -54,6 +53,7 @@ from newsreap.NNTPGroupScanner import NNTPGroupScanner
 from newsreap.NNTPGroupScanner import DEFAULT_BATCH_SIZE
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPArchiver import NNTPArchiver
+from newsreap.NNTPFilterRule import parse_time
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.Utils import utcnow
 
@@ -101,17 +101,25 @@ def lookup_server(session, host):
 
 def parse_date(value, name):
     """
-    Turns a date the user gave us into a datetime (exits if it can't)
+    Turns a date the user gave us into a (UTC) datetime, the way every
+    other command reads them (exits, saying why, if it can't)
 
-    - value: the text given (ie: 2024, 2024.02, 2024-02-01 10:00)
+    - value: the text given (ie: 2024, 2024.02, 2024-02-01 10:00, or how
+      long ago: 90d)
     - name: the option it came from (for the error message)
     """
     try:
-        return parse(value, fuzzy=True)
+        found = parse_time(value, '--date-%s' % name)
 
-    except (ValueError, OverflowError, TypeError):
-        logger.error("An invalid %s date was specified: %s" % (name, value))
+    except ValueError as e:
+        logger.error(str(e))
         exit(1)
+
+    if found is None:
+        logger.error('--date-%s needs a date.' % name)
+        exit(1)
+
+    return found
 
 
 @click.command(name='groups')
@@ -216,9 +224,11 @@ def update_groups(ctx):
 @click.command(name='search')
 @click.argument('groups', nargs=-1)
 @click.option('--date-from', '-f',
-              help='Only articles posted on or after this date.')
+              help='Only articles posted on or after this date (ie: '
+                   '2024, 2024-02-01, or how long ago: 90d).')
 @click.option('--date-to', '-t',
-              help='Only articles posted on or before this date.')
+              help='Only articles posted on or before this date (the same '
+                   'as --date-from).')
 @click.option('--days', '-d', type=click.IntRange(min=1),
               help='Only articles posted in the last X days.')
 @click.option('--newest', '-n', type=click.IntRange(min=1),
@@ -259,7 +269,7 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
     filters = load_filters(ctx['NNTPSettings'])
 
     # Prepare our dates
-    if date_from:
+    if date_from is not None:
         date_from = parse_date(date_from, 'from')
 
     if days:
@@ -268,7 +278,7 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
         since = utcnow() - timedelta(days=days)
         date_from = max(date_from, since) if date_from else since
 
-    if date_to:
+    if date_to is not None:
         date_to = parse_date(date_to, 'to')
 
     if date_to and date_from and date_from > date_to:
@@ -317,6 +327,7 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
             batch_size=batch_size,
             ramdisk=ramdisk,
             filters=filters,
+            index_db=ctx['NNTPSettings'].index_database(),
         )
 
         try:

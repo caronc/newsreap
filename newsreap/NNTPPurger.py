@@ -26,20 +26,24 @@ through every place articles are kept, a chunk at a time:
   files are left alone unless asked)
 - the archive: dropped posts are deleted (with their files and groups)
 
-With `rescore` the scores and tags are worked out again from the rules
-(and saved); otherwise the ones stored are what score and tag rules see.
+With `rescore` the scores and tags are worked out again (from 0) and
+saved where every article's are kept (see NNTPArticleRanks); otherwise the
+ones stored are what the rules see.  An article is judged in every group
+it was posted to, with everything known about it (its header, the names
+of its files, and its text once archived), so it scores the same wherever
+it is found.  Collections then take on the best score and every tag of
+their articles.  Articles only the index still has (their headers were let
+go of) keep the scores they had.
 A dry run changes nothing; it only counts (and shows a few examples).
 """
 
 from fnmatch import fnmatchcase
 from os.path import isfile
 
-from sqlalchemy import bindparam
 from sqlalchemy import literal
-from sqlalchemy import update
 
+from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPFilterRule import FilterItem
-from .NNTPFilterRule import tags_from_text
 from .NNTPFilterRule import tags_to_text
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
@@ -103,14 +107,17 @@ class NNTPPurger:
     Applies filters to what is already stored; see the module description
     """
 
-    def __init__(self, filters, rescore=False, drop=True, dry_run=False,
-                 nzb=False, groups=None, chunk_size=DEFAULT_PURGE_CHUNK_SIZE,
+    def __init__(self, filters, index_db=None, rescore=False, drop=True,
+                 dry_run=False, nzb=False, groups=None,
+                 chunk_size=DEFAULT_PURGE_CHUNK_SIZE,
                  samples=DEFAULT_PURGE_SAMPLES):
         """
         Prepares a purge
 
         - filters: the NNTPFilter to apply
-        - rescore: work scores and tags out again (and save them)
+        - index_db: the index database (where the scores and tags of
+          articles are kept; see NNTPArticleRanks)
+        - rescore: work scores and tags out again (from 0) and save them
         - drop: delete what the drop rules match (otherwise only scores and
           tags change)
         - dry_run: change nothing; only count
@@ -121,6 +128,7 @@ class NNTPPurger:
         - samples: how many examples of what is dropped are kept
         """
         self.filters = filters
+        self.index_db = index_db
         self.rescore = bool(rescore)
         self.drop = bool(drop)
         self.dry_run = bool(dry_run)
@@ -134,6 +142,31 @@ class NNTPPurger:
         self.headers = PurgeCount()
         self.index = PurgeCount()
         self.archive = PurgeCount()
+
+        # The index database (opened when first needed)
+        self._index = None
+
+    def close(self):
+        """
+        Lets go of the index database
+        """
+        if self._index is not None:
+            self._index.close()
+            self._index = None
+
+    def _index_session(self, db_file=None):
+        """
+        Returns a session to the index database; None if nothing was ever
+        indexed
+        """
+        db_file = db_file or self.index_db
+        if self._index is None:
+            if not db_file or not NNTPIndexDatabase.exists(db_file):
+                return None
+
+            self._index = NNTPIndexDatabase.from_engine(db_file)
+
+        return self._index.session()
 
     def _in_scope(self, groups):
         """
@@ -153,17 +186,24 @@ class NNTPPurger:
             count.samples.append((
                 ', '.join(sorted(groups)), subject, poster, rule.name))
 
-    def _verdict(self, groups, item, score, tags):
+    def _judge(self, groups, item, stored):
         """
-        Returns what our filters make of an item (see NNTPFilter.check())
+        Returns what our filters make of an item (see NNTPFilter.check());
+        stored is the (score, tags) it has now
         """
+        score, tags = stored
         return self.filters.check_item(
-            groups, item, score=score or 0, tags=tags_from_text(tags),
+            groups, item, score=score or 0, tags=frozenset(tags),
             rescore=self.rescore)
 
     def purge_headers(self, group, group_db_file):
         """
         Applies our filters to the headers cached for a group
+
+        Every article is judged in all the groups it was posted to (its
+        Xref), with what the index knows about it too (its file names and
+        text, when a rule needs them), so it is judged the same way
+        wherever it is found.
 
         Returns True if it ran (False if nothing was ever cached for it).
         """
@@ -174,13 +214,7 @@ class NNTPPurger:
         count = self.headers
         cache = NNTPGroupDatabase.from_file(group_db_file)
         session = cache.session()
-        groups = (group, )
-
-        # Rescored articles are saved with this
-        statement = update(Article.__table__)\
-            .where(Article.message_id == bindparam('mid'))\
-            .values(score=bindparam('new_score'),
-                    tags=bindparam('new_tags'))
+        index = self._index_session()
 
         # Where we are (by article number)
         last = None
@@ -190,7 +224,7 @@ class NNTPPurger:
                 query = session.query(
                     Article.message_id, Article.article_no, Article.subject,
                     Article.poster, Article.size, Article.posted_date,
-                    Article.score, Article.tags)
+                    Article.xref)
 
                 if last is not None:
                     query = query.filter(Article.article_no > last)
@@ -203,17 +237,29 @@ class NNTPPurger:
                     break
 
                 last = rows[-1].article_no
+                ids = [row.message_id for row in rows]
+
+                # What they score now, and what else is known about them
+                stored = NNTPArticleRanks.load(index, ids) if index else {}
+                known = NNTPArticleRanks.known(
+                    index, ids, bodies=self.filters.uses('body'),
+                    filenames=self.filters.uses('filename')) \
+                    if index else {}
 
                 dropped = []
-                changed = []
+                changed = {}
                 for row in rows:
                     count.checked += 1
+                    groups = [group, *(row.xref or '').split()]
+                    extra = known.get(row.message_id, {})
                     item = FilterItem(
                         subject=row.subject, poster=row.poster,
                         message_id=row.message_id, posted=row.posted_date,
-                        size=row.size)
+                        size=row.size, body=extra.get('body'),
+                        filenames=extra.get('filenames'))
 
-                    verdict = self._verdict(groups, item, row.score, row.tags)
+                    now = stored.get(row.message_id, (0, frozenset()))
+                    verdict = self._judge(groups, item, now)
                     if self.drop and verdict.drop is not None:
                         dropped.append(row.message_id)
                         self._sample(
@@ -221,13 +267,10 @@ class NNTPPurger:
                             verdict.drop)
                         continue
 
-                    if self.rescore:
-                        tags = tags_to_text(verdict.tags)
-                        if verdict.score != row.score or tags != row.tags:
-                            changed.append({
-                                'mid': row.message_id,
-                                'new_score': verdict.score,
-                                'new_tags': tags})
+                    if self.rescore and (verdict.score, verdict.tags) != (
+                            now[0], frozenset(now[1])):
+                        changed[row.message_id] = (
+                            verdict.score, verdict.tags)
 
                 count.dropped += len(dropped)
                 count.rescored += len(changed)
@@ -239,29 +282,139 @@ class NNTPPurger:
                     session.query(Article)\
                         .filter(Article.message_id.in_(ids))\
                         .delete(synchronize_session=False)
-
-                if changed:
-                    session.execute(statement, changed)
-
                 session.commit()
+
+                if index is not None and (changed or dropped):
+                    NNTPArticleRanks.save(index, changed)
+                    NNTPArticleRanks.forget(index, dropped)
+                    index.commit()
 
         finally:
             cache.close()
 
         return True
 
-    def purge_index(self, db_file):
+    def purge_archive(self, db_file=None):
         """
-        Applies our filters to the collections indexed (see NNTPIndexer)
+        Applies our filters to the archived posts (see NNTPArchiver); they
+        are judged knowing their text and file names
 
         Returns True if it ran (False if nothing was ever indexed).
         """
-        if not NNTPIndexDatabase.exists(db_file):
+        session = self._index_session(db_file)
+        if session is None:
+            # Nothing was ever indexed (or archived)
+            return False
+
+        count = self.archive
+
+        # Their text (and file names) are only read when a rule needs them
+        bodies = self.filters.uses('body')
+        names = self.filters.uses('filename')
+
+        # Where we are (by post id)
+        last = 0
+
+        while True:
+            posts = session.query(
+                ArchivedPost.id, ArchivedPost.message_id,
+                ArchivedPost.subject, ArchivedPost.poster,
+                ArchivedPost.posted, ArchivedPost.size,
+                ArchivedPost.text if bodies else literal(None))\
+                .filter(ArchivedPost.id > last)\
+                .order_by(ArchivedPost.id)\
+                .limit(self.chunk_size).all()
+
+            if not posts:
+                # We're done
+                break
+
+            last = posts[-1].id
+            ids = [p.message_id for p in posts]
+
+            # The groups each one was found in, what they score now, and
+            # their file names (from the archive and the index)
+            groups = {}
+            for chunk in chunked(ids):
+                for message_id, name in session.query(
+                        ArchiveGroup.message_id, ArchiveGroup.name)\
+                        .filter(ArchiveGroup.message_id.in_(chunk)):
+                    groups.setdefault(message_id, set()).add(name)
+
+            stored = NNTPArticleRanks.load(session, ids)
+            known = NNTPArticleRanks.known(
+                session, ids, filenames=True) if names else {}
+
+            dropped = []
+            changed = {}
+            for post in posts:
+                post_groups = groups.get(post.message_id, set())
+                if not self._in_scope(post_groups):
+                    continue
+
+                count.checked += 1
+                item = FilterItem(
+                    subject=post.subject, poster=post.poster,
+                    message_id=post.message_id, posted=post.posted,
+                    size=post.size, body=post[-1] if bodies else None,
+                    filenames=known.get(post.message_id, {}).get(
+                        'filenames', []) if names else None)
+
+                now = stored.get(post.message_id, (0, frozenset()))
+                verdict = self._judge(post_groups, item, now)
+
+                if self.drop and verdict.drop is not None:
+                    dropped.append(post.message_id)
+                    self._sample(
+                        count, post_groups, post.subject, post.poster,
+                        verdict.drop)
+                    continue
+
+                if self.rescore and (verdict.score, verdict.tags) != (
+                        now[0], frozenset(now[1])):
+                    changed[post.message_id] = (verdict.score, verdict.tags)
+
+            count.dropped += len(dropped)
+            count.rescored += len(changed)
+
+            if self.dry_run or not (dropped or changed):
+                continue
+
+            for chunk in chunked(dropped):
+                session.query(ArchiveFile)\
+                    .filter(ArchiveFile.message_id.in_(chunk))\
+                    .delete(synchronize_session=False)
+                session.query(ArchiveGroup)\
+                    .filter(ArchiveGroup.message_id.in_(chunk))\
+                    .delete(synchronize_session=False)
+                session.query(ArchivedPost)\
+                    .filter(ArchivedPost.message_id.in_(chunk))\
+                    .delete(synchronize_session=False)
+
+            NNTPArticleRanks.save(session, changed)
+            NNTPArticleRanks.forget(session, dropped)
+            session.commit()
+
+        return True
+
+    def purge_index(self, db_file=None):
+        """
+        Applies our filters to the collections indexed (see NNTPIndexer):
+        their files (and articles) are dropped the way the rules say, and
+        when rescoring, each collection takes on its articles' scores and
+        tags again (see NNTPArticleRanks)
+
+        Run it after purge_headers() and purge_archive(), so the scores it
+        reads are the new ones.
+
+        Returns True if it ran (False if nothing was ever indexed).
+        """
+        session = self._index_session(db_file)
+        if session is None:
             # Nothing was ever indexed
             return False
 
-        indexer = NNTPIndexer(db_file)
-        session = indexer.session()
+        indexer = NNTPIndexer(db_file or self.index_db)
         count = self.index
 
         # Articles only differ from the rest of their file by their
@@ -327,51 +480,52 @@ class NNTPPurger:
         wanted = {f.collection_id for f in files
                   if self._in_scope(groups.get(f.id, ()))}
 
+        # Their articles (and what they score)
+        segments = {}
+        for ids in chunked([f.id for f in files
+                            if f.collection_id in wanted]):
+            for message_id, file_id, size in session.query(
+                    Segment.message_id, Segment.file_id, Segment.size)\
+                    .filter(Segment.file_id.in_(ids)):
+                segments.setdefault(file_id, []).append((message_id, size))
+
+        ranks = NNTPArticleRanks.load(session, [
+            message_id for found in segments.values()
+            for message_id, _ in found])
+
+        def best(file_id):
+            # The best score (and every tag) of a file's articles
+            found = [ranks.get(m, (0, frozenset()))
+                     for m, _ in segments.get(file_id, ())]
+            if not found:
+                return 0, frozenset()
+            return max(s for s, _ in found), frozenset().union(
+                *(t for _, t in found))
+
         # What we decide:
         #  - lost_files: files dropped as a whole
         #  - lost_segments: articles dropped on their own
-        #  - best: collection id -> (best score, tags) of what is kept
+        #  - kept: the collections something is left of
         lost_files = []
         lost_segments = []
-        best = {}
-
-        def keep(collection_id, verdict):
-            found = best.get(collection_id)
-            if found is None:
-                best[collection_id] = (verdict.score, set(verdict.tags))
-
-            else:
-                best[collection_id] = (
-                    max(found[0], verdict.score), found[1] | verdict.tags)
-
-        # Look at the articles themselves only when a rule needs to
-        segments = {}
-        if each_segment:
-            for ids in chunked([f.id for f in files
-                                if f.collection_id in wanted]):
-                for message_id, file_id, size in session.query(
-                        Segment.message_id, Segment.file_id, Segment.size)\
-                        .filter(Segment.file_id.in_(ids)):
-                    segments.setdefault(file_id, []).append(
-                        (message_id, size))
+        kept = set()
 
         for entry in files:
             if entry.collection_id not in wanted:
                 continue
 
-            collection = stored[entry.collection_id]
             file_groups = groups.get(entry.id, set())
             scoped = self._in_scope(file_groups)
 
             if not each_segment:
-                # The whole file at once
+                # The whole file at once (with its best article's score)
                 count.checked += 1
                 item = FilterItem(
                     subject=entry.subject, poster=entry.poster,
                     posted=entry.first_posted, filenames=[entry.filename])
 
-                verdict = self._verdict(
-                    file_groups, item, collection.score, collection.tags)
+                verdict = self.filters.check_item(
+                    file_groups, item, *best(entry.id), rescore=False)
 
                 if scoped and self.drop and verdict.drop is not None:
                     lost_files.append(entry.id)
@@ -380,11 +534,11 @@ class NNTPPurger:
                         verdict.drop)
                     continue
 
-                keep(entry.collection_id, verdict)
+                kept.add(entry.collection_id)
                 continue
 
             # Article by article
-            kept = 0
+            left = 0
             for message_id, size in segments.get(entry.id, ()):
                 count.checked += 1
                 item = FilterItem(
@@ -392,21 +546,24 @@ class NNTPPurger:
                     message_id=message_id, posted=entry.first_posted,
                     size=size, filenames=[entry.filename])
 
-                verdict = self._verdict(
-                    file_groups, item, collection.score, collection.tags)
+                score, tags = ranks.get(message_id, (0, frozenset()))
+                verdict = self.filters.check_item(
+                    file_groups, item, score, tags, rescore=False)
 
                 if scoped and self.drop and verdict.drop is not None:
                     lost_segments.append(message_id)
-                    if kept == 0 and len(count.samples) < self.max_samples:
+                    if left == 0 and len(count.samples) < self.max_samples:
                         self._sample(
                             count, file_groups, entry.subject, entry.poster,
                             verdict.drop)
                     continue
 
-                kept += 1
-                keep(entry.collection_id, verdict)
+                left += 1
 
-            if not kept:
+            if left:
+                kept.add(entry.collection_id)
+
+            else:
                 # Nothing is left of it
                 lost_files.append(entry.id)
 
@@ -417,183 +574,83 @@ class NNTPPurger:
         count.files += len(lost_files)
 
         # Collections with nothing left are removed
-        emptied = sorted(wanted - set(best))
+        emptied = sorted(wanted - kept)
         count.collections += len(emptied)
 
-        # The ones whose score or tags change
-        rescored = {}
+        if not self.dry_run and (lost_files or lost_segments):
+            # Let go of the articles and files dropped (and their ranks)
+            gone = list(lost_segments)
+            for file_id in lost_files:
+                gone.extend(m for m, _ in segments.get(file_id, ()))
+
+            for ids in chunked(lost_segments):
+                session.query(Segment)\
+                    .filter(Segment.message_id.in_(ids))\
+                    .delete(synchronize_session=False)
+
+            for ids in chunked(lost_files):
+                session.query(Segment)\
+                    .filter(Segment.file_id.in_(ids))\
+                    .delete(synchronize_session=False)
+                session.query(FileGroup)\
+                    .filter(FileGroup.file_id.in_(ids))\
+                    .delete(synchronize_session=False)
+                session.query(CollectionFile)\
+                    .filter(CollectionFile.id.in_(ids))\
+                    .delete(synchronize_session=False)
+
+            NNTPArticleRanks.forget(session, gone)
+
+            # Bring the totals of what is left up to date
+            touched = {f.id for f in files if f.collection_id in wanted} \
+                - lost_set
+            indexer._recount(session, touched, wanted)
+
+            # Remove the collections nothing is left of (children first;
+            # the database servers enforce their links)
+            for ids in chunked(emptied):
+                session.query(CollectionMeta)\
+                    .filter(CollectionMeta.collection_id.in_(ids))\
+                    .delete(synchronize_session=False)
+                session.query(CollectionAlias)\
+                    .filter(CollectionAlias.collection_id.in_(ids))\
+                    .delete(synchronize_session=False)
+                session.query(Collection)\
+                    .filter(Collection.id.in_(ids))\
+                    .delete(synchronize_session=False)
+
         if self.rescore:
-            for collection_id, (score, tags) in best.items():
+            # Each collection takes on its articles' scores and tags (the
+            # ones what is dropped leaves behind)
+            gone = set(lost_segments)
+            for file_id in lost_files:
+                gone.update(m for m, _ in segments.get(file_id, ()))
+
+            for collection_id in sorted(kept):
+                files_of = [f.id for f in files
+                            if f.collection_id == collection_id and
+                            f.id not in lost_set]
+                found = [ranks.get(m, (0, frozenset()))
+                         for file_id in files_of
+                         for m, _ in segments.get(file_id, ())
+                         if m not in gone]
+                score = max((s for s, _ in found), default=0)
+                tags = frozenset().union(*(t for _, t in found))
+
                 collection = stored[collection_id]
                 if score != collection.score or \
                         tags_to_text(tags) != collection.tags:
-                    rescored[collection_id] = (score, tags)
-            count.rescored += len(rescored)
+                    count.rescored += 1
+                    if not self.dry_run:
+                        indexer.score_collections(
+                            session, {collection_id: (score, tags)},
+                            replace=True)
 
-        if self.dry_run or not (lost_files or lost_segments or rescored):
-            # Nothing to change
-            return
+        if not self.dry_run:
+            session.commit()
 
-        # Let go of the articles and files dropped
-        for ids in chunked(lost_segments):
-            session.query(Segment)\
-                .filter(Segment.message_id.in_(ids))\
-                .delete(synchronize_session=False)
-
-        for ids in chunked(lost_files):
-            session.query(Segment)\
-                .filter(Segment.file_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(FileGroup)\
-                .filter(FileGroup.file_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(CollectionFile)\
-                .filter(CollectionFile.id.in_(ids))\
-                .delete(synchronize_session=False)
-
-        # Bring the totals of what is left up to date
-        touched_files = {f.id for f in files if f.collection_id in wanted} \
-            - lost_set
-        indexer._recount(session, touched_files, wanted)
-
-        # Remove the collections nothing is left of (children first; the
-        # database servers enforce their links)
-        for ids in chunked(emptied):
-            session.query(CollectionMeta)\
-                .filter(CollectionMeta.collection_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(CollectionAlias)\
-                .filter(CollectionAlias.collection_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(Collection)\
-                .filter(Collection.id.in_(ids))\
-                .delete(synchronize_session=False)
-
-        if rescored:
-            indexer.score_collections(session, rescored, replace=True)
-
-        session.commit()
-
-        # Our totals were changed directly in the database
-        session.expunge_all()
-
-    def purge_archive(self, db_file):
-        """
-        Applies our filters to the archived posts (see NNTPArchiver)
-
-        Returns True if it ran (False if nothing was ever indexed).
-        """
-        if not NNTPIndexDatabase.exists(db_file):
-            # Nothing was ever indexed (or archived)
-            return False
-
-        database = NNTPIndexDatabase.from_engine(db_file)
-        session = database.session()
-        count = self.archive
-
-        # Their text (and file names) are only read when a rule needs them
-        bodies = self.filters.uses('body')
-        names = self.filters.uses('filename')
-
-        # Where we are (by post id)
-        last = 0
-
-        try:
-            while True:
-                posts = session.query(
-                    ArchivedPost.id, ArchivedPost.message_id,
-                    ArchivedPost.subject, ArchivedPost.poster,
-                    ArchivedPost.posted, ArchivedPost.size,
-                    ArchivedPost.score, ArchivedPost.tags,
-                    ArchivedPost.text if bodies else literal(None))\
-                    .filter(ArchivedPost.id > last)\
-                    .order_by(ArchivedPost.id)\
-                    .limit(self.chunk_size).all()
-
-                if not posts:
-                    # We're done
-                    break
-
-                last = posts[-1].id
-
-                # The groups each one was found in (and its file names)
-                groups = {}
-                filenames = {}
-                for ids in chunked([p.message_id for p in posts]):
-                    for message_id, name in session.query(
-                            ArchiveGroup.message_id, ArchiveGroup.name)\
-                            .filter(ArchiveGroup.message_id.in_(ids)):
-                        groups.setdefault(message_id, set()).add(name)
-
-                    if not names:
-                        continue
-
-                    for message_id, filename in session.query(
-                            ArchiveFile.message_id, ArchiveFile.filename)\
-                            .filter(ArchiveFile.message_id.in_(ids)):
-                        filenames.setdefault(message_id, []).append(
-                            filename)
-
-                dropped = []
-                changed = []
-                for post in posts:
-                    post_groups = groups.get(post.message_id, set())
-                    if not self._in_scope(post_groups):
-                        continue
-
-                    count.checked += 1
-                    item = FilterItem(
-                        subject=post.subject, poster=post.poster,
-                        message_id=post.message_id, posted=post.posted,
-                        size=post.size, body=post[-1] if bodies else None,
-                        filenames=filenames.get(post.message_id, [])
-                        if names else None)
-
-                    verdict = self._verdict(
-                        post_groups, item, post.score, post.tags)
-
-                    if self.drop and verdict.drop is not None:
-                        dropped.append(post.message_id)
-                        self._sample(
-                            count, post_groups, post.subject, post.poster,
-                            verdict.drop)
-                        continue
-
-                    if self.rescore:
-                        tags = tags_to_text(verdict.tags)
-                        if verdict.score != post.score or tags != post.tags:
-                            changed.append((post.id, verdict.score, tags))
-
-                count.dropped += len(dropped)
-                count.rescored += len(changed)
-
-                if self.dry_run or not (dropped or changed):
-                    continue
-
-                for ids in chunked(dropped):
-                    session.query(ArchiveFile)\
-                        .filter(ArchiveFile.message_id.in_(ids))\
-                        .delete(synchronize_session=False)
-                    session.query(ArchiveGroup)\
-                        .filter(ArchiveGroup.message_id.in_(ids))\
-                        .delete(synchronize_session=False)
-                    session.query(ArchivedPost)\
-                        .filter(ArchivedPost.message_id.in_(ids))\
-                        .delete(synchronize_session=False)
-
-                for post_id, score, tags in changed:
-                    session.query(ArchivedPost)\
-                        .filter(ArchivedPost.id == post_id)\
-                        .update({ArchivedPost.score: score,
-                                 ArchivedPost.tags: tags},
-                                synchronize_session=False)
-
-                session.commit()
-
-        finally:
-            database.close()
-
-        return True
+            # Our totals were changed directly in the database
+            session.expunge_all()
 
     def __str__(self):
         """

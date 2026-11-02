@@ -22,6 +22,7 @@ import pytest
 
 from newsreap.NNTPArchivePost import NNTPArchivePost
 from newsreap.NNTPArchiver import NNTPArchiver
+from newsreap.NNTPArticleRanks import NNTPArticleRanks
 from newsreap.NNTPSearchTerm import NNTPSearchTerm
 from newsreap.objects.index.Collection import Collection
 
@@ -356,8 +357,8 @@ def test_posts_are_narrowed_down_by_tag_score_and_time(archiver):
             ('file@x', 0, 'file'))):
         session.query(ArchivedPost).filter(
             ArchivedPost.message_id == message_id).update({
-                ArchivedPost.score: score, ArchivedPost.tags: tags,
                 ArchivedPost.posted: POSTED + timedelta(days=no)})
+        NNTPArticleRanks.save(session, {message_id: (score, tags.split())})
     session.commit()
 
     def found(**kwargs):

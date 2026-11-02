@@ -350,3 +350,65 @@ class NNTPConnection_Test(TestBase):
             sock._soft_reset()
             sock._buffer.write(data)
             assert sock._has_eod(len(data)) is expected, data
+
+
+def test_replies_never_carry_the_last_one_along(nntp_server):
+    """
+    A reply read straight after another (without a decoder) starts clean;
+    the buffer used to keep its old position, so the next reply followed
+    a run of NUL bytes and an XOVER lost its first line
+    """
+    from datetime import datetime
+    from tests.conftest import connect_to
+
+    for no in range(1, 4):
+        nntp_server.add_overview(
+            'alt.test', no, 'Subject %d' % no, 'p@x', datetime(2020, 1, 1),
+            'id%d@x' % no)
+
+    sock = connect_to(nntp_server, join_group=True)
+    sock.group('alt.test')
+
+    first = sock.send('LIST OVERVIEW.FMT').body.getvalue()
+    assert sock.send('LIST OVERVIEW.FMT').body.getvalue() == first
+    assert b'\x00' not in first
+
+    assert len(sock.xover('alt.test', 1, 3)) == 3
+    sock.close()
+
+
+def test_the_overview_format_is_asked_for_once(tmp_path):
+    """
+    LIST OVERVIEW.FMT is asked for before the first XOVER (once per
+    connection); a server that can't answer is taken to send an Xref
+    """
+    from datetime import datetime
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.conftest import connect_to
+    from newsreap.codecs.CodecArticleIndex import OVERVIEW_EXTRAS
+
+    with FakeNNTPServer(overview_fmt=(
+            'Subject:', 'From:', 'Date:', 'Message-ID:', 'References:',
+            ':bytes', ':lines', 'X-Extra:', 'Xref:')) as server:
+        server.add_overview('alt.test', 1, 'One', 'p@x', datetime(2020, 1, 1),
+                            'id1@x', extras=['junk', 'news alt.test:1 a.b:9'])
+
+        sock = connect_to(server, join_group=True)
+        sock.group('alt.test')
+        found = sock.xover('alt.test', 1, 1)
+        sock.xover('alt.test', 1, 1)
+        assert next(iter(found.values()))['xgroups'] == {
+            'alt.test': 1, 'a.b': 9}
+        assert sock.overview_format() == ('X-Extra:', 'Xref:')
+        assert [c for c in server.commands()
+                if c.startswith('LIST')] == ['LIST OVERVIEW.FMT']
+        sock.close()
+
+    with FakeNNTPServer(overview_fmt=None) as server:
+        server.add_overview('alt.test', 1, 'One', 'p@x', datetime(2020, 1, 1),
+                            'id1@x')
+        sock = connect_to(server, join_group=True)
+        sock.group('alt.test')
+        assert len(sock.xover('alt.test', 1, 1)) == 1
+        assert sock.overview_format() == OVERVIEW_EXTRAS
+        sock.close()

@@ -29,6 +29,7 @@ from sqlalchemy.exc import OperationalError
 from .objects.index.ArchiveFile import ArchiveFile
 from .objects.index.ArchiveGroup import ArchiveGroup
 from .objects.index.ArchivedPost import ArchivedPost
+from .objects.index.ArticleRank import ArticleRank
 from .objects.index.Collection import Collection
 from .objects.index.CollectionAlias import CollectionAlias
 from .objects.index.CollectionFile import CollectionFile

@@ -15,6 +15,7 @@
 from sqlalchemy import Column
 from sqlalchemy import Integer
 from sqlalchemy import String
+from sqlalchemy import Text
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 
@@ -50,13 +51,9 @@ class Article(ObjectBase):
     # Article Post Date
     posted_date = Column(DateTime, index=True)
 
-    # Article Score (worked out by the score rules of our filters; see
-    # NNTPFilter)
-    score = Column(Integer, default=0, nullable=False, index=True)
-
-    # The tags our filters gave it (space separated)
-    tags = Column(
-        String(256), default='', server_default='', nullable=False)
+    # The groups it was posted to (space separated, from its Xref); its
+    # score and tags are kept with the index (see ArticleRank)
+    xref = Column(Text, default='', server_default='', nullable=False)
 
     # There are to just to many articles to delete them individually.
     # The easiest way is to mark them for purging and clear them when

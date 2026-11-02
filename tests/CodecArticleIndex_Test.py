@@ -21,6 +21,7 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import pytest
 from os.path import dirname
 from os.path import abspath
 from datetime import datetime
@@ -117,3 +118,107 @@ class Codec_ArticleIndex(TestBase):
         # Garbage
         assert parse_date('garbage') is None
         assert parse_date('Mon, 31 Feb 2015 10:00:00 +0000') is None
+
+
+def overview(*fields):
+    """
+    Returns an overview (XOVER) line of the fields given (tab separated)
+    """
+    return '\t'.join(str(f) for f in fields).encode('utf-8')
+
+
+STANDARD = (1, 'Subject', 'poster@example.com', '01 Jan 2020 00:00:00 +0000',
+            '<id@x>', '', 1000, 10)
+
+
+def test_overview_lines_are_read_by_their_fields():
+    """
+    The first seven fields come in the order RFC 3977 gives them; the
+    Xref is found where LIST OVERVIEW.FMT says (or by its name)
+    """
+    from newsreap.codecs.CodecArticleIndex import CodecArticleIndex
+
+    entry = CodecArticleIndex().detect(
+        overview(*STANDARD, 'Xref: news.example a.b:1 c.d:7'))
+    assert (entry['id'], entry['subject'], entry['size'], entry['lines']) == (
+        'id@x', 'Subject', 1000, 10)
+    assert entry['xgroups'] == {'a.b': 1, 'c.d': 7}
+    assert entry['group'] == 'news.example'
+
+    # A server whose Xref comes after something else, without its name
+    codec = CodecArticleIndex(fields=('X-Extra:', 'Xref:'))
+    entry = codec.detect(overview(*STANDARD, 'extra', 'news a.b:1'))
+    assert entry['xgroups'] == {'a.b': 1}
+
+    # Not where we were told, but named
+    entry = codec.detect(overview(*STANDARD, 'Xref: news a.b:2'))
+    assert entry['xgroups'] == {'a.b': 2}
+
+    # No Xref at all
+    entry = CodecArticleIndex(fields=()).detect(overview(*STANDARD))
+    assert entry['xgroups'] == {}
+
+
+def test_empty_and_broken_fields_are_survived():
+    """
+    An empty subject or poster, a missing size or line count, and a line
+    with junk in it never stop the listing
+    """
+    from newsreap.codecs.CodecArticleIndex import CodecArticleIndex
+
+    codec = CodecArticleIndex()
+    entry = codec.detect(overview(
+        5, '', '', '01 Jan 2020 00:00:00 +0000', '<id@x>', '', '', ''))
+    assert (entry['subject'], entry['poster'], entry['size'],
+            entry['lines']) == ('', '', 0, -1)
+
+    # Not overview lines
+    assert codec.detect(b'224 Overview information follows') is None
+    assert codec.detect(overview('x', *STANDARD[1:])) is None
+    assert codec.detect(overview(*STANDARD[:4], '<>', '', 1, 1)) is None
+    assert codec.detect(b'\x00\x00' + overview(*STANDARD)) is None
+
+
+@pytest.mark.parametrize('raw, expected', [
+    # UTF-8 (very common now)
+    ('Café'.encode(), 'Café'),
+    # Not UTF-8: the server's encoding (latin-1 by default)
+    ('Café'.encode('latin-1'), 'Café'),
+    # RFC 2047 encoded words
+    (b'=?UTF-8?B?Q2Fmw6k=?= photos', 'Café photos'),
+    (b'=?iso-8859-1?q?Caf=E9?=', 'Café'),
+    (b'Re: =?utf-8?Q?na=C3=AFve?= question', 'Re: naïve question'),
+    # Broken or unknown ones are kept as they are
+    (b'=?bogus?B?xx?=', '=?bogus?B?xx?='),
+    (b'=?UTF-8?B?not base64?=', '=?UTF-8?B?not base64?='),
+])
+def test_subjects_and_posters_are_decoded(raw, expected):
+    """
+    Subjects and posters read as UTF-8 when they are, otherwise in the
+    server's encoding, with any RFC 2047 encoded words decoded
+    """
+    from newsreap.codecs.CodecArticleIndex import CodecArticleIndex
+
+    line = b'\t'.join([
+        b'1', raw, raw, b'01 Jan 2020 00:00:00 +0000', b'<id@x>', b'',
+        b'10', b'1'])
+    entry = CodecArticleIndex().detect(line)
+    assert entry['subject'] == expected
+    assert entry['poster'] == expected
+
+
+def test_overview_formats_are_read():
+    """
+    What LIST OVERVIEW.FMT lists after the first seven fields is what an
+    overview line holds after them
+    """
+    from newsreap.codecs.CodecArticleIndex import OVERVIEW_EXTRAS
+    from newsreap.codecs.CodecArticleIndex import overview_extras
+
+    standard = ['Subject:', 'From:', 'Date:', 'Message-ID:', 'References:',
+                ':bytes', ':lines']
+    assert overview_extras([*standard, 'Xref:full', '']) == ('Xref:full', )
+    assert overview_extras([*standard, 'X-A:', 'Xref:full']) == (
+        'X-A:', 'Xref:full')
+    assert overview_extras(standard) == ()
+    assert overview_extras([]) == OVERVIEW_EXTRAS

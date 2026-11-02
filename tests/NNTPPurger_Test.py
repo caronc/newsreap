@@ -21,6 +21,10 @@ import pytest
 from click.testing import CliRunner
 
 from newsreap.NNTPArchivePost import NNTPArchivePost
+from newsreap.NNTPArticleRanks import NNTPArticleRanks
+from newsreap.NNTPFilterRule import tags_from_text
+from newsreap.NNTPFilterRule import tags_to_text
+from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
 from newsreap.NNTPArchiver import NNTPArchiver
 from newsreap.NNTPFilter import NNTPFilter
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
@@ -51,17 +55,50 @@ from tests.NNTPIndexer_Test import release
 SPAMMER = 'Casino <bot@spam.example>'
 
 
-def headers(db_file):
+def headers(db_file, index_db):
     """
-    Returns the Message-ID -> (score, tags) of every header cached
+    Returns the Message-ID -> (score, tags) of every header cached (their
+    scores and tags are kept with the index; see NNTPArticleRanks)
     """
     db = NNTPGroupDatabase.from_file(db_file)
     try:
-        return {row.message_id: (row.score, row.tags) for row in
-                db.session().query(
-                    Article.message_id, Article.score, Article.tags)}
+        ids = [m for m, in db.session().query(Article.message_id)]
     finally:
         db.close()
+
+    return {m: (score, tags_to_text(tags)) for m, (score, tags) in
+            ranks(index_db, ids).items()}
+
+
+def ranks(index_db, message_ids):
+    """
+    Returns Message-ID -> (score, tags) of the articles given (0 and no
+    tags for the ones without a rank)
+    """
+    found = {m: (0, frozenset()) for m in message_ids}
+    if not NNTPIndexDatabase.exists(index_db):
+        return found
+
+    db = NNTPIndexDatabase.from_engine(index_db)
+    try:
+        found.update(NNTPArticleRanks.load(db.session(), message_ids))
+    finally:
+        db.close()
+
+    return found
+
+
+def rank(index_db, scores):
+    """
+    Gives articles a score and tags (Message-ID -> (score, tags text))
+    """
+    indexer = NNTPIndexer(index_db)
+    session = indexer.session(create=True)
+    NNTPArticleRanks.save(session, {
+        m: (score, tags_from_text(tags)) for m, (score, tags) in
+        scores.items()})
+    session.commit()
+    indexer.close()
 
 
 def collections(indexer):
@@ -97,8 +134,10 @@ def archived(archiver):
     """
     session = archiver.session()
     session.expire_all()
-    return {p.message_id: (p.score, p.tags)
-            for p in session.query(ArchivedPost)}
+    ids = [p.message_id for p in session.query(ArchivedPost)]
+    found = NNTPArticleRanks.load(session, ids)
+    return {m: (found.get(m, (0, ()))[0],
+                tags_to_text(found.get(m, (0, ()))[1])) for m in ids}
 
 
 def purge(paths, rules, caches=(GROUP, ), **kwargs):
@@ -106,11 +145,15 @@ def purge(paths, rules, caches=(GROUP, ), **kwargs):
     Runs a purge (with the rules given) over the header caches of the
     groups given, the index and the archive, and returns it
     """
-    purger = NNTPPurger(NNTPFilter(rules=rules), **kwargs)
-    for group in caches:
-        purger.purge_headers(group, paths[group])
-    purger.purge_index(paths['index'])
-    purger.purge_archive(paths['index'])
+    purger = NNTPPurger(
+        NNTPFilter(rules=rules), index_db=paths['index'], **kwargs)
+    try:
+        for group in caches:
+            purger.purge_headers(group, paths[group])
+        purger.purge_archive()
+        purger.purge_index()
+    finally:
+        purger.close()
     return purger
 
 
@@ -126,7 +169,7 @@ def test_purges_remove_matches_from_every_store(paths):
         ('ad@x', 'Cheap pills', SPAMMER))
 
     rules = [{'name': 'spam', 'poster': 'SPAM.example'}]
-    before = (headers(paths[GROUP]), collections(indexer), archived(archiver))
+    before = (headers(paths[GROUP], paths['index']), collections(indexer), archived(archiver))
     assert len(before[0]) == 24
 
     # A dry run counts, and changes nothing
@@ -135,14 +178,14 @@ def test_purges_remove_matches_from_every_store(paths):
     assert (found.index.files, found.index.collections) == (3, 1)
     assert (found.archive.checked, found.archive.dropped) == (2, 1)
     assert found.headers.samples[0][2:] == (SPAMMER, 'spam')
-    assert (headers(paths[GROUP]), collections(indexer),
+    assert (headers(paths[GROUP], paths['index']), collections(indexer),
             archived(archiver)) == before
 
     # Now for real
     found = purge(paths, rules)
     assert found.headers.dropped == 12
     assert all(not message_id.startswith('spam')
-               for message_id in headers(paths[GROUP]))
+               for message_id in headers(paths[GROUP], paths['index']))
     assert set(collections(indexer)) == {'Good'}
     assert collections(indexer)['Good'][:2] == (3, 12)
     assert set(archived(archiver)) == {'talk@x'}
@@ -178,14 +221,14 @@ def test_purges_only_reach_the_groups_given(paths):
     found = purge(paths, rules, caches=(GROUP, ), groups=['alt.binaries.t*'])
     assert found.headers.dropped == 12
     assert found.index.collections == 1
-    assert len(headers(paths[GROUP])) == 12
+    assert len(headers(paths[GROUP], paths['index'])) == 12
     assert set(collections(indexer)) == {'Good', 'Junk'}
 
     # The rule itself can be limited to groups too
     found = purge(paths, [{'poster': 'spam.example', 'groups': [OTHER]}],
                   caches=(GROUP, OTHER))
-    assert len(headers(paths[OTHER])) == 0
-    assert len(headers(paths[GROUP])) == 12
+    assert len(headers(paths[OTHER], paths['index'])) == 0
+    assert len(headers(paths[GROUP], paths['index'])) == 12
     assert set(collections(indexer)) == {'Good'}
     indexer.close()
 
@@ -193,7 +236,8 @@ def test_purges_only_reach_the_groups_given(paths):
 def test_purges_by_body_and_file_name_reach_where_they_are_known(paths):
     """
     Bodies are only known for archived posts and file names for indexed
-    files and archived posts, so rules on them only reach those
+    files and archived posts, so rules on them only reach those (and the
+    cached headers of the same articles)
     """
     cache(paths[GROUP], [*release('Good'), *release('Spam', poster=SPAMMER)])
     indexer = indexed(paths)
@@ -212,9 +256,12 @@ def test_purges_by_body_and_file_name_reach_where_they_are_known(paths):
     assert (found.headers.dropped, found.index.files,
             found.archive.dropped) == (0, 0, 2)
 
+    # The index knows the names of the files the cached headers belong to,
+    # so their headers go too (every copy of an article is judged with
+    # everything known about it)
     found = purge(paths, [{'filename': {'glob': '*.part03.rar'}}])
     assert (found.headers.dropped, found.index.files,
-            found.archive.dropped) == (0, 2, 0)
+            found.archive.dropped) == (8, 2, 0)
     assert collections(indexer)['Good'][:2] == (2, 8)
 
     found = purge(paths, [{'filename': {'glob': 'ad@x.*'}}])
@@ -294,7 +341,7 @@ def test_rescoring_works_scores_out_again(paths):
     assert found.index.rescored == 2
     assert found.archive.rescored == 1
 
-    scores = headers(paths[GROUP])
+    scores = headers(paths[GROUP], paths['index'])
     assert scores['good.1.1@example.com'] == (11, 'good')
     assert scores['good.2.1@example.com'] == (10, 'good')
     assert scores['other.1.1@example.com'] == (1, '')
@@ -309,7 +356,7 @@ def test_rescoring_works_scores_out_again(paths):
     rules[0]['tag'] = 'fine'
     purge(paths, rules, rescore=True, drop=False)
     assert collections(indexer)['Good'][2:] == (4, 'fine')
-    assert headers(paths[GROUP])['good.2.1@example.com'] == (3, 'fine')
+    assert headers(paths[GROUP], paths['index'])['good.2.1@example.com'] == (3, 'fine')
 
     # Nothing changes the second time
     found = purge(paths, rules, rescore=True, drop=False)
@@ -326,12 +373,7 @@ def test_purges_use_stored_scores_unless_rescoring(paths):
     rescoring, by the ones the rules give
     """
     cache(paths[GROUP], release('Good', files=1))
-    db = NNTPGroupDatabase.from_file(paths[GROUP])
-    db.session().query(Article).filter(
-        Article.message_id == 'good.1.1@example.com').update(
-        {Article.score: -90, Article.tags: 'junk'})
-    db.session().commit()
-    db.close()
+    rank(paths['index'], {'good.1.1@example.com': (-90, 'junk')})
 
     found = purge(paths, [{'score': '<-50'}], dry_run=True)
     assert found.headers.dropped == 1
@@ -368,7 +410,7 @@ def test_indexing_scores_tags_and_drops(paths):
     assert found['Meh'][2:] == (-1, '')
 
     # What was dropped is gone from the header cache too
-    assert len(headers(paths[GROUP])) == 16
+    assert len(headers(paths[GROUP], paths['index'])) == 16
 
     def names(**kwargs):
         return {c.name for c in indexer.find(**kwargs)}
@@ -402,11 +444,8 @@ def test_scores_from_the_scan_are_used_when_indexing(paths):
     given when they were cached
     """
     cache(paths[GROUP], release('Good', files=1))
-    db = NNTPGroupDatabase.from_file(paths[GROUP])
-    db.session().query(Article).update(
-        {Article.score: 4, Article.tags: 'old'})
-    db.session().commit()
-    db.close()
+    rank(paths['index'], {m: (4, 'old') for _, _, m in release(
+        'Good', files=1)})
 
     indexer = indexed(paths)
     assert collections(indexer)['Good'][2:] == (4, 'old')
@@ -438,6 +477,7 @@ def test_archiving_scores_and_drops(tmp_path):
 
         config = config_for(server, tmp_path / 'config.yaml')
         db_file = str(tmp_path / 'cache' / 'search' / ('%s.db' % GROUP))
+        index_db = str(tmp_path / 'cache' / 'index.db')
         runner = CliRunner()
 
         def nr(*args):
@@ -490,7 +530,7 @@ def test_archiving_scores_and_drops(tmp_path):
         assert 'Hello there' in result.output
         assert 'Hi all' in result.output
 
-    assert set(headers(db_file)) == {'talk@x'}
+    assert set(headers(db_file, index_db)) == {'talk@x'}
     archiver = NNTPArchiver(
         str(tmp_path / 'cache' / 'index.db'), default_hooks=False)
     assert archived(archiver) == {'talk@x': (3, 'chat')}
@@ -523,6 +563,7 @@ def test_filters_from_the_command_line(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         filters_file = tmp_path / 'filters.yaml'
         db_file = str(tmp_path / 'cache' / 'search' / ('%s.db' % GROUP))
+        index_db = str(tmp_path / 'cache' / 'index.db')
         runner = CliRunner()
 
         def nr(*args):
@@ -532,7 +573,7 @@ def test_filters_from_the_command_line(tmp_path):
         assert nr('update', 'groups').exit_code == 0
         assert nr('update', 'search', GROUP).exit_code == 0
         assert nr('update', 'index', GROUP).exit_code == 0
-        assert len(headers(db_file)) == 4
+        assert len(headers(db_file, index_db)) == 4
 
         # Nothing is saved yet
         assert 'There are no saved rules' in nr('filter', 'list').output
@@ -566,7 +607,7 @@ def test_filters_from_the_command_line(tmp_path):
         assert 'Dry run: nothing was changed.' in result.output
         assert 'run again with --save' in result.output
         assert "    poster:\n      glob: '*@SPAM.example>'\n" in result.output
-        assert len(headers(db_file)) == 4
+        assert len(headers(db_file, index_db)) == 4
 
         # The whole poster has to match (case matters without the i)
         result = nr('filter', 'purge', '--iposter', '*@spam.example', '-n')
@@ -586,7 +627,7 @@ def test_filters_from_the_command_line(tmp_path):
         assert result.exit_code == 0, result.output
         assert 'index: 2 file(s) dropped, 2 collection(s) removed' \
             in result.output
-        assert set(headers(db_file)) == {'g1@x', 'g2@x'}
+        assert set(headers(db_file, index_db)) == {'g1@x', 'g2@x'}
         assert not filters_file.exists()
 
         # A rule needs something to match on before it can be saved
@@ -611,7 +652,7 @@ def test_filters_from_the_command_line(tmp_path):
         result = nr('update', 'search', GROUP)
         assert result.exit_code == 0, result.output
         assert '0 article(s) cached, 1 dropped by filters' in result.output
-        assert 's3@x' not in headers(db_file)
+        assert 's3@x' not in headers(db_file, index_db)
 
         # Score and tag (saved), then search by tag
         result = nr('filter', 'score', '--iregex-subject', r'.*\.par2\b.*',
@@ -619,19 +660,19 @@ def test_filters_from_the_command_line(tmp_path):
         assert result.exit_code == 0, result.output
         assert '%s: 0 of 2 header(s) dropped, 1 rescored' % GROUP \
             in result.output
-        assert headers(db_file)['g2@x'] == (10, 'recovery')
+        assert headers(db_file, index_db)['g2@x'] == (10, 'recovery')
 
         # Scanning the same articles again works their scores and tags out
         # from 0 again (they never add up)
         for _ in range(2):
             result = nr('update', 'search', GROUP, '--force')
             assert result.exit_code == 0, result.output
-            assert headers(db_file)['g2@x'] == (10, 'recovery')
-            assert headers(db_file)['g1@x'] == (0, '')
+            assert headers(db_file, index_db)['g2@x'] == (10, 'recovery')
+            assert headers(db_file, index_db)['g1@x'] == (0, '')
 
         for _ in range(2):
             assert nr('filter', 'rescore').exit_code == 0
-            assert headers(db_file)['g2@x'] == (10, 'recovery')
+            assert headers(db_file, index_db)['g2@x'] == (10, 'recovery')
 
         # Indexing them again leaves the collection as it was
         for _ in range(2):
@@ -690,7 +731,16 @@ def test_filters_from_the_command_line(tmp_path):
         assert 'good.' not in result.output
 
         for command in (('search', '--score', '10'),
+                        ('search', '--score', 'garbage'),
                         ('search', '--after', 'whenever'),
+                        ('search', '--after', ''),
+                        ('search', '--after', '99999999d'),
+                        ('search', '--posts', '--before', '9999999999y'),
+                        ('search', '-t', '!'),
+                        ('search', '-t', '  '),
+                        ('update', 'search', GROUP, '--date-from', 'x'),
+                        ('update', 'search', GROUP, '--date-to', ''),
+                        ('filter', 'purge', '--after', '99999999d'),
                         ('search', '--after', '1d', '--before', '2d'),
                         ('search', '-t', 'a, !a'),
                         ('nzb', 'list', '--score', 'lots')):

@@ -278,18 +278,22 @@ def run(ctx, purger, groups, rule=None):
             click.echo('%s: %d of %d header(s) dropped, %d rescored' % (
                 name, dropped, checked, rescored))
 
-    # The index and the archive (shared by every group)
-    index_db = settings.index_database()
-    if purger.purge_index(index_db):
-        count = purger.index
-        click.echo(
-            'index: %d file(s) dropped, %d collection(s) removed, %d '
-            'rescored' % (count.files, count.collections, count.rescored))
+    # The archive, then the index (shared by every group); the index goes
+    # last so its collections take on the scores just worked out
+    try:
+        if purger.purge_archive():
+            count = purger.archive
+            click.echo('archive: %d of %d post(s) dropped, %d rescored' % (
+                count.dropped, count.checked, count.rescored))
 
-    if purger.purge_archive(index_db):
-        count = purger.archive
-        click.echo('archive: %d of %d post(s) dropped, %d rescored' % (
-            count.dropped, count.checked, count.rescored))
+        if purger.purge_index():
+            count = purger.index
+            click.echo(
+                'index: %d file(s) dropped, %d collection(s) removed, %d '
+                'rescored' % (count.files, count.collections, count.rescored))
+
+    finally:
+        purger.close()
 
     samples = [*purger.headers.samples, *purger.index.samples,
                *purger.archive.samples]
@@ -381,7 +385,8 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
 
         # Every saved rule; scores and tags are worked out again too
         purger = NNTPPurger(
-            filters, rescore=True, dry_run=dry_run, nzb=nzb,
+            filters, index_db=ctx['NNTPSettings'].index_database(),
+            rescore=True, dry_run=dry_run, nzb=nzb,
             groups=scope(ctx, groups) if groups else None,
             samples=show)
         run(ctx, purger, groups)
@@ -395,7 +400,9 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
 
     # Only this rule; the scores and tags stored are what it sees
     purger = NNTPPurger(
-        NNTPFilter(rules=[rule]), rescore=False, dry_run=dry_run, nzb=nzb,
+        NNTPFilter(rules=[rule]),
+        index_db=ctx['NNTPSettings'].index_database(), rescore=False,
+        dry_run=dry_run, nzb=nzb,
         groups=scope(ctx, groups) if groups else None,
         samples=show)
     run(ctx, purger, groups, rule)
@@ -453,7 +460,8 @@ def filter_score(ctx, conditions, value, tags, dry_run, save, nzb):
     # Every saved rule, plus this one
     combined = NNTPFilter(rules=[*filters, rule])
     purger = NNTPPurger(
-        combined, rescore=True, drop=False, dry_run=dry_run, nzb=nzb,
+        combined, index_db=ctx['NNTPSettings'].index_database(),
+        rescore=True, drop=False, dry_run=dry_run, nzb=nzb,
         groups=scope(ctx, groups) if groups else None)
     run(ctx, purger, groups, rule)
     save_rule(ctx, filters, rule, save, dry_run)
@@ -477,7 +485,8 @@ def filter_rescore(ctx, groups, dry_run, nzb):
     """
     filters = load_filters(ctx)
     purger = NNTPPurger(
-        filters, rescore=True, drop=False, dry_run=dry_run, nzb=nzb,
+        filters, index_db=ctx['NNTPSettings'].index_database(),
+        rescore=True, drop=False, dry_run=dry_run, nzb=nzb,
         groups=scope(ctx, groups) if groups else None)
     run(ctx, purger, groups)
 

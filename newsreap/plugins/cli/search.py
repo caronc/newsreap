@@ -30,12 +30,19 @@ except ImportError:
 from newsreap.objects.group.Article import Article
 from newsreap.objects.nntp.Common import get_groups
 
+from itertools import islice
+from types import SimpleNamespace
+
 from sqlalchemy import and_
 from sqlalchemy import func
+from sqlalchemy import literal
 
 from newsreap.NNTPArchiver import NNTPArchiver
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPIndexer import NNTPIndexer
+from newsreap.NNTPArticleRanks import NNTPArticleRanks
+from newsreap.NNTPFilterRule import tags_to_text
+from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
 from newsreap.NNTPIndexer import COLLECTION_FIELDS
 from newsreap.NNTPIndexer import keyword_terms
 from newsreap.NNTPSearchTerm import SEARCH_ANY
@@ -47,6 +54,9 @@ from newsreap.CliOptions import ranked
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
+
+# How many cached headers are looked at a time (with --raw)
+RAW_PAGE_SIZE = 1000
 
 # What each kind of search can look at (see NNTPSearchTerm)
 POST_FIELDS = (SEARCH_ANY, *SEARCH_FIELDS)
@@ -86,6 +96,14 @@ def search_raw(ctx, groups, keywords, rank, terms, case_sensitive):
     Searches the article headers 'nr update search' cached (the ones not
     indexed yet, or not let go of yet)
     """
+    # Where the articles' scores and tags are (if anything was ever indexed)
+    index = None
+    index_session = None
+    index_db = ctx['NNTPSettings'].index_database()
+    if NNTPIndexDatabase.exists(index_db):
+        index = NNTPIndexDatabase.from_engine(index_db)
+        index_session = index.session()
+
     for name in groups:
         db_file = ctx['NNTPSettings'].group_database(name)
         if not isfile(db_file):
@@ -121,18 +139,45 @@ def search_raw(ctx, groups, keywords, rank, terms, case_sensitive):
 
             query = query.filter(~found if term.negate else found)
 
+        # When they were posted is narrowed down here; their scores and
+        # tags are kept with the index (see NNTPArticleRanks)
         query = rank_query(
-            query, Article.score, Article.tags,
-            (Article.posted_date, Article.posted_date), **rank)\
-            .order_by(Article.score.desc(), Article.article_no)
+            query, literal(0), literal(''),
+            (Article.posted_date, Article.posted_date),
+            after=rank.get('after'), before=rank.get('before'))\
+            .order_by(Article.article_no)
 
         click.echo('%s:' % name)
-        for entry in query:
-            click.echo('  [%.5d] %s%s' % (
-                entry.article_no, entry.subject, rank_text(entry)))
+        entries = iter(query.yield_per(RAW_PAGE_SIZE))
+        while True:
+            page = list(islice(entries, RAW_PAGE_SIZE))
+            if not page:
+                break
+
+            ranks = NNTPArticleRanks.load(
+                index_session, [entry.message_id for entry in page]) \
+                if index_session is not None else {}
+
+            for entry in page:
+                score, tags = ranks.get(entry.message_id, (0, frozenset()))
+                if not NNTPArticleRanks.matches(
+                        score, tags, tags_wanted=rank.get('tags'),
+                        without_tags=rank.get('without_tags'),
+                        min_score=rank.get('min_score'),
+                        max_score=rank.get('max_score'),
+                        scores=rank.get('scores')):
+                    continue
+
+                click.echo('  [%.5d] %s%s' % (
+                    entry.article_no, entry.subject, rank_text(
+                        SimpleNamespace(
+                            score=score, tags=tags_to_text(tags)))))
 
         session.close()
         db.close()
+
+    if index is not None:
+        index.close()
 
 
 def search_posts(ctx, keywords, groups, limit, rank, terms,
@@ -148,13 +193,21 @@ def search_posts(ctx, keywords, groups, limit, rank, terms,
                 "Nothing archived yet; run 'nr update archive' first.")
             return
 
-        for post in archiver.find(
-                keywords, groups=groups, limit=limit,
-                case_sensitive=case_sensitive, terms=terms, **rank):
+        found = archiver.find(
+            keywords, groups=groups, limit=limit,
+            case_sensitive=case_sensitive, terms=terms, **rank)
+
+        # Their scores and tags (kept with every article's)
+        ranks = NNTPArticleRanks.load(
+            archiver.session(), [post.message_id for post in found])
+
+        for post in found:
+            score, tags = ranks.get(post.message_id, (0, frozenset()))
             click.echo('%s  %-24.24s  %s%s' % (
                 post.posted.strftime('%Y-%m-%d %H:%M') if post.posted
                 else '????-??-?? ??:??', post.poster, post.subject,
-                rank_text(post)))
+                rank_text(SimpleNamespace(
+                    score=score, tags=tags_to_text(tags)))))
             click.echo('    <%s>' % post.message_id)
 
             snippet = archiver.snippet(post, keywords, terms)

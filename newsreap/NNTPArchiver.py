@@ -39,6 +39,7 @@ from os.path import join
 from tempfile import gettempdir
 
 from sqlalchemy import and_
+from sqlalchemy import literal
 from sqlalchemy import literal_column
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -46,9 +47,8 @@ from sqlalchemy import text
 
 from .HookManager import HookManager
 from .NNTPArchivePost import NNTPArchivePost
+from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPConnectionRequest import NNTPConnectionRequest
-from .NNTPFilterRule import tags_from_text
-from .NNTPFilterRule import tags_to_text
 from .NNTPSearchTerm import SEARCH_ANY
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
@@ -69,6 +69,8 @@ from .objects.index.ArchiveFile import ArchiveFile
 from .objects.index.ArchiveGroup import ArchiveGroup
 from .objects.index.ArchivedPost import ArchiveKind
 from .objects.index.ArchivedPost import ArchivedPost
+from .objects.index.CollectionFile import CollectionFile
+from .objects.index.Segment import Segment
 
 # Logging
 import logging
@@ -247,8 +249,6 @@ class NNTPArchiver:
             f['filename'] for f in post.files if f['filename']) or None
         entry.fetched = utcnow()
         entry.server = (post.server or '')[:128]
-        entry.score = post.score
-        entry.tags = tags_to_text(post.tags)
 
         # What its files say about themselves
         session.query(ArchiveFile)\
@@ -300,7 +300,7 @@ class NNTPArchiver:
                 query = cached.query(
                     Article.message_id, Article.article_no,
                     Article.subject, Article.poster, Article.posted_date,
-                    Article.size, Article.score, Article.tags)\
+                    Article.size, Article.xref)\
                     .filter(Article.size <= self.max_size)
 
                 if not force:
@@ -330,12 +330,11 @@ class NNTPArchiver:
                 dropped = []
                 for message_id, row in zip(ids, rows):
                     if self.filters is None:
-                        ranks[message_id] = (
-                            row.score or 0, tags_from_text(row.tags))
                         continue
 
                     verdict = self.filters.check(
-                        group, subject=row.subject, poster=row.poster,
+                        [group, *(row.xref or '').split()],
+                        subject=row.subject, poster=row.poster,
                         message_id=message_id, posted=row.posted_date,
                         size=row.size)
 
@@ -346,8 +345,9 @@ class NNTPArchiver:
                     ranks[message_id] = (verdict.score, verdict.tags)
 
                 wanted = []
+                skipped = {m.strip().strip('<>') for m in dropped}
                 for message_id, row in zip(ids, rows):
-                    if message_id not in ranks:
+                    if message_id in skipped:
                         # Dropped
                         continue
 
@@ -383,14 +383,15 @@ class NNTPArchiver:
                         posted=row.posted_date, size=row.size,
                         groups={group}, server=server)
 
-                    post.score, post.tags = ranks[message_id]
+                    post.score, post.tags = ranks.get(message_id, (0, frozenset()))
                     self.convert(post)
 
                     if self._after_fetch and post.kind != ArchiveKind.Missing:
                         # Rules on the text or file names can only be
                         # checked now that we have them
                         verdict = self.filters.check(
-                            group, subject=post.subject, poster=post.poster,
+                            [group, *(row.xref or '').split()],
+                            subject=post.subject, poster=post.poster,
                             message_id=message_id, posted=post.posted,
                             size=post.size, body=post.text,
                             filenames=[f['filename'] for f in post.files])
@@ -398,13 +399,29 @@ class NNTPArchiver:
                         if verdict.drop is not None:
                             handled.remove(message_id)
                             dropped.append(row.message_id)
+                            ranks.pop(message_id, None)
                             continue
 
+                        # Knowing its text, this is the better judgement
                         post.score, post.tags = verdict.score, verdict.tags
+                        ranks[message_id] = (verdict.score, verdict.tags)
 
                     self.store(session, post)
                     kept.append(post)
                     self._count(post)
+
+                if ranks:
+                    # Their scores and tags (one place for every copy), and
+                    # the collections they are in take them on
+                    NNTPArticleRanks.save(session, ranks)
+                    NNTPIndexer.rank_collections(session, {
+                        collection_id for collection_id, in session.query(
+                            CollectionFile.collection_id)
+                        .join(Segment, Segment.file_id == CollectionFile.id)
+                        .filter(Segment.message_id.in_(list(ranks)))})
+
+                if dropped:
+                    NNTPArticleRanks.forget(session, dropped)
 
                 # Files whose articles were indexed get their real names
                 NNTPIndexer.learn_filenames(session, {
@@ -549,8 +566,17 @@ class NNTPArchiver:
         for no, term in enumerate([*wild, *(terms or ())]):
             query = query.filter(self._term(session, no, term))
 
+        # Scores and tags are kept with every article's (see
+        # NNTPArticleRanks); only looked at when asked for
+        score = literal(0)
+        found = literal('')
+        if tags or without_tags or scores or min_score is not None or \
+                max_score is not None:
+            query, score, found = NNTPArticleRanks.joined(
+                query, ArchivedPost.message_id)
+
         query = rank_query(
-            query, ArchivedPost.score, ArchivedPost.tags,
+            query, score, found,
             (ArchivedPost.posted, ArchivedPost.posted), tags=tags,
             without_tags=without_tags, min_score=min_score,
             max_score=max_score, scores=scores, after=after, before=before)

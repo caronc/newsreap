@@ -40,8 +40,9 @@ from shutil import copyfile
 
 from sqlalchemy.exc import OperationalError
 
-from .NNTPFilterRule import tags_to_text
+from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPGroupDatabase import NNTPGroupDatabase
+from .NNTPIndexDatabase import NNTPIndexDatabase
 from .codecs.CodecArticleIndex import XoverGrouping
 from .objects.group.Article import Article
 from .objects.group.ScannedRange import ScannedRange
@@ -63,7 +64,7 @@ class NNTPGroupScanner:
 
     def __init__(self, manager, group, db_file, server,
                  batch_size=DEFAULT_BATCH_SIZE, window=None, ramdisk=None,
-                 filters=None):
+                 filters=None, index_db=None):
         """
         Prepares a scanner
 
@@ -78,6 +79,8 @@ class NNTPGroupScanner:
         - ramdisk: a directory in memory to work in (optional)
         - filters: the NNTPFilter that scores, tags and drops articles
           before they are saved (optional)
+        - index_db: the index database the scores and tags filters give
+          are kept in (see NNTPArticleRanks); needed for them to be kept
         """
         # What we're scanning and where it's kept
         self.manager = manager
@@ -102,6 +105,12 @@ class NNTPGroupScanner:
         self.window = window
         self.ramdisk = ramdisk
         self.filters = filters or None
+        self.index_db = index_db
+
+        # The index database (opened when first needed) and the ranks of
+        # the batch being saved
+        self._index = None
+        self._ranks = {}
 
         # The group's first and last article number (from the server), and
         # when (UTC) we asked for them
@@ -386,6 +395,7 @@ class NNTPGroupScanner:
                 # that stops part way picks up where it left off
                 self.mark(session, low, high)
                 session.commit()
+                self._save_ranks()
 
                 self.articles += len(rows)
                 self.batches += 1
@@ -399,6 +409,12 @@ class NNTPGroupScanner:
             for _, _, request in outstanding:
                 request.abort()
 
+            # Let go of the index database (see _save_ranks())
+            self._ranks = {}
+            if self._index is not None:
+                self._index.close()
+                self._index = None
+
         return done
 
     def _rows(self, articles):
@@ -408,6 +424,8 @@ class NNTPGroupScanner:
         """
         rows = []
         for article in articles:
+            # The groups it was posted to (its Xref)
+            groups = sorted(article.get('xgroups') or ())
             row = {
                 'message_id': article['id'],
                 'article_no': article['article_no'],
@@ -416,13 +434,14 @@ class NNTPGroupScanner:
                 'size': article['size'],
                 'lines': article['lines'],
                 'posted_date': article['date'],
-                'score': article['score'],
-                'tags': '',
+                'xref': ' '.join(groups),
             }
 
             if self.filters is not None:
+                # Judged in every group it was posted to, so it is judged
+                # the same way whichever group it is found in
                 verdict = self.filters.check(
-                    self.group, subject=row['subject'],
+                    [self.group, *groups], subject=row['subject'],
                     poster=row['poster'], message_id=row['message_id'],
                     posted=row['posted_date'], size=row['size'])
 
@@ -431,12 +450,28 @@ class NNTPGroupScanner:
                     self.dropped += 1
                     continue
 
-                row['score'] = verdict.score
-                row['tags'] = tags_to_text(verdict.tags)
+                self._ranks[row['message_id']] = (verdict.score, verdict.tags)
 
             rows.append(row)
 
         return rows
+
+    def _save_ranks(self):
+        """
+        Keeps the scores and tags of the batch just saved (see
+        NNTPArticleRanks); worked out from 0 every time, so a scan of the
+        same articles never adds to them
+        """
+        ranks, self._ranks = self._ranks, {}
+        if not ranks or not self.index_db:
+            return
+
+        if self._index is None:
+            self._index = NNTPIndexDatabase.from_engine(self.index_db)
+
+        session = self._index.session()
+        NNTPArticleRanks.save(session, ranks)
+        session.commit()
 
     def _database(self):
         """

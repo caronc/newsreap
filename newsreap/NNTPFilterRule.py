@@ -251,8 +251,12 @@ def tag_logic(values):
                 "'%s' asks for a tag and its opposite (%s)" % (
                     value, ', '.join(sorted(wanted & unwanted))))
 
+        if not (wanted or unwanted):
+            # ie: '!' or '  '
+            raise ValueError("'%s' has no tag in it" % value)
+
         choice = (frozenset(wanted), frozenset(unwanted))
-        if (wanted or unwanted) and choice not in logic:
+        if choice not in logic:
             logic.append(choice)
 
     return tuple(logic)
@@ -287,8 +291,8 @@ def score_tests(value, name='score'):
     try:
         tests, amount = NNTPFilterRule._score(str(value))
 
-    except ValueError as e:
-        raise ValueError(str(e).replace('score', name, 1)) from None
+    except ValueError:
+        tests, amount = (), None
 
     if amount is not None or not tests:
         raise ValueError(
@@ -998,7 +1002,12 @@ class NNTPFilterRule:
         if found:
             # How long ago
             unit = RELATIVE_UNITS[found.group('unit').lower()]
-            return now - unit * float(found.group('value'))
+            try:
+                return now - unit * float(found.group('value'))
+
+            except (OverflowError, ValueError):
+                raise ValueError(
+                    '%s is too far back (%s)' % (name, value)) from None
 
         found = PARTIAL_DATE_RE.match(str(value))
         if found:

@@ -106,12 +106,6 @@ class ArchivedPost(ObjectBase):
     # can be searched too (see ArchiveFile for the details)
     filenames = Column(LongText)
 
-    # Its score and tags (space separated); see NNTPFilter
-    score = Column(
-        Integer, nullable=False, default=0, server_default='0', index=True)
-    tags = Column(
-        String(256), nullable=False, default='', server_default='')
-
     # When we fetched it (or found it was missing), and from which server
     fetched = Column(DateTime)
     server = Column(String(128), nullable=False, default='')

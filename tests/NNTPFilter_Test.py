@@ -334,7 +334,10 @@ def test_tags_combine_like_apprise_tags():
     assert not tags_match(logic, set())
 
     assert tag_logic('a b,c') == ((frozenset({'a', 'b', 'c'}), none), )
-    assert tag_logic(['a', 'A', '']) == ((frozenset({'a'}), none), )
+    assert tag_logic(['a', 'A']) == ((frozenset({'a'}), none), )
+    for empty in ('', '!', '  ', ', !'):
+        with pytest.raises(ValueError, match='has no tag'):
+            tag_logic(['a', empty])
     assert tag_logic(None) == ()
 
     rules = filters(
@@ -424,6 +427,11 @@ def test_times_can_be_dates_or_how_long_ago():
 
     with pytest.raises(ValueError, match='--after must be a date'):
         parse_time('whenever', '--after')
+
+    # Too far back to work out
+    for value in ('99999999d', '9999999999y'):
+        with pytest.raises(ValueError, match='too far back'):
+            parse_time(value, '--after')
 
 
 def test_rules_can_leave_out_tags():

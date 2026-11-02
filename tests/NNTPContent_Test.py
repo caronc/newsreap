@@ -669,9 +669,12 @@ class NNTPContent_Test(TestBase):
         # We still know it's an image
         assert(bc.mime().type() == 'image/jpeg')
 
-        # Create ourselves a new file
+        # Create ourselves a new file whose content says nothing about what
+        # it is (random bytes now and then start like a known file, ie: MZ
+        # for a DOS program, and content is believed before the name)
         tmp_file = join(self.tmp_dir, 'test.rar')
-        assert(self.touch(tmp_file, size='2KB', random=True) is True)
+        with open(tmp_file, 'wb') as fp:
+            fp.write(b'\0' * 512 + urandom(1536))
         bc = NNTPBinaryContent(tmp_file)
 
         # Now we can guess the name from it's file type

@@ -16,6 +16,9 @@ import re
 from sortedcontainers import SortedDict as sorteddict
 from datetime import datetime
 from datetime import timedelta
+from email.errors import HeaderParseError
+from email.header import decode_header
+from email.header import make_header
 from email.utils import parsedate_tz
 from pytz import UTC
 from dateutil.tz import tzutc
@@ -100,6 +103,35 @@ NNTP_XOVER_RESPONSE_RE = re.compile(
     re.IGNORECASE | re.ASCII,
 )
 
+# What every overview line holds (after its article number) in this order
+# (RFC 3977 8.4)
+OVERVIEW_FIELDS = (
+    'Subject:', 'From:', 'Date:', 'Message-ID:', 'References:', ':bytes',
+    ':lines')
+
+# How many fields an overview line has at least (the article number, then
+# the fields above)
+OVERVIEW_COUNT = len(OVERVIEW_FIELDS) + 1
+
+# What we take the fields after them to be when a server doesn't say (see
+# LIST OVERVIEW.FMT); nearly every server sends the Xref there
+OVERVIEW_EXTRAS = ('Xref:full', )
+
+
+def overview_extras(lines):
+    """
+    Returns the fields (after the first seven) the lines of a LIST
+    OVERVIEW.FMT reply say an overview line holds; OVERVIEW_EXTRAS when
+    there aren't any
+    """
+    names = [line.strip() for line in lines if line.strip()]
+    if len(names) <= len(OVERVIEW_FIELDS):
+        # Only the usual ones (or nothing we can read)
+        return OVERVIEW_EXTRAS if not names else ()
+
+    return tuple(names[len(OVERVIEW_FIELDS):])
+
+
 class XoverGrouping:
     """
     Defines the xover grouping
@@ -128,7 +160,7 @@ class CodecArticleIndex(CodecBase):
     """
 
     def __init__(self, descriptor=None, filters=None, sort=None,
-                 encoding=None, work_dir=None, *args, **kwargs):
+                 encoding=None, work_dir=None, fields=None, *args, **kwargs):
         super().__init__(descriptor=descriptor,
             work_dir=work_dir, *args, **kwargs)
 
@@ -152,6 +184,14 @@ class CodecArticleIndex(CodecBase):
         else:
             self.encoding = encoding
 
+        # What the fields after the first seven are (see overview_extras()),
+        # and which of them is the Xref
+        self.fields = tuple(fields) if fields is not None \
+            else OVERVIEW_EXTRAS
+        self.xref_at = next((
+            no for no, name in enumerate(self.fields)
+            if name.lower().startswith('xref:')), None)
+
 
     def detect(self, line, relative=True):
         """
@@ -162,15 +202,33 @@ class CodecArticleIndex(CodecBase):
         It returns None if there this is not a group entry line, otherwise
         it returns a dictionary of the keys and their mapped values.
 
+        An overview line holds the article number, then the seven fields
+        every server sends in this order (RFC 3977): Subject, From, Date,
+        Message-ID, References, bytes and lines.  Anything after them is
+        what LIST OVERVIEW.FMT says it is (see the `fields` we were given);
+        the Xref (the groups it was posted to) is the one we use.
         """
         if isinstance(line, str):
             line = line.encode(self.encoding)
 
-        result = NNTP_XOVER_RESPONSE_RE.match(line)
-        if not result:
+        fields = line.rstrip(b'\r\n').split(b'\t')
+        if len(fields) < OVERVIEW_COUNT:
+            # Not an overview line (or a broken one)
             return None
 
-        date = result.group('date').decode(self.encoding)
+        try:
+            article_no = int(fields[0].strip())
+
+        except ValueError:
+            # Every line starts with its article number
+            return None
+
+        message_id = fields[4].strip().strip(b'<>').strip()
+        if not message_id:
+            # Nothing to find it by
+            return None
+
+        date = fields[3].strip().decode(self.encoding, 'replace')
         article_date = parse_date(date)
         if article_date is None:
             # It would be great if users of the product would email
@@ -181,31 +239,39 @@ class CodecArticleIndex(CodecBase):
             article_date = datetime.fromtimestamp(0)
 
         try:
-            lines = int(result.group('lines'))
-        except (TypeError, ValueError):
+            size = int(fields[6].strip())
+
+        except ValueError:
+            # Missing (or garbage); we don't know it
+            size = 0
+
+        try:
+            lines = int(fields[7].strip())
+
+        except ValueError:
             # Initialize lines to -1 if they weren't specified
             lines = -1
 
         entry = {
-            'id': result.group('id').decode(self.encoding),
-            'article_no': int(result.group('article_no')),
-            'poster': result.group('poster').decode(self.encoding),
+            'id': message_id.decode(self.encoding, 'replace'),
+            'article_no': article_no,
+            'poster': self.text(fields[2]),
             'date': article_date,
-            'subject': result.group('subject').decode(self.encoding),
-            'size': int(result.group('size')),
+            'subject': self.text(fields[1]),
+            'size': size,
             'lines': lines,
             'group': None,
             'score': 0,
             'xgroups': {},
         }
 
-        # Split results
-        results = re.split(
-            '\\s+', result.group('group').decode(self.encoding).strip(),
-            flags=re.ASCII)
+        xref = self.xref(fields[OVERVIEW_COUNT:])
+        if not xref:
+            return entry
 
-        # Append remaining groups
-        for x in results:
+        # "Xref: server group:number group:number ..."; the first entry
+        # is the server's name
+        for x in xref.split():
             grp = x.split(':')
             if len(grp) > 1:
                 # we're dealing with a Cross Post
@@ -222,6 +288,53 @@ class CodecArticleIndex(CodecBase):
                 entry['group'] = grp[0]
 
         return entry
+
+    def text(self, value):
+        """
+        Returns a subject or poster as text: UTF-8 if it reads as UTF-8,
+        otherwise in the server's encoding, with any RFC 2047 encoded words
+        (ie: =?UTF-8?B?Q2Fmw6k=?=) decoded
+        """
+        value = value.strip()
+        try:
+            text = value.decode('utf-8')
+
+        except UnicodeDecodeError:
+            # Not UTF-8; the server's own encoding (latin-1 by default,
+            # which reads anything)
+            text = value.decode(self.encoding, 'replace')
+
+        if '=?' not in text:
+            # The usual case
+            return text
+
+        try:
+            return str(make_header(decode_header(text))).strip()
+
+        except (UnicodeError, LookupError, ValueError, TypeError,
+                HeaderParseError):
+            # Badly encoded (or an unknown character set); keep it as it is
+            return text
+
+    def xref(self, extras):
+        """
+        Returns the Xref value (without its 'Xref:' name) of the fields
+        that follow the first seven; empty if there isn't one
+        """
+        if self.xref_at is not None and len(extras) > self.xref_at:
+            value = extras[self.xref_at]
+
+        else:
+            # Where we expected it isn't there; look for it by name
+            value = next((e for e in extras
+                          if e.lstrip()[:5].lower() == b'xref:'), b'')
+
+        value = value.strip()
+        if value[:5].lower() == b'xref:':
+            # Sent with its name (a ':full' field)
+            value = value[5:]
+
+        return value.decode(self.encoding, 'replace').strip()
 
 
     def decode(self, stream):

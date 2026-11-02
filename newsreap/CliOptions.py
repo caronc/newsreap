@@ -87,6 +87,13 @@ def check_rank(rank):
     Exits (saying why) if any of the tags, score comparisons or times given
     can't be used
     """
+    for name in ('after', 'before'):
+        value = rank.get(name)
+        if value is not None and not str(value).strip():
+            logger.error('--%s needs a date (or how long ago, ie: 90d).' % (
+                name))
+            exit(1)
+
     try:
         tag_logic(rank.get('tags'))
         tag_logic(rank.get('without_tags'))
