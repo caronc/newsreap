@@ -50,8 +50,13 @@ class Article(ObjectBase):
     # Article Post Date
     posted_date = Column(DateTime, index=True)
 
-    # Article Score
+    # Article Score (worked out by the score rules of our filters; see
+    # NNTPFilter)
     score = Column(Integer, default=0, nullable=False, index=True)
+
+    # The tags our filters gave it (space separated)
+    tags = Column(
+        String(256), default='', server_default='', nullable=False)
 
     # There are to just to many articles to delete them individually.
     # The easiest way is to mark them for purging and clear them when

@@ -169,6 +169,8 @@ except ImportError:
     sys.path.insert(0, dirname(NEWSREAP_ROOT))
     from newsreap.NNTPDatabase import NNTPDatabase
 
+from newsreap.NNTPFilter import FILTERS_FILE
+from newsreap.NNTPFilter import NNTPFilter
 from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 from newsreap.NNTPIOStream import NNTPIOStream
 from newsreap.Utils import parse_bool
@@ -339,6 +341,9 @@ DEFAULT_PROCESSING_VARIABLES = {
     # The biggest article 'nr update archive' fetches and keeps (text posts
     # are almost always much smaller)
     'archive_max_size': '64KB',
+    # The file our filters (scores, tags and what is dropped) are kept in;
+    # filters.yaml next to the configuration file when not set
+    'filters': None,
 }
 
 # Keyword used in configuration to host all of the defined NNTP Servers
@@ -861,6 +866,33 @@ class NNTPSettings(NNTPDatabase):
 
         return join(
             self.base_dir, 'cache', 'index%s' % SQLITE_DATABASE_EXTENSION)
+
+    def filters_file(self):
+        """
+        Returns where our filters are kept (see NNTPFilter): the filters
+        setting if one is set, otherwise filters.yaml next to our
+        configuration file
+        """
+        path = self.nntp_processing.get('filters')
+        if isinstance(path, str) and path.strip():
+            return abspath(expanduser(self.apply_mask(path.strip())))
+
+        if self.cfg_file:
+            return join(dirname(self.cfg_file), FILTERS_FILE)
+
+        return join(self.base_dir, FILTERS_FILE)
+
+    def filters(self, reload=False):
+        """
+        Returns our filters (an NNTPFilter); they are read once and kept
+
+        Raises ValueError (saying which rule, and why) if the filters file
+        has a rule that doesn't make sense.
+        """
+        if reload or getattr(self, '_filters', None) is None:
+            self._filters = NNTPFilter(self.filters_file())
+
+        return self._filters
 
     def save(self, cfg_file=None):
         """

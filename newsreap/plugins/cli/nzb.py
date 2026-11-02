@@ -40,6 +40,8 @@ except ImportError:
     from newsreap.Logging import NEWSREAP_CLI
 
 from newsreap.objects.nntp.Common import get_groups
+from newsreap.CliOptions import matching
+from newsreap.CliOptions import ranked
 from newsreap.NNTPIndexer import NNTPIndexer
 
 # initialize our logger
@@ -102,9 +104,11 @@ def open_index(ctx):
               help='Show at most this many.')
 @click.option('--case-sensitive', '-c', is_flag=True,
               help='Keywords must match the case too.')
+@ranked
+@matching
 @click.pass_obj
 def nzb_list(ctx, keywords, groups, complete, forming, limit,
-             case_sensitive):
+             case_sensitive, rank, terms):
     """
     List collections (newest first).
 
@@ -119,6 +123,11 @@ def nzb_list(ctx, keywords, groups, complete, forming, limit,
     """
     # The groups we're narrowing it down to (if any)
     names = lookup_groups(ctx, groups) if groups else None
+    for term in terms:
+        if term.field == 'body':
+            logger.error("--%s only works with 'nr search --posts'." % (
+                term.option))
+            exit(1)
 
     indexer = open_index(ctx)
     try:
@@ -129,7 +138,8 @@ def nzb_list(ctx, keywords, groups, complete, forming, limit,
 
         for entry in indexer.find(
                 keywords, groups=names, complete=complete, forming=forming,
-                limit=limit, case_sensitive=case_sensitive):
+                limit=limit, case_sensitive=case_sensitive, terms=terms,
+                **rank):
             click.echo(indexer.summary(entry))
 
     finally:

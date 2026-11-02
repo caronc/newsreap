@@ -132,6 +132,11 @@ processing:
    # ('nr search --posts').  Files they hold are only noted, never kept.
    archive_max_size: 64KB
 
+   # Rules that drop spam before it is stored, and score and tag the rest
+   # (see 'nr filter --help').  They live in filters.yaml next to this file
+   # unless another file is given here.
+   # filters: '%{base_dir}/filters.yaml'
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

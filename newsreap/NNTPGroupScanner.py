@@ -40,6 +40,7 @@ from shutil import copyfile
 
 from sqlalchemy.exc import OperationalError
 
+from .NNTPFilterRule import tags_to_text
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .codecs.CodecArticleIndex import XoverGrouping
 from .objects.group.Article import Article
@@ -61,7 +62,8 @@ class NNTPGroupScanner:
     """
 
     def __init__(self, manager, group, db_file, server,
-                 batch_size=DEFAULT_BATCH_SIZE, window=None, ramdisk=None):
+                 batch_size=DEFAULT_BATCH_SIZE, window=None, ramdisk=None,
+                 filters=None):
         """
         Prepares a scanner
 
@@ -74,6 +76,8 @@ class NNTPGroupScanner:
         - window: how many requests may be outstanding at once (defaults to
           two per connection the manager may open)
         - ramdisk: a directory in memory to work in (optional)
+        - filters: the NNTPFilter that scores, tags and drops articles
+          before they are saved (optional)
         """
         # What we're scanning and where it's kept
         self.manager = manager
@@ -97,6 +101,7 @@ class NNTPGroupScanner:
 
         self.window = window
         self.ramdisk = ramdisk
+        self.filters = filters or None
 
         # The group's first and last article number (from the server), and
         # when (UTC) we asked for them
@@ -106,12 +111,14 @@ class NNTPGroupScanner:
 
         # What our last scan did:
         #  - articles: headers received and saved
+        #  - dropped: headers received that our filters dropped
         #  - batches: requests that completed
         #  - failed: requests that didn't (they are fetched next time)
         #  - pending: article numbers we wanted but didn't get to
         #  - wanted: article numbers that needed fetching
         self.wanted = 0
         self.articles = 0
+        self.dropped = 0
         self.batches = 0
         self.failed = 0
         self.pending = 0
@@ -266,7 +273,7 @@ class NNTPGroupScanner:
         """
         # Reset what our last scan did
         self.articles = self.batches = self.failed = self.pending = 0
-        self.wanted = 0
+        self.wanted = self.dropped = 0
 
         with self._database() as db:
             session = db.session()
@@ -369,16 +376,7 @@ class NNTPGroupScanner:
                     self.failed += 1
                     continue
 
-                rows = [{
-                    'message_id': article['id'],
-                    'article_no': article['article_no'],
-                    'subject': article['subject'],
-                    'poster': article['poster'],
-                    'size': article['size'],
-                    'lines': article['lines'],
-                    'posted_date': article['date'],
-                    'score': article['score'],
-                } for article in result.values()]
+                rows = self._rows(result.values())
 
                 if rows:
                     # Save our articles
@@ -402,6 +400,43 @@ class NNTPGroupScanner:
                 request.abort()
 
         return done
+
+    def _rows(self, articles):
+        """
+        Returns the database rows of the articles fetched, leaving out the
+        ones our filters drop (and scoring and tagging the rest)
+        """
+        rows = []
+        for article in articles:
+            row = {
+                'message_id': article['id'],
+                'article_no': article['article_no'],
+                'subject': article['subject'],
+                'poster': article['poster'],
+                'size': article['size'],
+                'lines': article['lines'],
+                'posted_date': article['date'],
+                'score': article['score'],
+                'tags': '',
+            }
+
+            if self.filters is not None:
+                verdict = self.filters.check(
+                    self.group, subject=row['subject'],
+                    poster=row['poster'], message_id=row['message_id'],
+                    posted=row['posted_date'], size=row['size'])
+
+                if verdict.drop is not None:
+                    # Never stored
+                    self.dropped += 1
+                    continue
+
+                row['score'] = verdict.score
+                row['tags'] = tags_to_text(verdict.tags)
+
+            rows.append(row)
+
+        return rows
 
     def _database(self):
         """
@@ -454,6 +489,8 @@ class NNTPGroupScanner:
             return '%s: already up to date' % self.group
 
         text = '%s: %d article(s) cached' % (self.group, self.articles)
+        if self.dropped:
+            text += ', %d dropped by filters' % self.dropped
         if self.failed:
             text += ', %d batch(es) failed' % self.failed
 

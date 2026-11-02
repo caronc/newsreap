@@ -116,6 +116,13 @@ class Collection(ObjectBase):
     first_posted = Column(DateTime, index=True)
     last_posted = Column(DateTime)
 
+    # The best score of its articles, and every tag they were given (space
+    # separated); see NNTPFilter
+    score = Column(
+        Integer, nullable=False, default=0, server_default='0', index=True)
+    tags = Column(
+        String(256), nullable=False, default='', server_default='')
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

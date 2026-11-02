@@ -13,6 +13,9 @@ NewsReap supports features such as:
   of higher priority will always be used first.
 * Multithreaded (handles multiple connections simultaneously)
 * Aliases allow you to not only group multiple Usenet groups into 1; you can use aliases to also simplify the reference to the group itself.
+* Filters keep your database trim and ranked: drop spam before it is ever
+  stored (or purge it later, with a dry run first), and score and tag what
+  you care about (`nr filter --help`).
 
 Some under the hood stuff that developers should appreciate about NewsReap are:
 * It suports character sets and does it's best to allow you to work with unicode characters

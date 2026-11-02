@@ -38,20 +38,29 @@ from os.path import isfile
 from os.path import join
 from tempfile import gettempdir
 
+from sqlalchemy import and_
 from sqlalchemy import literal_column
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import text
 
 from .HookManager import HookManager
 from .NNTPArchivePost import NNTPArchivePost
 from .NNTPConnectionRequest import NNTPConnectionRequest
+from .NNTPFilterRule import tags_from_text
+from .NNTPFilterRule import tags_to_text
+from .NNTPSearchTerm import SEARCH_ANY
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
 from .NNTPIndexDatabase import PG_POSTER_DOCUMENT
 from .NNTPIndexDatabase import PG_POST_DOCUMENT
 from .NNTPIndexer import FILENAME_CODECS
 from .NNTPIndexer import NNTPIndexer
+from .NNTPIndexer import chunked
+from .NNTPIndexer import TERM_PARAMS
+from .NNTPIndexer import keyword_terms
 from .NNTPIndexer import parse_keywords
+from .NNTPIndexer import rank_query
 from .Utils import scan_pylib
 from .Utils import strsize_to_bytes
 from .Utils import utcnow
@@ -99,7 +108,7 @@ class NNTPArchiver:
 
     def __init__(self, db_file, hooks=None, default_hooks=True,
                  max_size=DEFAULT_ARCHIVE_MAX_SIZE,
-                 chunk_size=DEFAULT_ARCHIVE_CHUNK_SIZE):
+                 chunk_size=DEFAULT_ARCHIVE_CHUNK_SIZE, filters=None):
         """
         Prepares an archiver
 
@@ -109,8 +118,17 @@ class NNTPArchiver:
         - default_hooks: use the built in hooks (newsreap/hooks/archive/)
         - max_size: the biggest article fetched (ie: '64KB')
         - chunk_size: how many articles are worked through at a time
+        - filters: the NNTPFilter that scores and tags articles (and drops
+          the ones it no longer wants, without fetching them); without it,
+          the scores and tags given when they were cached are used
         """
         self.db_file = db_file
+        self.filters = filters or None
+
+        # Rules that need an article's text (or file names) are checked again
+        # once it is fetched
+        self._after_fetch = self.filters is not None and (
+            self.filters.uses('body') or self.filters.uses('filename'))
         self.max_size = strsize_to_bytes(max_size) \
             if isinstance(max_size, str) else int(max_size)
         if not self.max_size or self.max_size < 0:
@@ -148,6 +166,7 @@ class NNTPArchiver:
         self.refused = 0
         self.known = 0
         self.failed = 0
+        self.dropped = 0
 
     def session(self, create=False):
         """
@@ -228,6 +247,8 @@ class NNTPArchiver:
             f['filename'] for f in post.files if f['filename']) or None
         entry.fetched = utcnow()
         entry.server = (post.server or '')[:128]
+        entry.score = post.score
+        entry.tags = tags_to_text(post.tags)
 
         # What its files say about themselves
         session.query(ArchiveFile)\
@@ -279,7 +300,7 @@ class NNTPArchiver:
                 query = cached.query(
                     Article.message_id, Article.article_no,
                     Article.subject, Article.poster, Article.posted_date,
-                    Article.size)\
+                    Article.size, Article.score, Article.tags)\
                     .filter(Article.size <= self.max_size)
 
                 if not force:
@@ -303,8 +324,33 @@ class NNTPArchiver:
                     ArchivedPost.message_id, ArchivedPost.kind)
                     .filter(ArchivedPost.message_id.in_(ids)))
 
+                # What our filters make of them (the ones they no longer want
+                # are let go of instead of fetched)
+                ranks = {}
+                dropped = []
+                for message_id, row in zip(ids, rows):
+                    if self.filters is None:
+                        ranks[message_id] = (
+                            row.score or 0, tags_from_text(row.tags))
+                        continue
+
+                    verdict = self.filters.check(
+                        group, subject=row.subject, poster=row.poster,
+                        message_id=message_id, posted=row.posted_date,
+                        size=row.size)
+
+                    if verdict.drop is not None and message_id not in known:
+                        dropped.append(row.message_id)
+                        continue
+
+                    ranks[message_id] = (verdict.score, verdict.tags)
+
                 wanted = []
                 for message_id, row in zip(ids, rows):
+                    if message_id not in ranks:
+                        # Dropped
+                        continue
+
                     kind = known.get(message_id)
                     if kind is None or (
                             force and kind == ArchiveKind.Missing):
@@ -337,7 +383,25 @@ class NNTPArchiver:
                         posted=row.posted_date, size=row.size,
                         groups={group}, server=server)
 
+                    post.score, post.tags = ranks[message_id]
                     self.convert(post)
+
+                    if self._after_fetch and post.kind != ArchiveKind.Missing:
+                        # Rules on the text or file names can only be
+                        # checked now that we have them
+                        verdict = self.filters.check(
+                            group, subject=post.subject, poster=post.poster,
+                            message_id=message_id, posted=post.posted,
+                            size=post.size, body=post.text,
+                            filenames=[f['filename'] for f in post.files])
+
+                        if verdict.drop is not None:
+                            handled.remove(message_id)
+                            dropped.append(row.message_id)
+                            continue
+
+                        post.score, post.tags = verdict.score, verdict.tags
+
                     self.store(session, post)
                     kept.append(post)
                     self._count(post)
@@ -354,6 +418,13 @@ class NNTPArchiver:
                 # Let the hooks know what was kept
                 for post in kept:
                     self.hooks.call('post_archive', post=post)
+
+                # The articles our filters no longer want are let go of
+                for chunk in chunked(dropped):
+                    cached.query(Article)\
+                        .filter(Article.message_id.in_(chunk))\
+                        .delete(synchronize_session=False)
+                self.dropped += len(dropped)
 
                 # Mark them in the cache so they aren't looked at again
                 cached.query(Article)\
@@ -436,7 +507,9 @@ class NNTPArchiver:
                 request.abort()
 
     def find(self, keywords=(), groups=None, kinds=ARCHIVE_SEARCHED,
-             limit=None, case_sensitive=False):
+             limit=None, case_sensitive=False, tags=None, without_tags=None,
+             min_score=None, max_score=None, terms=None, scores=None,
+             after=None, before=None):
         """
         Returns the posts (newest first) with every keyword in their
         subject, text or file names (see parse_keywords(); %p looks in the
@@ -449,6 +522,15 @@ class NNTPArchiver:
 
         - groups: only posts found in one of these groups
         - kinds: the kinds of posts wanted (see ArchiveKind)
+        - tags / without_tags: only (or leave out) posts with these tags
+          (see tag_logic())
+        - min_score / max_score: leave out posts scoring lower / higher
+        - terms: find(1) style conditions (see NNTPSearchTerm) they must
+          all match: subject, body (the text), filename, poster and
+          message_id
+        - scores: score comparisons (ie: '<34, >23') they must pass
+        - after / before: only posts posted at or after / before this (a
+          date or how long ago, ie: 90d)
         """
         session = self.session()
         if session is None:
@@ -457,11 +539,21 @@ class NNTPArchiver:
         query = session.query(ArchivedPost)\
             .filter(ArchivedPost.kind.in_(list(kinds)))
 
-        for no, (exclude, column, value) in enumerate(
-                parse_keywords(keywords)):
+        plain, wild = keyword_terms(keywords, case_sensitive)
+        for no, (exclude, column, value) in enumerate(plain):
             found = ArchivedPost.id.in_(
                 self._search(session, no, column, value, case_sensitive))
             query = query.filter(~found if exclude else found)
+
+        # Every condition narrows the results down further
+        for no, term in enumerate([*wild, *(terms or ())]):
+            query = query.filter(self._term(session, no, term))
+
+        query = rank_query(
+            query, ArchivedPost.score, ArchivedPost.tags,
+            (ArchivedPost.posted, ArchivedPost.posted), tags=tags,
+            without_tags=without_tags, min_score=min_score,
+            max_score=max_score, scores=scores, after=after, before=before)
 
         if groups:
             # Found in (at least) one of the groups
@@ -473,6 +565,52 @@ class NNTPArchiver:
             ArchivedPost.posted.desc(), ArchivedPost.id.desc())
 
         return query.limit(limit).all() if limit else query.all()
+
+    def _term(self, session, no, term):
+        """
+        Returns the condition for a post matching a search condition (see
+        NNTPSearchTerm)
+
+        The search index finds the posts holding the words the pattern
+        needs first; only those are checked against the pattern.
+        """
+        dialect = session.get_bind().dialect.name
+
+        # The columns of the post the field is kept in, and whether its
+        # file names count too
+        columns, names = {
+            SEARCH_ANY: ((ArchivedPost.subject, ArchivedPost.text), True),
+            'subject': ((ArchivedPost.subject, ), False),
+            'body': ((ArchivedPost.text, ), False),
+            'poster': ((ArchivedPost.poster, ), False),
+            'filename': ((), True),
+            'message_id': ((ArchivedPost.message_id, ), False),
+        }[term.field]
+
+        found = [term.condition(dialect, column) for column in columns]
+        if names:
+            # The names of the files it holds (each one on its own)
+            found.append(ArchivedPost.message_id.in_(
+                select(ArchiveFile.message_id).where(
+                    term.condition(dialect, ArchiveFile.filename))))
+
+        found = or_(*found) if len(found) > 1 else found[0]
+        if term.negate:
+            return ~found
+
+        if term.field == 'message_id' and term.exact() is not None:
+            # Looked up directly
+            return and_(ArchivedPost.message_id == term.exact(), found)
+
+        # What the search index can find for us (it doesn't hold
+        # Message-IDs)
+        narrowed = [] if term.field == 'message_id' else [
+            ArchivedPost.id.in_(self._search(
+                session, TERM_PARAMS + no * TERM_PARAMS + piece_no,
+                'poster' if term.field == 'poster' else 'subject', words))
+            for piece_no, words in enumerate(term.words()[:TERM_PARAMS])]
+
+        return and_(*narrowed, found) if narrowed else found
 
     @staticmethod
     def _search(session, no, column, value, case_sensitive=False):
@@ -624,10 +762,11 @@ class NNTPArchiver:
                               message_id.strip().strip('<>')))
 
     @staticmethod
-    def snippet(post, keywords=(), width=70):
+    def snippet(post, keywords=(), terms=(), width=70):
         """
-        Returns a short piece of a post's text around the first keyword it
-        has (or its start), on one line
+        Returns a short piece of a post's text around the first keyword (or
+        word a body condition needs; see NNTPSearchTerm) it has (or its
+        start), on one line
         """
         body = ' '.join((post.text or '').split())
         if not body:
@@ -635,7 +774,15 @@ class NNTPArchiver:
 
         lowered = body.casefold()
         start = 0
-        for exclude, column, value in parse_keywords(keywords):
+
+        # What we're looking for, in order
+        wanted = [(exclude, column, value) for exclude, column, value
+                  in parse_keywords(keywords)]
+        wanted.extend(
+            (False, 'subject', words) for term in terms
+            if term.field in (SEARCH_ANY, 'body') for words in term.words())
+
+        for exclude, column, value in wanted:
             if exclude or column != 'subject':
                 continue
 
@@ -658,6 +805,9 @@ class NNTPArchiver:
             '%d refused, %d already kept' % (
                 self.texts + self.binaries, self.texts, self.binaries,
                 self.missing, self.refused, self.known)
+
+        if self.dropped:
+            text += ', %d dropped by filters' % self.dropped
 
         if self.failed:
             text += ', %d failed (asked for again next time)' % self.failed

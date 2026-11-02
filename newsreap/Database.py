@@ -74,6 +74,21 @@ def sqlite_tuned(engine):
         cursor.close()
 
 
+def sqlite_functions(engine):
+    """
+    Adds the functions our searches use to every connection of an SQLite
+    engine (call it before the engine connects):
+    - newsreap_match(kind, pattern, case_sensitive, text): 1 if the text
+      matches a wildcard pattern or regular expression (see NNTPSearchTerm)
+    """
+    from .NNTPSearchTerm import sql_match
+
+    @event.listens_for(engine, 'connect')
+    def connect(dbapi_connection, _):
+        dbapi_connection.create_function(
+            'newsreap_match', 4, sql_match, deterministic=True)
+
+
 def mysql_tuned(engine):
     """
     Sets up every connection of a MySQL engine (call it before the engine
@@ -184,6 +199,10 @@ class Database:
             # Note: echo is always set to False, logging is handled by NewsReap
             #       and not by SQLAlchemy
             self._engine = create_engine(engine, echo=False)
+            if self._engine.dialect.name == 'sqlite':
+                # What our searches need
+                sqlite_functions(self._engine)
+
             if self._engine.dialect.name == 'sqlite' and \
                     self._engine.url.database not in (None, '', ':memory:'):
                 # A database file; keep it safe from crashes

@@ -66,6 +66,10 @@ class NNTPArchivePost:
         self.groups = set(groups or ())
         self.server = server or ''
 
+        # Its score and tags (see NNTPFilter)
+        self.score = 0
+        self.tags = frozenset()
+
         # What the hooks decide
         self.kind = ArchiveKind.Missing if raw is None else ArchiveKind.Text
         self.text = None

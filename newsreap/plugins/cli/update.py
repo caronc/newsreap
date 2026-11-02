@@ -70,6 +70,21 @@ NEWSREAP_CLI_PLUGINS = {
 }
 
 
+def load_filters(settings):
+    """
+    Returns the filters to apply (None if there are no rules); exits if
+    the filters file has a problem, before anything is fetched
+    """
+    try:
+        filters = settings.filters()
+
+    except ValueError as e:
+        logger.error(str(e))
+        exit(1)
+
+    return filters if len(filters) else None
+
+
 def lookup_server(session, host):
     """
     Returns the Server entry for a host (None if it isn't in the database)
@@ -240,6 +255,9 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
         logger.error("There are no servers defined.")
         exit(1)
 
+    # What we drop (and how we score and tag the rest)
+    filters = load_filters(ctx['NNTPSettings'])
+
     # Prepare our dates
     if date_from:
         date_from = parse_date(date_from, 'from')
@@ -298,6 +316,7 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
             server=s['host'],
             batch_size=batch_size,
             ramdisk=ramdisk,
+            filters=filters,
         )
 
         try:
@@ -384,7 +403,8 @@ def update_index(ctx, groups, watched, settle):
     indexer = NNTPIndexer(
         settings.index_database(),
         settle_hours=processing['settle_hours'],
-        repost_days=processing['repost_days'])
+        repost_days=processing['repost_days'],
+        filters=load_filters(settings))
 
     # Track whether every group could be indexed
     complete = True
@@ -473,7 +493,8 @@ def update_archive(ctx, groups, watched, max_size, force, hooks,
             settings.index_database(), hooks=hooks,
             default_hooks=not no_default_hooks,
             max_size=max_size or
-            settings.nntp_processing.get('archive_max_size') or '64KB')
+            settings.nntp_processing.get('archive_max_size') or '64KB',
+            filters=load_filters(settings))
 
     except ValueError as e:
         logger.error(str(e))

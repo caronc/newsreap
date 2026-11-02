@@ -54,8 +54,10 @@ from sqlalchemy import DateTime
 from sqlalchemy import bindparam
 from sqlalchemy import func
 from sqlalchemy import insert
+from sqlalchemy import literal
 from sqlalchemy import literal_column
 from sqlalchemy import and_
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import union
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -63,6 +65,13 @@ from sqlalchemy import text
 
 from .NNTPArticle import NNTPArticle
 from .NNTPEmptyContent import NNTPEmptyContent
+from .NNTPFilterRule import parse_time
+from .NNTPFilterRule import score_tests
+from .NNTPFilterRule import tag_logic
+from .NNTPSearchTerm import NNTPSearchTerm
+from .NNTPSearchTerm import SEARCH_ANY
+from .NNTPFilterRule import tags_from_text
+from .NNTPFilterRule import tags_to_text
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
 from .NNTPIndexDatabase import SEARCH_TABLE
@@ -111,6 +120,26 @@ NEWZNAB_COUNTER_RE = re.compile(r'\((\d+)/(\d+)\)', re.ASCII)
 # posters; a leading - leaves out what has it (a leading + is dropped)
 KEYWORD_RE = re.compile(
     r'^(?P<column>%[sp])?(?P<op>[+-])?(?P<text>.+)$', re.ASCII | re.DOTALL)
+
+# How each score comparison (see score_tests()) is written in SQL
+SQL_COMPARISONS = {
+    '<': lambda column, value: column < value,
+    '<=': lambda column, value: column <= value,
+    '>': lambda column, value: column > value,
+    '>=': lambda column, value: column >= value,
+    '=': lambda column, value: column == value,
+}
+
+# The fields collections can be searched by (see NNTPSearchTerm)
+COLLECTION_FIELDS = (SEARCH_ANY, 'subject', 'filename', 'poster',
+                     'message_id')
+
+# Pieces of one search condition looked up in the search index (each gets
+# its own numbered SQL parameters)
+TERM_PARAMS = 100
+
+# A * or ? wildcard (not escaped with a backslash)
+WILDCARD_RE = re.compile(r'(?<!\\)[*?]')
 
 # The search index only finds keywords at least this long; shorter ones are
 # looked for in every entry
@@ -302,6 +331,124 @@ def parse_keywords(keywords):
     return parsed
 
 
+def keyword_terms(keywords, case_sensitive=False):
+    """
+    Splits search keywords (see parse_keywords()) into:
+    - plain ones: (exclude, column, text), found anywhere they are
+    - ones holding a * or ? wildcard: NNTPSearchTerm conditions that find
+      them anywhere too (ie: 'holi*ay' is '*holi*ay*')
+    """
+    plain = []
+    terms = []
+    for exclude, column, value in parse_keywords(keywords):
+        if not WILDCARD_RE.search(value):
+            plain.append((exclude, column, value))
+            continue
+
+        terms.append(NNTPSearchTerm(
+            'poster' if column == 'poster' else SEARCH_ANY,
+            '%s*%s*' % ('!' if exclude else '', value),
+            case_sensitive=case_sensitive))
+
+    return plain, terms
+
+
+def like_escape(value):
+    """
+    Returns text with LIKE's wildcards (% and _) escaped with '/' (use
+    escape='/' with it)
+    """
+    return value.replace('/', '//').replace('%', '/%').replace('_', '/_')
+
+
+def tag_condition(column, logic):
+    """
+    Returns the SQL condition for the tags stored in `column` (space
+    separated) satisfying tag logic (see tag_logic()); None when there is
+    no logic
+    """
+    if not logic:
+        return None
+
+    padded = literal(' ') + column + literal(' ')
+
+    def has(tag):
+        return padded.like('%% %s %%' % like_escape(tag), escape='/')
+
+    return or_(*(
+        and_(*(has(tag) for tag in sorted(wanted)),
+             *(~has(tag) for tag in sorted(unwanted)))
+        for wanted, unwanted in logic))
+
+
+def rank_query(query, score_column, tags_column, posted_columns=None,
+               tags=None, without_tags=None, min_score=None, max_score=None,
+               scores=None, after=None, before=None):
+    """
+    Narrows a query down by score, tags and when it was posted (see
+    NNTPFilter)
+
+    - score_column / tags_column: where the score and tags are stored
+    - posted_columns: (first, last) of when it was posted (the same column
+      twice for a single article)
+    - tags: only what has these tags (see tag_logic(); ie:
+      ['video, hd', 'music'] is (video and hd) or music, '!junk' is
+      anything without junk)
+    - without_tags: leave out what has these tags (same logic)
+    - min_score / max_score: leave out what scores lower / higher
+    - scores: comparisons the score must pass (ie: ['<34, >23']; see
+      score_tests()), every one of them
+    - after / before: only what was (at least partly) posted at or after /
+      before this time (see parse_time(); ie: 2026-01-31 or 90d)
+
+    Raises ValueError for something that can't be used.
+    """
+    found = tag_condition(tags_column, tag_logic(tags))
+    if found is not None:
+        query = query.filter(found)
+
+    found = tag_condition(tags_column, tag_logic(without_tags))
+    if found is not None:
+        query = query.filter(~found)
+
+    if min_score is not None:
+        query = query.filter(score_column >= int(min_score))
+
+    if max_score is not None:
+        query = query.filter(score_column <= int(max_score))
+
+    for value in scores or ():
+        for op, number in score_tests(value, '--score'):
+            query = query.filter(SQL_COMPARISONS[op](score_column, number))
+
+    first, last = posted_columns or (None, None)
+    after = parse_time(after, '--after')
+    if after is not None and last is not None:
+        query = query.filter(last >= bindparam(
+            'posted_after', after, type_=DateTime()))
+
+    before = parse_time(before, '--before')
+    if before is not None and first is not None:
+        query = query.filter(first < bindparam(
+            'posted_before', before, type_=DateTime()))
+
+    return query
+
+
+def rank_text(entry):
+    """
+    Returns how an entry's score and tags (see NNTPFilter) are shown after
+    it in a list (ie: '  {+7 hd video}'); empty when it has neither
+    """
+    score = getattr(entry, 'score', 0) or 0
+    tags = getattr(entry, 'tags', '') or ''
+    if not (score or tags):
+        return ''
+
+    return '  {%s}' % ' '.join(
+        (['%+d' % score] if score else []) + tags.split())
+
+
 def chunked(items, size=IN_LIST_SIZE):
     """
     Splits items into lists of at most `size` (a generator)
@@ -319,7 +466,7 @@ class NNTPIndexer:
 
     def __init__(self, db_file, chunk_size=DEFAULT_CHUNK_SIZE,
                  settle_hours=DEFAULT_SETTLE_HOURS,
-                 repost_days=DEFAULT_REPOST_DAYS):
+                 repost_days=DEFAULT_REPOST_DAYS, filters=None):
         """
         Prepares an indexer
 
@@ -331,8 +478,12 @@ class NNTPIndexer:
         - repost_days: how far apart (in days) something is posted from a
           collection with the same name and poster before it counts as a
           repost; 0 never splits them
+        - filters: the NNTPFilter that scores and tags articles (and drops
+          the ones it no longer wants) as they are indexed; without it, the
+          scores and tags given when they were cached are used
         """
         self.db_file = db_file
+        self.filters = filters or None
         self.chunk_size = max(1, int(chunk_size))
         self.settle_after = timedelta(hours=max(0.0, float(settle_hours)))
 
@@ -343,7 +494,9 @@ class NNTPIndexer:
         # What our last index() did:
         #  - articles: articles indexed
         #  - files / collections: new ones found
+        #  - dropped: articles our filters removed instead
         self.articles = 0
+        self.dropped = 0
         self.files = 0
         self.collections = 0
 
@@ -387,7 +540,7 @@ class NNTPIndexer:
         Call settle() once every group is indexed.
         """
         # Reset what our last run did
-        self.articles = self.files = self.collections = 0
+        self.articles = self.files = self.collections = self.dropped = 0
 
         if not isfile(group_db_file):
             # Nothing was ever cached for this group
@@ -411,7 +564,7 @@ class NNTPIndexer:
                 rows = cached.query(
                     Article.message_id, Article.article_no,
                     Article.subject, Article.poster, Article.size,
-                    Article.posted_date)\
+                    Article.posted_date, Article.score, Article.tags)\
                     .filter(Article.indexed.is_(False))\
                     .order_by(Article.article_no)\
                     .limit(self.chunk_size).all()
@@ -420,7 +573,15 @@ class NNTPIndexer:
                     # We're done
                     break
 
-                self._index_chunk(session, group, rows, collections, files)
+                # What our filters make of them
+                last = rows[-1].article_no
+                ranks, dropped = self._rank(group, rows)
+                if dropped:
+                    rows = [row for row in rows
+                            if row.message_id not in dropped]
+
+                self._index_chunk(
+                    session, group, rows, collections, files, ranks)
 
                 # Real file names the archive found in these articles
                 self._archived_filenames(
@@ -431,18 +592,25 @@ class NNTPIndexer:
                 # read before now is out of date
                 session.expire_all()
 
+                # The ones our filters no longer want are let go of
+                for ids in chunked(dropped):
+                    cached.query(Article)\
+                        .filter(Article.message_id.in_(ids))\
+                        .delete(synchronize_session=False)
+                self.dropped += len(dropped)
+
                 # Mark them as indexed; they are the first articles not yet
                 # indexed, so every one up to the last of them is ours
                 cached.query(Article)\
                     .filter(Article.indexed.is_(False))\
-                    .filter(Article.article_no <= rows[-1].article_no)\
+                    .filter(Article.article_no <= last)\
                     .update({Article.indexed: True},
                             synchronize_session=False)
                 cached.commit()
 
                 self.articles += len(rows)
                 logger.debug('Indexed %d article(s) of %s (up to article %d).'
-                             % (len(rows), group, rows[-1].article_no))
+                             % (len(rows), group, last))
 
             # Remember how far we have seen the group (see settle())
             seen = cache.clock()
@@ -456,9 +624,40 @@ class NNTPIndexer:
 
         return True
 
-    def _index_chunk(self, session, group, rows, collections, files):
+    def _rank(self, group, rows):
+        """
+        Returns (ranks, dropped) for a chunk of cached articles:
+        - ranks: Message-ID -> (score, tags)
+        - dropped: the Message-IDs our filters remove
+        """
+        ranks = {}
+        dropped = set()
+        for row in rows:
+            if self.filters is None:
+                # As they were given when cached
+                ranks[row.message_id] = (
+                    row.score or 0, tags_from_text(row.tags))
+                continue
+
+            verdict = self.filters.check(
+                group, subject=row.subject, poster=row.poster,
+                message_id=row.message_id, posted=row.posted_date,
+                size=row.size)
+
+            if verdict.drop is not None:
+                dropped.add(row.message_id)
+                continue
+
+            ranks[row.message_id] = (verdict.score, verdict.tags)
+
+        return ranks, dropped
+
+    def _index_chunk(self, session, group, rows, collections, files,
+                     ranks=None):
         """
         Indexes one chunk of articles found in `group`
+
+        - ranks: Message-ID -> (score, tags) of the articles (see _rank())
         """
         # The articles we already have: a scanned file found in another
         # group is tagged with this one too; one an NZB file lists is left
@@ -608,6 +807,54 @@ class NNTPIndexer:
         self._recount(
             session, file_ids, {window['id'] for _, _, _, window in kept},
             dates)
+
+        # Each collection gets the best score of its articles, and every tag
+        # they were given
+        best = {}
+        for row, _, _, window in kept:
+            score, tags = (ranks or {}).get(row.message_id, (0, ()))
+            found = best.get(window['id'])
+            if found is None:
+                best[window['id']] = (score, set(tags))
+
+            else:
+                best[window['id']] = (max(found[0], score), found[1] | tags)
+
+        self.score_collections(
+            session, best, {window['id'] for window in added})
+
+    @staticmethod
+    def score_collections(session, best, new=(), replace=False):
+        """
+        Gives collections the score and tags of their articles (not
+        committed)
+
+        - best: collection id -> (best score, tags) of the articles added
+        - new: the ids of collections that had nothing before (they take
+          the score as it is)
+        - replace: set the scores and tags given (instead of keeping the
+          better score and adding the tags)
+        """
+        for ids in chunked(best):
+            for collection_id, score, tags in session.query(
+                    Collection.id, Collection.score, Collection.tags)\
+                    .filter(Collection.id.in_(ids)):
+
+                wanted, added = best[collection_id]
+                if not (replace or collection_id in new):
+                    wanted = max(wanted, score)
+                    added = set(added) | tags_from_text(tags)
+
+                text = tags_to_text(added)
+                if wanted == score and text == tags:
+                    # Nothing changed
+                    continue
+
+                session.query(Collection)\
+                    .filter(Collection.id == collection_id)\
+                    .update({Collection.score: wanted,
+                             Collection.tags: text},
+                            synchronize_session=False)
 
     @staticmethod
     def _insert_ignore(session, table, rows):
@@ -976,7 +1223,9 @@ class NNTPIndexer:
             return None
 
     def find(self, keywords=(), groups=None, complete=None, forming=False,
-             limit=None, case_sensitive=False):
+             limit=None, case_sensitive=False, tags=None, without_tags=None,
+             min_score=None, max_score=None, terms=None, scores=None,
+             after=None, before=None):
         """
         Returns collections (newest first) with every keyword in their name
         or the subject or name of one of their files (see
@@ -990,7 +1239,27 @@ class NNTPIndexer:
         - forming: include collections still forming
         - case_sensitive: only match keywords with the same case (otherwise
           case, and accents, don't matter)
+        - tags / without_tags: only (or leave out) collections with these
+          tags (see tag_logic(); each one is a choice, the tags within one
+          must all be there)
+        - min_score / max_score: leave out collections scoring lower /
+          higher
+        - terms: find(1) style conditions (see NNTPSearchTerm) they must
+          all match: subject (a collection's name or a file subject),
+          filename, poster and message_id (one of its articles)
+        - scores: score comparisons (ie: '<34, >23') they must pass
+        - after / before: only collections with something posted at or
+          after / before this (a date or how long ago, ie: 90d)
+
+        Raises ValueError for a condition collections can't be searched
+        by (ie: body).
         """
+        for term in terms or ():
+            if term.field not in COLLECTION_FIELDS:
+                raise ValueError(
+                    '--%s only works when searching posts (--posts)' %
+                    term.option)
+
         session = self.session()
         if session is None:
             return []
@@ -1006,11 +1275,21 @@ class NNTPIndexer:
             states.append(CollectionState.Forming)
 
         query = session.query(Collection).filter(Collection.state.in_(states))
-        for no, (exclude, column, value) in enumerate(
-                parse_keywords(keywords)):
+        plain, wild = keyword_terms(keywords, case_sensitive)
+        for no, (exclude, column, value) in enumerate(plain):
             found = Collection.id.in_(self._search(
                 session, no, column, value, case_sensitive))
             query = query.filter(~found if exclude else found)
+
+        # Every condition narrows the results down further
+        for no, term in enumerate([*wild, *(terms or ())]):
+            query = query.filter(self._term(session, no, term))
+
+        query = rank_query(
+            query, Collection.score, Collection.tags,
+            (Collection.first_posted, Collection.last_posted), tags=tags,
+            without_tags=without_tags, min_score=min_score,
+            max_score=max_score, scores=scores, after=after, before=before)
 
         if groups:
             # Found in (at least) one of the groups
@@ -1036,9 +1315,72 @@ class NNTPIndexer:
         files = '%d/%d' % (entry.files, entry.files_expected) \
             if entry.files_expected else '%d' % entry.files
 
-        return '[%6d] %5.1f%% %10s %7s file(s)  %s' % (
+        line = '[%6d] %5.1f%% %10s %7s file(s)  %s' % (
             entry.id, min(percent, 100.0), bytes_to_strsize(entry.size),
             files, entry.name)
+
+        return line + rank_text(entry)
+
+    def _term(self, session, no, term):
+        """
+        Returns the condition for a collection matching a search condition
+        (see NNTPSearchTerm)
+
+        The search index finds the collections holding the text the
+        pattern needs first; only those are checked against the pattern.
+        """
+        dialect = session.get_bind().dialect.name
+
+        if term.field == 'message_id':
+            # One of its articles; an exact Message-ID is looked up directly
+            # (anything else has to look at every article)
+            found = term.condition(dialect, Segment.message_id)
+            if term.exact() is not None:
+                found = and_(Segment.message_id == term.exact(), found)
+
+            found = Collection.id.in_(
+                select(CollectionFile.collection_id).where(
+                    CollectionFile.id.in_(
+                        select(Segment.file_id).where(found))))
+            return ~found if term.negate else found
+
+        # Where the field is kept: (the collection's id, the column)
+        columns = {
+            SEARCH_ANY: (
+                (Collection.id, Collection.name),
+                (CollectionFile.collection_id, CollectionFile.subject),
+                (CollectionFile.collection_id, CollectionFile.filename)),
+            'subject': (
+                (Collection.id, Collection.name),
+                (CollectionFile.collection_id, CollectionFile.subject)),
+            'filename': (
+                (CollectionFile.collection_id, CollectionFile.filename), ),
+            'poster': (
+                (Collection.id, Collection.poster),
+                (CollectionFile.collection_id, CollectionFile.poster)),
+        }[term.field]
+
+        # What the search index can find for us
+        narrowed = [
+            self._search(
+                session, TERM_PARAMS + no * TERM_PARAMS + piece_no,
+                'poster' if term.field == 'poster' else 'subject', piece)
+            for piece_no, piece in enumerate(term.pieces()[:TERM_PARAMS])]
+
+        selects = []
+        for owner, column in columns:
+            found = select(owner.label('id'))\
+                .where(term.condition(dialect, column))
+            for ids in narrowed:
+                found = found.where(owner.in_(ids))
+            selects.append(found)
+
+        # Searched once as a table of its own (see _search())
+        found = union(*selects).subquery() if len(selects) > 1 \
+            else selects[0].subquery()
+
+        found = Collection.id.in_(select(found.c.id))
+        return ~found if term.negate else found
 
     @staticmethod
     def _search(session, no, column, value, case_sensitive=False):
@@ -1803,11 +2145,15 @@ class NNTPIndexer:
         """
         A short summary of our last index()
         """
+        dropped = ', %d dropped by filters' % self.dropped \
+            if self.dropped else ''
+
         if not self.articles:
-            return 'nothing new to index'
+            return 'nothing new to index%s' % dropped
 
         return '%d article(s) indexed; %d new file(s) in %d new ' \
-            'collection(s)' % (self.articles, self.files, self.collections)
+            'collection(s)%s' % (
+                self.articles, self.files, self.collections, dropped)
 
     def __repr__(self):
         """

@@ -132,9 +132,51 @@
 #   # or look at who posted it with %p
 #   nr search -g test holiday %pChris -- -2019
 #
+#   # Or search like 'find' does: the whole subject (or body, poster, file
+#   # name) must match; * and ? are wildcards, the i versions ignore case
+#   # and accents, the regex versions take a regular expression, and a
+#   # leading ! leaves out what matches.  Every one added narrows it down.
+#   nr search --isubject '*holiday*' --isubject '!*sample*' --ifilename '*.nfo'
+#   nr search --posts --isubject 're: *' --ibody '*coffee*'
+#   nr search --iregex-poster 'chris.*' 'holi*ay'
+#
+#   # Narrow any search down by tag (!tag for what doesn't have it), score
+#   # (the same comparisons as filters.yaml) and when it was posted (a
+#   # date, a year, or how long ago: 90d, 12h, 2w, 1y)
+#   nr search -t 'video, !sample' --score '>=10' --after 2024 --before 30d
+#   nr search --posts --isubject 're: *' --after 7d
+#
 #   # Search the cached article headers instead (ie: what isn't indexed
 #   # yet); the below only shows articles that scored 30 or more
 #   nr search --raw -g test --minscore 30 "keyword or string 1"
+#
+#   # Keep the database trim: see what a rule would remove (everywhere:
+#   # header caches, index and archive), remove it, and keep the rule in
+#   # filters.yaml so later scans drop the same things before storing them.
+#   # It takes the same options as searching (! in front leaves out).
+#   nr filter purge --iposter '*@spam.example>' -g test --dry-run
+#   nr filter purge --iposter '*@spam.example>' -g test --save
+#   nr filter purge --isubject '*casino*' --isubject '!*review*' -n
+#   nr filter purge --ibody '*buy now*' --tagged '!trusted' --save
+#
+#   # Score and tag what matters to you, then search by tag or score
+#   nr filter score --isubject '*.par2*' --score 10 --tag recovery --save
+#   nr search --tag recovery --minscore 5 holiday
+#
+#   # Tags combine like Apprise's: give --tag (or --exclude-tag) more than
+#   # once for any of them, or 'a, b' for both; every search takes them
+#   nr search -t 'video, hd' -t music -T junk --maxscore 100
+#   nr search --posts -t chat "some words"
+#   nr nzb list -t recovery
+#
+#   # Rules can compare scores ('<-50', '>23, <34') and leave out tags
+#   nr filter purge --score '<-50' --tagged '!trusted' --dry-run
+#
+#   # After editing filters.yaml by hand: apply it to what is stored
+#   nr filter purge
+#   nr filter rescore
+#   nr filter list
+#   nr filter remove spam
 #
 #  If you setup you filters right, you can download content by group or
 #  single files.  Just pay attention to the id on the left (in your search)
