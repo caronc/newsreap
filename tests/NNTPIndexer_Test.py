@@ -123,7 +123,7 @@ def index_engine(request, tmp_path):
     database server given (see INDEX_SERVERS)
     """
     if request.param == 'sqlite':
-        return str(tmp_path / 'cache' / 'index.db')
+        return str(tmp_path / 'index.db')
 
     url = os.environ['NEWSREAP_TEST_%s' % request.param.upper()]
     engine = create_engine(url)
@@ -650,15 +650,15 @@ def test_searching_by_poster(paths):
 
 def test_index_can_be_kept_on_a_database_server(tmp_path):
     """
-    The index is an SQLite file in our cache unless index_engine names a
-    database (ie: PostgreSQL or MySQL)
+    The index is an SQLite file in our data directory unless index_engine
+    names a database (ie: PostgreSQL or MySQL)
     """
     from newsreap.NNTPSettings import NNTPSettings
 
     settings = NNTPSettings()
     settings.base_dir = str(tmp_path)
     assert settings.index_database() == \
-        join(str(tmp_path), 'cache', 'index.db')
+        join(str(tmp_path), 'index.db')
 
     settings.nntp_database['index_engine'] = 'postgresql://u:p@host/index'
     assert settings.index_database() == 'postgresql://u:p@host/index'

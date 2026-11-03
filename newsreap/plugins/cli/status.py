@@ -244,7 +244,9 @@ def show_setup(ctx):
     heading('Setup')
     detail('Version', '%s v%s' % (__title__, __version__))
     detail('Configuration', settings.cfg_file or '(defaults)')
-    detail('Base directory', settings.base_dir)
+    detail('Config directory', settings.config_dir)
+    detail('Data directory', settings.data_dir)
+    detail('Cache directory', settings.cache_dir)
     detail('Work directory', settings.work_dir)
 
     try:

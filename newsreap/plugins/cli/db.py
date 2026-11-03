@@ -116,7 +116,7 @@ def database_reset(ctx):
     ctx['NNTPSettings'].open(reset=True)
     __db_prep(ctx)
 
-    db_path = join(ctx['NNTPSettings'].base_dir, 'cache', 'search')
+    db_path = join(ctx['NNTPSettings'].cache_dir, 'search')
     logger.debug('Scanning %s for databases...' % db_path)
     with pushd(db_path, create_if_missing=True):
         for entry in listdir(db_path):

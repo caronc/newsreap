@@ -27,7 +27,7 @@ Some under the hood stuff that developers should appreciate about NewsReap are:
 __Note:__ This is a work in progress; a lot of what is documented here is what the final solution will be.  But it is definitely not there yet!  The backend is in good shape, but the CLI tool is what needs to be worked on next.
 
 ## Installation
-NewsReap needs a __config.yaml__ file; it looks for one in the following places (in order):
+NewsReap needs a __config.yaml__ file; it looks for one in the following places (in order; `.yml` works too, ie: `config.yml`):
 
 1. ~/.config/newsreap/config.yaml
 2. ~/newsreap/config.yaml
@@ -40,9 +40,22 @@ The easiest way to get started is to let NewsReap write one for you:
 # Writes ~/.config/newsreap/config.yaml and creates the directories it uses
 nr --init
 
-# Or keep everything somewhere else
+# Or keep everything together somewhere else
 nr --config ~/usenet/config.yaml --init
 ```
+
+Each kind of file goes where your system expects it (on Linux):
+
+| What | Where |
+|---|---|
+| `config.yaml` and your filters (`filters/`) | `~/.config/newsreap/` |
+| What can't be fetched again: the databases, the posts kept, your PGP keys | `~/.local/share/newsreap/` |
+| What can be fetched again: the cached headers, downloads in progress | `~/.cache/newsreap/` |
+
+The `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` variables move
+them, as do `data_dir` and `cache_dir` in `config.yaml`.  Set `base_dir`
+there to keep everything in one directory instead (`nr --config
+<file> --init` outside `~/.config/newsreap` does that for you).
 
 `--init` never overwrites or removes anything; it stops if a configuration file already exists. Fill in your server details and you can start interfacing with your NNTP Provider.
 
@@ -152,6 +165,10 @@ nr update --watched
   (see More Than Headers).
 - **Drop spam and rank what you like:** filters remove articles before
   they are ever kept, and score and tag the rest (`nr filter --help`).
+  They live in `~/.config/newsreap/filters/`: every `.yaml` (or `.yml`)
+  file there is read in the order of their names, so `00-spam.yaml` runs
+  before `50-scores.yml`, and you can split them up however you like.
+  `example.yaml.template` there shows every setting a rule can have.
   Try `nr filter purge ... --dry-run` first to see what a rule removes.
 - **Read one article:** `nr show <message-id>`.
 
@@ -382,7 +399,7 @@ nr update a.b.test2 --nzb
 # Do either with the headers you already have (fetching no new ones)
 nr update a.b.test2 --cached --nzb --content
 
-# Work every score and tag out again after changing filters.yaml
+# Work every score and tag out again after changing your filters
 nr update a.b.test2 --rescore
 
 # Start a group over (everything kept of it is removed first)
@@ -445,7 +462,8 @@ they are kept, so their text can be searched like any other.  This needs
 [gpg](https://gnupg.org) (most Linux systems have it; on Windows install
 Gpg4win).
 ```bash
-# gpg keeps it in <base_dir>/pgp (set pgp_home: ~/.gnupg to use your own)
+# gpg keeps it in ~/.local/share/newsreap/pgp (set pgp_home: ~/.gnupg to
+# use your own)
 nr pgp import my-secret-key.asc
 
 # If the key has a passphrase, give it once; it is checked and kept in a

@@ -377,7 +377,7 @@ def waits(tmp_path):
     Returns why each waiting post still waits, and how often it was tried
     again: Message-ID -> (reason, tries)
     """
-    archiver = NNTPArchiver(str(tmp_path / 'cache' / 'index.db'), pgp=True)
+    archiver = NNTPArchiver(str(tmp_path / 'index.db'), pgp=True)
     try:
         return {m: (w.reason, w.tries) for m, w in NNTPKeyring.waits(
             archiver.session(), ['reader@x', 'hidden@x', 'file@x']).items()}
@@ -386,28 +386,62 @@ def waits(tmp_path):
         archiver.close()
 
 
-def explain(tmp_path, server, start, before):
+def snapshot(tmp_path):
     """
-    Returns what a failed retry test needs to be understood: what waited
-    before, what was asked of the server, our secret keys, and the posts
-    the index holds as still locked (with every key tie)
+    Returns what the index holds of the test posts (to understand a failed
+    retry test): every key tie, the posts waiting and why, and which of
+    the group's cached articles are marked as kept
     """
+    from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
+    from newsreap.objects.group.Article import Article
     from newsreap.objects.index.PGPPost import PGPPost
     gpg = NNTPGnuPG(str(tmp_path / 'pgp'))
-    archiver = NNTPArchiver(str(tmp_path / 'cache' / 'index.db'), pgp=True)
+    archiver = NNTPArchiver(str(tmp_path / 'index.db'), pgp=True)
+    cache = NNTPGroupDatabase.from_file(
+        str(tmp_path / 'cache' / 'search' / ('%s.db' % GROUP)))
     try:
         session = archiver.session()
-        return repr({
-            'before': before,
-            'asked': server.commands()[start:],
+        return {
             'secret': gpg.secret_keys(),
-            'locked': NNTPKeyring.locked(session, gpg.secret_keys()),
-            'ties': [(t.message_id, t.key_id, t.role)
-                     for t in session.query(PGPPost)],
-        })
+            'ties': sorted((t.message_id, t.key_id, t.role)
+                           for t in session.query(PGPPost)),
+            'locked': sorted(NNTPKeyring.locked(
+                session, gpg.secret_keys())),
+            'waits': waits(tmp_path),
+            'archived': sorted((a.message_id, a.archived)
+                               for a in cache.session().query(Article)),
+        }
 
     finally:
+        cache.close()
         archiver.close()
+
+
+def recorded(nr, server, tmp_path):
+    """
+    Returns (update, history): update() runs 'nr -vv update <group>
+    --content' and notes what it said, what was asked of the server and
+    what the index held after it (to understand a failed retry test); the
+    -vv logs what each fetch got back and what was kept
+    """
+    history = []
+
+    def update():
+        start = len(server.commands())
+        result = nr('-vv', 'update', GROUP, '--content')
+        history.append((result.output, server.commands()[start:],
+                        snapshot(tmp_path)))
+        return result
+
+    return update, history
+
+
+def explained(result, history):
+    """
+    Fails the test, showing the last output and every step before it
+    """
+    from pprint import pformat
+    pytest.fail('%s\n%s' % (result.output, pformat(history)))
 
 
 def test_locked_posts_are_tried_again_a_limited_number_of_times(
@@ -418,8 +452,9 @@ def test_locked_posts_are_tried_again_a_limited_number_of_times(
     tries back
     """
     nr = command_line(tmp_path, server, pgp_retries=2)
+    update, history = recorded(nr, server, tmp_path)
     try:
-        result = nr('update', GROUP, '--content')
+        result = update()
         assert result.exit_code == 0, result.output
         assert '3 still locked' in result.output
         assert 'tried again' not in result.output
@@ -428,7 +463,7 @@ def test_locked_posts_are_tried_again_a_limited_number_of_times(
         # Tried again twice (nothing has changed, so still locked)
         for tries in (1, 2):
             start = len(server.commands())
-            result = nr('update', GROUP, '--content')
+            result = update()
             assert result.exit_code == 0, result.output
             assert '3 locked post(s) tried again' in result.output
             assert asked(server, start) == {'reader@x', 'hidden@x', 'file@x'}
@@ -440,7 +475,7 @@ def test_locked_posts_are_tried_again_a_limited_number_of_times(
 
         # Then left alone
         start = len(server.commands())
-        result = nr('update', GROUP, '--content')
+        result = update()
         assert 'tried again' not in result.output
         assert asked(server, start) == set()
 
@@ -450,10 +485,12 @@ def test_locked_posts_are_tried_again_a_limited_number_of_times(
         assert result.exit_code == 0, result.output
         assert 'nr update tries them again' in nr('status').output
 
+        history.append(('after the passphrase', [], snapshot(tmp_path)))
         start = len(server.commands())
-        result = nr('update', GROUP, '--content')
+        result = update()
         assert result.exit_code == 0, result.output
-        assert '3 locked post(s) tried again, 3 decrypted' in result.output
+        if '3 locked post(s) tried again, 3 decrypted' not in result.output:
+            explained(result, history)
         assert asked(server, start) == {'reader@x', 'hidden@x', 'file@x'}
         assert waits(tmp_path) == {}
         assert '<reader@x>' in nr('search', '--posts', 'usual place').output
@@ -469,15 +506,17 @@ def test_answers_that_cannot_change_are_given_up_on(tmp_path, server):
     still tries it
     """
     nr = command_line(tmp_path, server, pgp_retries=5)
+    update, history = recorded(nr, server, tmp_path)
+
     try:
-        assert '3 still locked' in nr('update', GROUP, '--content').output
+        assert '3 still locked' in update().output
 
         server.on(r'^ARTICLE <reader@x>$', '430 No such article')
         server.on(r'^ARTICLE <file@x>$', '502 Access denied')
 
-        result = nr('update', GROUP, '--content')
+        result = update()
         assert result.exit_code == 0, result.output
-        assert '3 locked post(s) tried again' in result.output
+        assert '3 locked post(s) tried again' in result.output, history
         assert '2 no longer tried on their own' in result.output
         assert waits(tmp_path) == {
             'reader@x': (WaitReason.Gone, 1),
@@ -487,11 +526,11 @@ def test_answers_that_cannot_change_are_given_up_on(tmp_path, server):
         # Only the one a passphrase can help is tried again
         assert nr('pgp', 'passphrase', 'reader',
                   input=READER_PASSPHRASE + '\n').exit_code == 0
-        before = waits(tmp_path)
+        history.append(('after the passphrase', [], snapshot(tmp_path)))
         start = len(server.commands())
-        result = nr('update', GROUP, '--content')
-        assert '1 locked post(s) tried again, 1 decrypted' in result.output, \
-            explain(tmp_path, server, start, before)
+        result = update()
+        if '1 locked post(s) tried again, 1 decrypted' not in result.output:
+            explained(result, history)
         assert asked(server, start) == {'hidden@x'}
 
         start = len(server.commands())

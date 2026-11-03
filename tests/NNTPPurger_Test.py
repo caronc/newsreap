@@ -15,6 +15,7 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import os
 from datetime import timedelta
 
 import pytest
@@ -477,7 +478,7 @@ def test_archiving_scores_and_drops(tmp_path):
 
         config = config_for(server, tmp_path / 'config.yaml')
         db_file = str(tmp_path / 'cache' / 'search' / ('%s.db' % GROUP))
-        index_db = str(tmp_path / 'cache' / 'index.db')
+        index_db = str(tmp_path / 'index.db')
         runner = CliRunner()
 
         def nr(*args):
@@ -532,7 +533,7 @@ def test_archiving_scores_and_drops(tmp_path):
 
     assert set(headers(db_file, index_db)) == {'talk@x'}
     archiver = NNTPArchiver(
-        str(tmp_path / 'cache' / 'index.db'), default_hooks=False)
+        str(tmp_path / 'index.db'), default_hooks=False)
     assert archived(archiver) == {'talk@x': (3, 'chat')}
     archiver.close()
 
@@ -561,9 +562,9 @@ def test_filters_from_the_command_line(tmp_path):
                 POSTED + timedelta(minutes=no), message_id)
 
         config = config_for(server, tmp_path / 'config.yaml')
-        filters_file = tmp_path / 'filters.yaml'
+        filters_file = tmp_path / 'filters' / 'saved.yaml'
         db_file = str(tmp_path / 'cache' / 'search' / ('%s.db' % GROUP))
-        index_db = str(tmp_path / 'cache' / 'index.db')
+        index_db = str(tmp_path / 'index.db')
         runner = CliRunner()
 
         def nr(*args):
@@ -859,16 +860,25 @@ def test_broken_rules_are_left_out_and_broken_files_stop(tmp_path):
 
 def test_the_filters_file_can_be_moved(tmp_path):
     """
-    The filters setting says where the filters file is; without it, it is
-    filters.yaml next to the configuration file
+    The filters setting says where the filters are; without it, they are
+    the filters directory next to the configuration file (or filters.yaml
+    there, when the directory holds no filters files)
     """
     from newsreap.NNTPSettings import NNTPSettings
 
     with FakeNNTPServer() as server:
         config = config_for(server, tmp_path / 'config.yaml')
         settings = NNTPSettings(config)
-        assert settings.filters_file() == str(tmp_path / 'filters.yaml')
+        assert settings.filters_file() == str(tmp_path / 'filters')
         assert len(settings.filters()) == 0
+
+        # The one file used before there was a directory of them
+        (tmp_path / 'filters.yaml').write_text(
+            'filters:\n  - name: old\n    subject: x\n')
+        assert settings.filters_file() == str(tmp_path / 'filters.yaml')
+        (tmp_path / 'filters').mkdir(exist_ok=True)
+        (tmp_path / 'filters' / 'new.yaml').write_text('filters: []\n')
+        assert settings.filters_file() == str(tmp_path / 'filters')
 
         moved = tmp_path / 'elsewhere.yaml'
         moved.write_text('filters:\n  - name: a\n    subject: x\n')
@@ -883,6 +893,135 @@ def test_the_filters_file_can_be_moved(tmp_path):
         moved.write_text('filters:\n  - name: b\n    subject: x\n')
         assert list(settings.filters().keys()) == ['a']
         assert list(settings.filters(reload=True).keys()) == ['b']
+
+
+def test_a_directory_of_filters_files_is_read_in_name_order(tmp_path):
+    """
+    Every .yaml file of a filters directory is read, in the order of their
+    names; saving only writes the files whose rules changed
+    """
+    folder = tmp_path / 'filters'
+    folder.mkdir()
+    (folder / '50-scores.yaml').write_text(
+        '# Mine\nfilters:\n  - name: good\n    subject: good\n'
+        '    score: 5\n')
+    (folder / '00-spam.yaml').write_text(
+        'filters:\n  - name: spam\n    poster: spam.example\n'
+        '  - name: junk\n    subject: junk\n')
+    (folder / 'notes.txt').write_text('not a filters file')
+
+    filters = NNTPFilter(str(folder))
+    assert list(filters.keys()) == ['spam', 'junk', 'good']
+    assert filters.files == [
+        str(folder / '00-spam.yaml'), str(folder / '50-scores.yaml')]
+    assert filters.source('good') == str(folder / '50-scores.yaml')
+
+    # Removing a rule writes its own file out again, and only that one
+    filters.remove('junk')
+    filters.save(str(folder))
+    assert list(NNTPFilter(str(folder)).keys()) == ['spam', 'good']
+    assert (folder / '50-scores.yaml').read_text().startswith('# Mine')
+
+    # Rules saved from the command line go in saved.yaml
+    filters.append({'name': 'casino', 'subject': 'casino'}, str(folder))
+    assert filters.source('casino') == str(folder / 'saved.yaml')
+    assert list(NNTPFilter(str(folder)).keys()) == [
+        'spam', 'good', 'casino']
+
+    # A name used in two files is a problem (saying where else it is)
+    (folder / '60-again.yaml').write_text(
+        'filters:\n  - name: good\n    subject: other\n')
+    again = NNTPFilter(str(folder))
+    assert again.source('good') == str(folder / '50-scores.yaml')
+    assert len(again.problems) == 1
+    assert 'also in %s' % (folder / '50-scores.yaml') in again.problems[0]
+
+
+def test_filters_files_are_read_by_name_whatever_their_extension(tmp_path):
+    """
+    .yaml and .yml files are read in the order of their names; the
+    extension never changes it
+    """
+    folder = tmp_path / 'filters'
+    folder.mkdir()
+    for name in ('02_zzz.yaml', '00_name.yaml', '01_aaa.yml', 'a.yml',
+                 'a-.yaml'):
+        rule = name.split('.')[0].replace('_', '-') or 'rule'
+        (folder / name).write_text(
+            'filters:\n  - name: r%s\n    subject: %s\n    score: 1\n' % (
+                rule, rule))
+
+    assert list(NNTPFilter(str(folder)).keys()) == [
+        'r00-name', 'r01-aaa', 'r02-zzz', 'ra', 'ra-']
+
+
+def test_unreadable_filters_files_are_warned_about_and_skipped(
+        tmp_path, caplog):
+    """
+    A file of a filters directory that can't be read (or isn't valid) is
+    warned about and left out; the others are still used, and only .yaml
+    and .yml files are read
+    """
+    folder = tmp_path / 'filters'
+    folder.mkdir()
+    (folder / '10-good.yaml').write_text(
+        'filters:\n  - name: good\n    subject: good\n    score: 1\n')
+    (folder / '20-broken.yaml').write_text('filters: [\n')
+    locked = folder / '30-locked.yaml'
+    locked.write_text('filters:\n  - name: locked\n    subject: x\n')
+    locked.chmod(0)
+    (folder / '40-other.yml').write_text(
+        'filters:\n  - name: other\n    subject: other\n    score: 2\n')
+    (folder / 'example.yaml.template').write_text('filters: [\n')
+    (folder / 'notes.txt').write_text('filters: [\n')
+
+    try:
+        if os.access(str(locked), os.R_OK):
+            pytest.skip('files can be read whatever their permissions')
+
+        filters = NNTPFilter(str(folder))
+        assert list(filters.keys()) == ['good', 'other']
+        assert len(filters.problems) == 2
+        assert "isn't valid YAML" in caplog.text
+        assert "Can't read the filters file %s" % locked in caplog.text
+
+        # The good file can still be saved; the others are left alone
+        filters.remove('good')
+        filters.save(str(folder))
+        assert len(NNTPFilter(str(folder / '10-good.yaml'))) == 0
+        assert (folder / '20-broken.yaml').read_text() == 'filters: [\n'
+
+    finally:
+        locked.chmod(0o600)
+
+
+def test_missing_or_unreadable_filters_are_warned_about(tmp_path, caplog):
+    """
+    A filters setting naming something that isn't there (or a directory
+    that can't be read) only says so; there are simply no filters
+    """
+    from newsreap.NNTPSettings import NNTPSettings
+
+    with FakeNNTPServer() as server:
+        config = config_for(
+            server, tmp_path / 'config.yaml',
+            filters="'%{config_dir}/nowhere'")
+        settings = NNTPSettings(config)
+        assert len(settings.filters()) == 0
+        assert "which doesn't exist" in caplog.text
+
+    folder = tmp_path / 'locked'
+    folder.mkdir()
+    folder.chmod(0)
+    try:
+        if os.access(str(folder), os.R_OK):
+            pytest.skip('directories can be read whatever their permissions')
+
+        assert len(NNTPFilter(str(folder))) == 0
+        assert "Can't read the filters directory" in caplog.text
+
+    finally:
+        folder.chmod(0o700)
 
 
 def test_purge_counts_print_plainly():

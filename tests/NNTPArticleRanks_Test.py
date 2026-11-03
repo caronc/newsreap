@@ -166,7 +166,7 @@ def test_crossposted_articles_are_judged_the_same_everywhere(tmp_path):
         assert result.exit_code == 0, result.output
 
         index = NNTPIndexDatabase.from_engine(
-            str(tmp_path / 'cache' / 'index.db'))
+            str(tmp_path / 'index.db'))
         assert rows(index.session()) == {'g@x': (5, 'other')}
         index.close()
 

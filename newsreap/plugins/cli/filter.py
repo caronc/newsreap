@@ -22,8 +22,10 @@
 #   nr filter list
 #   nr filter remove <name>
 #
-# Saved rules live in filters.yaml (next to config.yaml) and are applied
-# to everything 'nr update' stores from then on.
+# Rules live in the filters directory (next to config.yaml): every .yaml
+# (or .yml) file in it is read, in the order of their names (00-spam.yaml
+# before 50-scores.yml).  Rules saved with --save go into its saved.yaml.
+# They are applied to everything 'nr update' stores from then on.
 
 import logging
 import click
@@ -60,7 +62,7 @@ NEWSREAP_CLI_PLUGINS = {
     # cli short hand group: function prefix
     'filter': {
         'prefix': 'filter',
-        'desc': 'Drop, score and tag articles (filters.yaml)',
+        'desc': 'Drop, score and tag articles (the filters directory)',
     },
 }
 
@@ -327,7 +329,8 @@ def save_rule(ctx, filters, rule, save, dry_run):
             logger.error('Could not save the rule: %s' % e)
             exit(1)
 
-        click.echo("Saved the rule '%s' in %s" % (rule.name, path))
+        click.echo("Saved the rule '%s' in %s" % (
+            rule.name, filters.source(rule.name)))
         return
 
     click.echo(
@@ -344,8 +347,8 @@ def save_rule(ctx, filters, rule, save, dry_run):
 @click.option('--dry-run', '-n', is_flag=True,
               help='Only show what would be removed.')
 @click.option('--save', is_flag=True,
-              help='Keep the rule in filters.yaml so later scans drop the '
-                   'same things.')
+              help='Keep the rule (in saved.yaml of the filters '
+                   'directory) so later scans drop the same things.')
 @click.option('--nzb', is_flag=True,
               help='Include collections imported from NZB files.')
 @click.option('--show', type=click.IntRange(min=0), default=10,
@@ -375,7 +378,7 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
     clear out what scores low.  Bodies are only known for
     archived posts (and file names for indexed and archived ones), so
     those conditions only reach them.  Without conditions, every saved rule
-    (filters.yaml) is applied again, and scores and tags are worked out
+    (every file of the filters directory) is applied again, and scores and tags are worked out
     again (from 0) too.
 
     """
@@ -431,8 +434,8 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
 @click.option('--dry-run', '-n', is_flag=True,
               help='Only show what would change.')
 @click.option('--save', is_flag=True,
-              help='Keep the rule in filters.yaml so later scans score the '
-                   'same way.')
+              help='Keep the rule (in saved.yaml of the filters '
+                   'directory) so later scans score the same way.')
 @click.option('--nzb', is_flag=True,
               help='Include collections imported from NZB files.')
 @click.pass_obj
@@ -490,7 +493,7 @@ def filter_rescore(ctx, groups, dry_run, nzb):
     """
     Work every score and tag out again from the saved rules.
 
-    Run it after changing the score rules in filters.yaml.  Nothing is
+    Run it after changing the score rules of the filters directory.  Nothing is
     removed (see 'nr filter purge' for that).
 
     """
@@ -514,8 +517,15 @@ def filter_list(ctx):
         click.echo('There are no saved rules in %s.' % path)
         return
 
-    click.echo('# %s' % path)
-    click.echo(filters.to_yaml().rstrip())
+    # The rules of each file, in the order they are used
+    first = True
+    for source in dict.fromkeys(
+            filters.source(rule.name) for rule in filters.values()):
+        if not first:
+            click.echo('')
+        first = False
+        click.echo('# %s' % source)
+        click.echo(filters.to_yaml(filters.rules_of(source)).rstrip())
 
 
 @click.command(name='remove')
@@ -526,8 +536,9 @@ def filter_remove(ctx, names):
     Remove saved rules (by name).
 
     What they removed before doesn't come back; scores and tags they gave
-    change once 'nr filter rescore' is run.  The filters file is written
-    out again (comments in it are lost).
+    change once 'nr filter rescore' is run.  The filters file each one is
+    in is written out again (comments in it are lost); the other files are
+    left alone.
 
     """
     filters = load_filters(ctx)

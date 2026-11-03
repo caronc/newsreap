@@ -293,6 +293,15 @@ class NNTPArchiver:
             # The PGP keys it carries and names
             self.keys += NNTPKeyring.store_post(session, post)
 
+        if logger.isEnabledFor(logging.DEBUG):
+            # What was kept under this Message-ID (to tell posts apart when
+            # one looks wrong)
+            logger.debug(
+                'Kept <%s>: %s, subject %r, %d byte(s) of text, files %s, '
+                'PGP %s', post.message_id, post.kind, post.subject[:60],
+                len(post.text or ''), [f['filename'] for f in post.files],
+                sorted((key_id, role) for key_id, role, _ in post.pgp))
+
         if self._waiting(post):
             # Why it couldn't be decrypted (so it can be tried again)
             self._note(session, post.message_id,

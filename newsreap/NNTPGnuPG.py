@@ -15,7 +15,7 @@
 Runs gpg (https://gnupg.org) to decrypt the posts encrypted for a secret
 key you hold, and to keep those secret keys and their passphrases.
 
-- gpg keeps the secret keys in its own folder (`home`): <base_dir>/pgp by
+- gpg keeps the secret keys in its own folder (`home`): <data_dir>/pgp by
   default, or your own (ie: ~/.gnupg) with the pgp_home setting.
 - A passphrase is kept in a file of its own next to them (only you can
   read it), named after the key's fingerprint.  It is handed to gpg as a

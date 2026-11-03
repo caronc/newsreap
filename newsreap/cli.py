@@ -179,7 +179,7 @@
 #   nr search --iregex-poster 'chris.*' 'holi*ay'
 #
 #   # Narrow any search down by tag (!tag for what doesn't have it), score
-#   # (the same comparisons as filters.yaml) and when it was posted (a
+#   # (the same comparisons as the filters files) and when it was posted (a
 #   # date, a year, or how long ago: 90d, 12h, 2w, 1y)
 #   nr search -t 'video, !sample' --score '>=10' --after 2024 --before 30d
 #   nr search --posts --isubject 're: *' --after 7d
@@ -189,8 +189,9 @@
 #   nr search --raw -g test --minscore 30 "keyword or string 1"
 #
 #   # Keep the database trim: see what a rule would remove (everywhere:
-#   # header caches, index and archive), remove it, and keep the rule in
-#   # filters.yaml so later scans drop the same things before storing them.
+#   # header caches, index and archive), remove it, and keep the rule
+#   # (in filters/saved.yaml) so later scans drop the same things before
+#   # storing them.
 #   # It takes the same options as searching (! in front leaves out).
 #   nr filter purge --iposter '*@spam.example>' -g test --dry-run
 #   nr filter purge --iposter '*@spam.example>' -g test --save
@@ -210,7 +211,7 @@
 #   # Rules can compare scores ('<-50', '>23, <34') and leave out tags
 #   nr filter purge --score '<-50' --tagged '!trusted' --dry-run
 #
-#   # After editing filters.yaml by hand: apply it to what is stored
+#   # After editing the filters files by hand: apply them to what is stored
 #   nr filter purge
 #   nr filter rescore
 #   nr filter list

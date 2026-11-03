@@ -17,8 +17,9 @@
 #
 # A Sample configuration (newsreap.yaml) might look like this:
 #   global:
-#       base_dir: ~/.config/newsreap/
-#       work_dir: <base_dir>/var
+#       # Optional; see the config.yaml written by 'nr --init'
+#       data_dir: ~/.local/share/newsreap/
+#       cache_dir: ~/.cache/newsreap/
 #
 #   servers:
 #     - username: lead2gold
@@ -147,8 +148,13 @@ import sys
 import yaml
 
 from os import chmod
+from os import environ
+from shutil import copyfile
+from os import listdir
 from os import makedirs
 from os import name as os_name
+from os.path import isabs
+from os.path import isdir
 from os.path import join
 from os.path import isfile
 from os.path import dirname
@@ -170,6 +176,8 @@ except ImportError:
     from newsreap.NNTPDatabase import NNTPDatabase
 
 from newsreap.NNTPFilter import FILTERS_FILE
+from newsreap.NNTPFilter import FILTERS_EXTENSIONS
+from newsreap.NNTPFilter import FILTERS_FOLDER
 from newsreap.NNTPFilter import NNTPFilter
 from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 from newsreap.NNTPIOStream import NNTPIOStream
@@ -191,23 +199,74 @@ if os_name == 'nt':
 else:
     ROOT = '/'
 
+# Where each kind of file goes (see user_dir()): the XDG variable that
+# names it, the folder used when it isn't set, and the Windows variable
+USER_DIRS = {
+    # Settings you write yourself (config.yaml, filters, plugins)
+    'config': ('XDG_CONFIG_HOME', ('.config', ), 'APPDATA'),
+    # What can't be fetched again (databases, kept posts, PGP keys)
+    'data': ('XDG_DATA_HOME', ('.local', 'share'), 'APPDATA'),
+    # What can be fetched again (header caches, downloads in progress)
+    'cache': ('XDG_CACHE_HOME', ('.cache', ), 'LOCALAPPDATA'),
+}
+
+
+def user_dir(kind):
+    """
+    Returns where NewsReap keeps one kind of file ('config', 'data' or
+    'cache') the way the system expects (the XDG Base Directory
+    specification; see https://specifications.freedesktop.org/basedir-spec/):
+
+    - Linux (and others): ~/.config/newsreap, ~/.local/share/newsreap and
+      ~/.cache/newsreap, unless XDG_CONFIG_HOME, XDG_DATA_HOME or
+      XDG_CACHE_HOME say otherwise
+    - Windows: %APPDATA%\\newsreap (and %LOCALAPPDATA%\\newsreap\\cache)
+    """
+    variable, fallback, windows = USER_DIRS[kind]
+
+    # A relative path is ignored (as the specification says)
+    path = environ.get(variable, '')
+    if isabs(path):
+        return join(path, 'newsreap')
+
+    if os_name == 'nt' and environ.get(windows):
+        return join(environ[windows], 'newsreap',
+                    *(('cache', ) if kind == 'cache' else ()))
+
+    return join(expanduser('~'), *fallback, 'newsreap')
+
+
 # The Configuration Directory
-DEFAULT_BASE_DIR = join(expanduser('~'), '.config', 'newsreap')
+DEFAULT_BASE_DIR = user_dir('config')
+
+# Where what can't be fetched again is kept (see user_dir())
+DEFAULT_DATA_DIR = user_dir('data')
+
+# Where what can be fetched again is kept (see user_dir())
+DEFAULT_CACHE_DIR = user_dir('cache')
 
 # Default temporary directory to use if none are specified
-DEFAULT_TMP_DIR = expanduser(join('~', '.config', 'newsreap', 'var', 'tmp'))
+DEFAULT_TMP_DIR = join(DEFAULT_CACHE_DIR, 'tmp')
 
 # Possible Configuration Paths
-DEFAULT_CONFIG_FILE_PATHS = (
-    join(DEFAULT_BASE_DIR, 'config.yaml'),
-    join(expanduser('~'), 'newsreap', 'config.yaml'),
-    join(expanduser('~'), '.newsreap', 'config.yaml'),
-    join(ROOT, 'etc', 'newsreap', 'config.yaml'),
-    join(ROOT, 'etc', 'newsreap.yaml'),
-)
+# (each place in turn, .yaml before .yml; the first is where 'nr --init'
+# writes one)
+DEFAULT_CONFIG_FILE_PATHS = tuple(
+    path + extension for path in (
+        join(DEFAULT_BASE_DIR, 'config'),
+        join(expanduser('~'), 'newsreap', 'config'),
+        join(expanduser('~'), '.newsreap', 'config'),
+        join(ROOT, 'etc', 'newsreap', 'config'),
+        join(ROOT, 'etc', 'newsreap'),
+    ) for extension in ('.yaml', '.yml'))
 
 # The starting configuration written by create_config()
 CONFIG_TEMPLATE = join(NEWSREAP_ROOT, 'var', 'config.yaml')
+
+# The example filters file create_config() puts in the filters directory
+# (named so it isn't read)
+FILTERS_TEMPLATE = join(NEWSREAP_ROOT, 'var', 'filters.yaml.template')
+FILTERS_EXAMPLE = 'example.yaml.template'
 
 # Plugin Keyword mapping:
 CLI_PLUGINS_MAPPING = 'NEWSREAP_CLI_PLUGINS'
@@ -246,14 +305,22 @@ DEFAULT_BLOCK_SIZE = 8192
 # Processing Variables mapped to their defaults if not found.
 # if None is specified, then the field is mandatory or we'll abort
 DEFAULT_GLOBAL_VARIABLES = {
-    # A base directory we can find everything in. It can be referenced
-    # elsewhere in the configuration file by using %{base_dir}
-    'base_dir': join('~', '.config', 'newsreap'),
+    # Keep everything in this one directory (%{base_dir}) instead of the
+    # usual places (see user_dir()); not set by default
+    'base_dir': None,
+
+    # What can't be fetched again (%{data_dir}): the base_dir if one is
+    # set, otherwise ~/.local/share/newsreap (see user_dir())
+    'data_dir': None,
+
+    # What can be fetched again (%{cache_dir}): <base_dir>/cache if a
+    # base_dir is set, otherwise ~/.cache/newsreap (see user_dir())
+    'cache_dir': None,
 
     # work_dir is the location variable and temporary data will be
     # written and removed from. This is also the location all downloaded
     # data will be written too until it's processed.
-    'work_dir': join('%{base_dir}', 'var', 'tmp'),
+    'work_dir': join('%{cache_dir}', 'tmp'),
 }
 
 # Keyword used in configuration to host all of the defined NNTP Servers
@@ -356,7 +423,7 @@ DEFAULT_PROCESSING_VARIABLES = {
     # signed or was encrypted for (see NNTPKeyring); off unless turned on
     'pgp': False,
     # Where gpg keeps the secret keys posts are decrypted with (see
-    # NNTPGnuPG); <base_dir>/pgp when not set
+    # NNTPGnuPG); <data_dir>/pgp when not set
     'pgp_home': None,
     # How many times 'nr update' tries a post that couldn't be decrypted
     # again on its own (ie: its passphrase wasn't known yet); 0 leaves it to
@@ -415,8 +482,9 @@ def create_config(cfg_file=None):
     refers to.
 
     - cfg_file: where to write it (defaults to the first standard location)
-    - Everything NewsReap keeps (database, downloads) goes in the same
-      directory as the configuration file.
+    - In the standard location, what NewsReap keeps goes where the system
+      expects it (see user_dir()).  Anywhere else, everything is kept in
+      the same directory as the configuration file (its base_dir).
     - Nothing is ever overwritten or removed; FileExistsError is raised if
       the file (or, when no path was given, any standard configuration
       file) already exists.
@@ -438,20 +506,31 @@ def create_config(cfg_file=None):
 
         cfg_file = DEFAULT_CONFIG_FILE_PATHS[0]
 
-    base_dir = dirname(cfg_file)
+    config_dir = dirname(cfg_file)
 
     # Write paths in our home directory as ~/ so they stay readable
     home = expanduser('~')
-    if base_dir == home or base_dir.startswith(join(home, '')):
-        display_dir = '~' + base_dir[len(home):]
+
+    def shown(path):
+        if path == home or path.startswith(join(home, '')):
+            return '~' + path[len(home):]
+        return path
+
+    if cfg_file == DEFAULT_CONFIG_FILE_PATHS[0]:
+        # The usual place; everything else goes where the system expects
+        # it too
+        base_dir = None
+        line = "   # base_dir: '~/newsreap'"
 
     else:
-        display_dir = base_dir
+        # Somewhere of its own; keep everything together with it
+        base_dir = config_dir
+        line = "   base_dir: '%s'" % shown(base_dir)
 
     with open(CONFIG_TEMPLATE) as fp:
-        content = fp.read().replace('__BASE_DIR__', display_dir)
+        content = fp.read().replace('__BASE_DIR__', line)
 
-    makedirs(base_dir, exist_ok=True)
+    makedirs(config_dir, exist_ok=True)
 
     # 'x' never replaces a file that showed up since we checked
     with open(cfg_file, 'x') as fp:
@@ -460,8 +539,25 @@ def create_config(cfg_file=None):
     # The file holds passwords; only its owner may read it
     chmod(cfg_file, 0o600)
 
-    # Prepare our working directories
-    makedirs(join(base_dir, 'var', 'tmp'), exist_ok=True)
+    # Prepare our directories (our data and the work area)
+    makedirs(base_dir or DEFAULT_DATA_DIR, exist_ok=True)
+    makedirs(join(join(base_dir, 'cache') if base_dir else
+                  DEFAULT_CACHE_DIR, 'tmp'), exist_ok=True)
+
+    # The filters directory, with an example of every setting a rule can
+    # have (not read; only .yaml files are).  Not being able to is fine:
+    # it is made when a rule is first saved.
+    try:
+        folder = join(config_dir, FILTERS_FOLDER)
+        example = join(folder, FILTERS_EXAMPLE)
+        makedirs(folder, exist_ok=True)
+        if not isfile(example):
+            copyfile(FILTERS_TEMPLATE, example)
+
+    except OSError as e:
+        logger.warning(
+            'Could not prepare the filters directory %s (%s); carrying on '
+            'without it.' % (folder, e))
 
     return cfg_file
 
@@ -490,8 +586,16 @@ class NNTPSettings(NNTPDatabase):
         # Load super class
         super().__init__()
 
-        # Base Directory
-        self.base_dir = DEFAULT_BASE_DIR
+        # Where our configuration file is (config.yaml, filters and plugins
+        # live next to it)
+        self.config_dir = DEFAULT_BASE_DIR
+
+        # What can't be fetched again, and what can (see user_dir())
+        self.data_dir = DEFAULT_DATA_DIR
+        self.cache_dir = DEFAULT_CACHE_DIR
+
+        # The one directory everything is kept in (see base_dir)
+        self._base_dir = None
 
         # Work Directory (for temporary file manipulation)
         self.work_dir = DEFAULT_TMP_DIR
@@ -546,9 +650,9 @@ class NNTPSettings(NNTPDatabase):
 
         """
 
-        if hasattr(self, '__mask_re'):
-            # Destroy our cached mask
-            del self.__mask_re
+        if hasattr(self, '_mask_re'):
+            # Forget our cached masks (the directories may change)
+            del self._mask_re
 
         # Default Configuration Starting Point
         _cfg_data = deepcopy(VALID_SETTINGS_ENTRY)
@@ -654,8 +758,8 @@ class NNTPSettings(NNTPDatabase):
         # Close any database connection already established
         self.close()
 
-        # Base Directory
-        self.base_dir = None
+        # The one directory everything is kept in (see base_dir)
+        self._base_dir = None
 
         # Working Directory
         self.work_dir = None
@@ -708,22 +812,14 @@ class NNTPSettings(NNTPDatabase):
             # Default Global Configuration
             self.cfg_data[GLOBAL_KEY] = DEFAULT_GLOBAL_VARIABLES
 
-        self.base_dir = self.cfg_data[GLOBAL_KEY].get(
-            'base_dir',
-            self.base_dir,
-        )
-        if self.base_dir is None:
-            self.base_dir = DEFAULT_BASE_DIR
-
-        if self.base_dir:
-            self.base_dir = abspath(expanduser(self.base_dir))
+        self._set_directories(cfg_file)
 
         self.work_dir = self.cfg_data[GLOBAL_KEY].get(
             'work_dir',
             self.work_dir,
         )
         if self.work_dir is None:
-            self.work_dir = DEFAULT_TMP_DIR
+            self.work_dir = join(self.cache_dir, 'tmp')
 
         # Prepare our work_dir
         self.work_dir = self.apply_mask(self.work_dir, is_dir=True)
@@ -858,6 +954,62 @@ class NNTPSettings(NNTPDatabase):
 
         return self._is_valid
 
+    def _set_directories(self, cfg_file):
+        """
+        Works out where each kind of file goes from the global settings:
+
+        - base_dir: everything in one directory (data in it, caches in its
+          cache/ directory)
+        - data_dir / cache_dir: each kind somewhere of its own
+        - neither: the usual places for the system (see user_dir())
+        """
+        settings = self.cfg_data[GLOBAL_KEY]
+        self.config_dir = dirname(abspath(expanduser(cfg_file)))
+
+        # Worked out first (the others can refer to it)
+        base_dir = None
+
+        def folder(key, default):
+            value = settings.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return default
+
+            # %{base_dir} and %{config_dir} can be used in the others
+            value = value.strip()\
+                .replace('%{config_dir}', self.config_dir)\
+                .replace('%{base_dir}', base_dir or self.config_dir)
+            return abspath(expanduser(value))
+
+        base_dir = folder('base_dir', None)
+        self._base_dir = base_dir
+        self.data_dir = folder('data_dir', base_dir or DEFAULT_DATA_DIR)
+        self.cache_dir = folder(
+            'cache_dir', join(base_dir, 'cache') if base_dir
+            else DEFAULT_CACHE_DIR)
+
+    @property
+    def base_dir(self):
+        """
+        The one directory everything is kept in when the base_dir setting
+        is used; otherwise our data_dir
+        """
+        return self._base_dir or self.data_dir
+
+    @base_dir.setter
+    def base_dir(self, path):
+        """
+        Keeps everything in one directory: our data in it, our caches in
+        its cache/ directory
+        """
+        self._base_dir = abspath(expanduser(path)) if path else None
+        if self._base_dir:
+            self.data_dir = self._base_dir
+            self.cache_dir = join(self._base_dir, 'cache')
+
+        if hasattr(self, '_mask_re'):
+            # Our masks name the directories
+            del self._mask_re
+
     def group_database(self, name):
         """
         Returns the path of the database a group's articles are cached in
@@ -869,21 +1021,21 @@ class NNTPSettings(NNTPDatabase):
         safe = GROUP_FILENAME_RE.sub('_', name.strip().lower()).lstrip('.')
 
         return join(
-            self.base_dir, 'cache', 'search',
+            self.cache_dir, 'search',
             '%s%s' % (safe or '_', SQLITE_DATABASE_EXTENSION))
 
     def index_database(self):
         """
         Returns where every collection found (across all groups) is kept:
         the index_engine database URL if one is set, otherwise the path of
-        an SQLite file in our cache directory
+        an SQLite file in our data directory (what it holds, such as the
+        posts kept, may no longer be on any server)
         """
         engine = self.nntp_database.get('index_engine')
         if isinstance(engine, str) and engine.strip():
             return self.apply_mask(engine.strip())
 
-        return join(
-            self.base_dir, 'cache', 'index%s' % SQLITE_DATABASE_EXTENSION)
+        return join(self.data_dir, 'index%s' % SQLITE_DATABASE_EXTENSION)
 
     def pgp(self):
         """
@@ -911,14 +1063,14 @@ class NNTPSettings(NNTPDatabase):
     def pgp_home(self):
         """
         Returns where gpg keeps the secret keys posts are decrypted with
-        (the pgp_home setting, ie: ~/.gnupg to share your own); <base_dir>/pgp
+        (the pgp_home setting, ie: ~/.gnupg to share your own); <data_dir>/pgp
         when not set
         """
         path = self.nntp_processing.get('pgp_home')
         if isinstance(path, str) and path.strip():
             return abspath(expanduser(self.apply_mask(path.strip())))
 
-        return join(self.base_dir, 'pgp')
+        return join(self.data_dir, 'pgp')
 
     def pgp_retries(self):
         """
@@ -947,22 +1099,41 @@ class NNTPSettings(NNTPDatabase):
 
         from newsreap.NNTPGnuPG import NNTPGnuPG
         return NNTPGnuPG(self.pgp_home(), passphrases=join(
-            self.base_dir, 'pgp', 'passphrases'))
+            self.data_dir, 'pgp', 'passphrases'))
 
     def filters_file(self):
         """
         Returns where our filters are kept (see NNTPFilter): the filters
-        setting if one is set, otherwise filters.yaml next to our
-        configuration file
+        setting if one is set (a directory of .yaml files, or one file),
+        otherwise the filters/ directory next to our configuration file.
+
+        A filters.yaml (or filters.yml) file next to the configuration file
+        is still used when the filters/ directory holds no filters files.
         """
         path = self.nntp_processing.get('filters')
         if isinstance(path, str) and path.strip():
             return abspath(expanduser(self.apply_mask(path.strip())))
 
-        if self.cfg_file:
-            return join(dirname(self.cfg_file), FILTERS_FILE)
+        folder = join(self.config_dir, FILTERS_FOLDER)
+        single = next((
+            path for path in (
+                join(self.config_dir, 'filters%s' % extension)
+                for extension in FILTERS_EXTENSIONS)
+            if isfile(path)), join(self.config_dir, FILTERS_FILE))
+        try:
+            files = isdir(folder) and any(
+                name.lower().endswith(FILTERS_EXTENSIONS)
+                for name in listdir(folder))
 
-        return join(self.base_dir, FILTERS_FILE)
+        except OSError:
+            # Unreadable; NNTPFilter says so
+            files = True
+
+        if isfile(single) and not files:
+            # The one file used before there was a directory of them
+            return single
+
+        return folder
 
     def filters(self, reload=False):
         """
@@ -972,7 +1143,16 @@ class NNTPSettings(NNTPDatabase):
         has a rule that doesn't make sense.
         """
         if reload or getattr(self, '_filters', None) is None:
-            self._filters = NNTPFilter(self.filters_file())
+            path = self.filters_file()
+            setting = self.nntp_processing.get('filters')
+            if isinstance(setting, str) and setting.strip() and \
+                    not isdir(path) and not isfile(path):
+                # Asked for, but not there; said loudly, and we carry on
+                logger.error(
+                    "The filters setting names %s, which doesn't exist; no "
+                    "filters are used until it does." % path)
+
+            self._filters = NNTPFilter(path)
 
         return self._filters
 
@@ -1002,10 +1182,10 @@ class NNTPSettings(NNTPDatabase):
         # Update central configuration
         self.cfg_file = cfg_file
 
-        if hasattr(self, '__mask_re'):
+        if hasattr(self, '_mask_re'):
             # Presumably something has changed if the user called save so we
             # destroy our cached mask to be safe
-            del self.__mask_re
+            del self._mask_re
 
         return True
 
@@ -1027,6 +1207,9 @@ class NNTPSettings(NNTPDatabase):
             # Define our translation map
             self._mask_map = {
                 '%{base_dir}': self.base_dir,
+                '%{config_dir}': self.config_dir,
+                '%{data_dir}': self.data_dir,
+                '%{cache_dir}': self.cache_dir,
                 '%{work_dir}': self.work_dir,
                 '%{ramdisk}': self.nntp_processing.get('ramdisk', ''),
             }

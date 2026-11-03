@@ -410,7 +410,7 @@ def index_engine(request, tmp_path):
     database server given
     """
     if request.param == 'sqlite':
-        return str(tmp_path / 'cache' / 'index.db')
+        return str(tmp_path / 'index.db')
 
     url = os.environ['NEWSREAP_TEST_%s' % request.param.upper()]
     engine = create_engine(url)

@@ -1827,6 +1827,11 @@ class NNTPConnection(SocketBase):
             # too.
             response = self.send('ARTICLE <%s>' % id, decoders=decoders, retries=None)
 
+        # What the server said the reply is (it names the article it sent);
+        # only worked out when debugging
+        logger.debug('Asked for <%s>; the server answered %s %s', id,
+                     response.code, response.code_str)
+
         if response.is_success(multiline=True):
             # we're good to go!
             pass

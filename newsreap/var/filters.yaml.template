@@ -1,0 +1,117 @@
+## -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+##               NewsReap Filters (an example)
+## -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+## Created by `nr --init`.  This file isn't read: only files ending in
+## .yaml or .yml are.  Copy it (ie: to 10-mine.yaml), then remove the '# '
+## in front of 'filters:' and of the rules you want.
+##
+## Every .yaml (or .yml) file of this directory is read, in the order of
+## their names (so 00-spam.yaml comes before 50-scores.yml).  Rules you
+## save from the command line ('nr filter purge --save') go into
+## saved.yaml.  See
+## 'nr filter --help' for doing all of this from the command line.
+##
+## How an article is judged (every article starts with a score of 0):
+##  1. if a keep rule matches, it is kept (no drop rule can remove it)
+##  2. otherwise the first drop rule that matches removes it before
+##     anything else is done, as though it was never there
+##  3. every score rule that matches adds its score and tags
+## Keep and drop rules that compare the score or tags (ie: score: '<-50')
+## are only used by 'nr filter purge' (try it with --dry-run first).
+##
+## A rule only checks what it names; anything left out isn't looked at.
+## Case and accents don't matter unless case_sensitive: true is set.
+## -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+# filters:
+
+## -- Every setting a rule can have -------------------------------------------
+#   - name: every-setting
+#     # What to call it ('nr filter list' and 'nr filter remove' use it).
+#     # One is made up from what it matches when left out.
+#
+#     # What it does:
+#     #  - score: add its score and/or tags (the default when it has a
+#     #    score to add or a tag)
+#     #  - keep:  protect what it matches from every drop rule
+#     #  - drop:  remove what it matches (the default otherwise)
+#     action: score
+#
+#     # Only articles found in these groups; * and ? are wildcards.  Left
+#     # out, it applies to every group.
+#     groups: [alt.binaries.*, alt.discuss.coffee]
+#
+#     # all: every condition below must match (the default)
+#     # any: one of them is enough
+#     match: all
+#
+#     # Compare text exactly as written (case and accents) instead
+#     case_sensitive: false
+#
+#     # Text it looks at: subject, poster, message_id, body and filename.
+#     # Plain text means "contains"; a comparison can be one of:
+#     #   contains, is, starts, ends, glob (* and ? wildcards) or regex
+#     # and can be turned around with not: true.  A list must all match.
+#     subject: holiday
+#     poster: { ends: '@example.com' }
+#     message_id: { starts: part1of }
+#     #
+#     # The body is only known for the small articles 'nr update
+#     # --content' keeps, and file names once they are known; a rule on
+#     # them never matches anything else.
+#     body: { regex: '\bphotos?\b' }
+#     filename: [{ glob: '*.rar' }, { not: true, contains: sample }]
+#
+#     # When it was posted: a date (2026-01-31), a year (2024), or how long
+#     # ago (90d, 12h, 2w, 1y; m is minutes).  Only what falls inside counts.
+#     after: 2024
+#     before: 30d
+#
+#     # How big it is (ie: 10MB, 500KB); over, under or both
+#     size: { over: 1KB, under: 10GB }
+#
+#     # How many groups it was posted to: a number, or comparisons
+#     # (< <= > >= =; several separated by commas all have to pass)
+#     crossposts: '<=5'
+#
+#     # A number adds to the score (10, -50).  Comparisons (quote them,
+#     # ie: '>23, <34') make it a condition instead; both together ('>40,
+#     # +5') add 5 to what already scores over 40.
+#     score: 10
+#
+#     # The tags it gives (letters, numbers and - _ . : only)
+#     tag: [holiday, photos]
+#
+#     # Only what has (or doesn't have) these tags.  Each entry of a list
+#     # is a choice (any will do); the tags of one entry ('video, hd') must
+#     # all be there, and one starting with ! must not be:
+#     tagged: ['photos, !sample']
+#     not_tagged: junk
+
+## -- Some everyday ones --------------------------------------------------------
+#   # Spam: removed before it is ever stored
+#   - name: casino-spam
+#     poster: '@spam.example'
+#     action: drop
+#
+#   # Something posted to far too many groups at once
+#   - name: crossposted
+#     crossposts: '>8'
+#     action: drop
+#
+#   # Recovery files are worth something
+#   - name: recovery
+#     subject: { regex: '\.par2\b' }
+#     score: 10
+#     tag: recovery
+#
+#   # Never drop what a friend posts
+#   - name: friend
+#     poster: friend@example.com
+#     action: keep
+#
+#   # Clear out what scored badly ('nr filter purge' only)
+#   - name: low-score
+#     score: '<-50'
+#     not_tagged: recovery
+#     action: drop

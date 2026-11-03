@@ -15,8 +15,10 @@
 
 """
 Filters keep the database trim (spam is dropped before it is ever stored)
-and rank what is kept (scores and tags).  They live in a YAML file
-(filters.yaml, next to config.yaml):
+and rank what is kept (scores and tags).  They live in YAML files: every
+.yaml (or .yml) file of the filters directory next to config.yaml, read
+in the order of their names (so 00-spam.yaml comes before 50-scores.yml),
+or a single file:
 
     filters:
       - name: recovery
@@ -49,10 +51,16 @@ See NNTPFilterRule for what a rule can look at.  The rules are read once
 import re
 from collections import namedtuple
 from os import chmod
+from os import listdir
+from os import makedirs
 from os import replace
 from os.path import abspath
+from os.path import dirname
 from os.path import expanduser
+from os.path import isdir
 from os.path import isfile
+from os.path import join
+from os.path import splitext
 
 import yaml
 
@@ -70,6 +78,18 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 
 # The file our rules are kept in (next to the configuration file)
 FILTERS_FILE = 'filters.yaml'
+
+# The directory of filters files (next to the configuration file); each
+# .yaml (or .yml) file in it is read, in the order of their names
+FILTERS_FOLDER = 'filters'
+
+# The file of a filters directory that rules saved from the command line
+# go into ('nr filter purge --save')
+SAVED_FILTERS_FILE = 'saved.yaml'
+
+# What a filters file is called (anything else in a filters directory,
+# ie: example.yaml.template, is left alone)
+FILTERS_EXTENSIONS = ('.yaml', '.yml')
 
 # The key in the filters file our rules are listed under
 FILTERS_KEY = 'filters'
@@ -341,7 +361,9 @@ class NNTPFilter(NNTPFilterBase):
         """
         Prepares our rules
 
-        - path: a filters file to load (it doesn't have to exist yet)
+        - path: a filters file to load, or a directory of them (each .yaml
+          file in it, in the order of their names, so 00-spam.yaml comes
+          before 50-scores.yaml); neither has to exist yet
         - rules: rules (NNTPFilterRule or their YAML form) to start with
         - now: what relative times (ie: 90d) count back from (UTC)
 
@@ -356,18 +378,77 @@ class NNTPFilter(NNTPFilterBase):
         # Why each rule of the filters file that was left out was
         self.problems = []
 
-        # The filters file we came from (if any)
+        # The filters file we came from (if any); for a directory, the
+        # file in it that new rules are saved to
         self.path = abspath(expanduser(path)) if path else None
         self.now = now or utcnow()
+
+        # The directory of filters files we came from (if any)
+        self.folder = None
+
+        # The filters files read (in the order they were)
+        self.files = []
+
+        # Rule name -> the file it came from (or is saved to)
+        self.sources = {}
+
+        # The files whose rules changed since they were read (save() writes
+        # them out again)
+        self._changed = set()
 
         # Group(s) -> their _Plan (worked out when first needed)
         self._plans = {}
 
-        if self.path and isfile(self.path):
+        if self.path and (isdir(self.path) or not isfile(self.path) and
+                          not self.path.lower().endswith(FILTERS_EXTENSIONS)):
+            self.folder = self.path
+            self.path = join(self.folder, SAVED_FILTERS_FILE)
+            self._load_folder()
+
+        elif self.path and isfile(self.path):
             self.load(self.path)
 
         for rule in rules or ():
             self.add(rule)
+
+    def _load_folder(self):
+        """
+        Loads every filters file of our directory, in the order of their
+        names.  A file that can't be read (or isn't valid) is warned about
+        and left out; the others are still used.
+        """
+        if not isdir(self.folder):
+            # Nothing saved yet
+            return
+
+        try:
+            # In the order of their names; the extension (.yaml or .yml)
+            # never changes it (ie: 00_a.yaml, 01_b.yml, 02_c.yaml)
+            names = sorted(
+                listdir(self.folder),
+                key=lambda name: (splitext(name)[0], name))
+
+        except OSError as e:
+            # Said loudly; we carry on without them
+            logger.error(
+                "Can't read the filters directory %s (%s); no filters are "
+                "used." % (self.folder, e))
+            return
+
+        for name in names:
+            found = join(self.folder, name)
+            if not name.lower().endswith(FILTERS_EXTENSIONS) or \
+                    name.startswith('.') or not isfile(found):
+                continue
+
+            try:
+                self.load(found, reset=False)
+
+            except ValueError as e:
+                # Said loudly, and the file is left alone when saving (its
+                # rules would be lost)
+                logger.error('%s; its rules are left out.' % e)
+                self.problems.append('%s: %s' % (found, e))
 
     def load(self, path, reset=True):
         """
@@ -424,9 +505,12 @@ class NNTPFilter(NNTPFilterBase):
                 continue
 
             if rule.name in rules or (not reset and rule.name in self._rules):
+                other = self.sources.get(rule.name) if not reset else None
                 problems.append(
-                    "%s: rule #%d: the name '%s' is used more than once" % (
-                        path, no, rule.name))
+                    "%s: rule #%d: the name '%s' is used more than once%s" % (
+                        path, no, rule.name,
+                        ' (also in %s)' % other if other and other != path
+                        else ''))
                 continue
 
             rules[rule.name] = rule
@@ -438,10 +522,15 @@ class NNTPFilter(NNTPFilterBase):
         if reset:
             self._rules = {}
             self.problems = []
+            self.files = []
+            self.sources = {}
+            self._changed = set()
 
         self.problems.extend(problems)
 
         self._rules.update(rules)
+        self.sources.update((name, path) for name in rules)
+        self.files.append(path)
         self._plans = {}
         logger.info('Loaded %d filter rule(s) from %s' % (len(rules), path))
 
@@ -464,11 +553,31 @@ class NNTPFilter(NNTPFilterBase):
 
     def remove(self, name):
         """
-        Removes a rule (by name); returns it, or None if there wasn't one
+        Removes a rule (by name); returns it, or None if there wasn't one.
+        save() then writes out the file it came from.
         """
         rule = self._rules.pop(name, None)
+        source = self.sources.pop(name, None)
+        if rule is not None:
+            self._changed.add(source or self.path)
+
         self._plans = {}
         return rule
+
+    def source(self, name):
+        """
+        Returns the file a rule came from (or is saved to)
+        """
+        return self.sources.get(name, self.path)
+
+    def rules_of(self, path):
+        """
+        Returns the rules that came from (or are saved to) a filters file,
+        in their order
+        """
+        path = abspath(expanduser(path))
+        return [rule for name, rule in self._rules.items()
+                if self.source(name) == path]
 
     def unique_name(self, name):
         """
@@ -613,43 +722,71 @@ class NNTPFilter(NNTPFilterBase):
 
     def save(self, path=None):
         """
-        Writes every rule to the filters file (replacing what it held)
+        Writes our rules out:
 
-        Raises ValueError if rules were left out when it was read (they
-        would be lost); they have to be fixed first.
+        - for a directory of filters files (or path being that directory),
+          only the files whose rules changed are written, each with its
+          own rules
+        - otherwise every rule is written to the filters file given (ours
+          by default), replacing what it held
+
+        Raises ValueError if rules of a file being written were left out
+        when it was read (they would be lost); they have to be fixed first.
         """
-        if self.problems:
+        if self.folder and (path is None or abspath(
+                expanduser(path)) == self.folder):
+            for changed in sorted(self._changed):
+                self._write(changed, self.rules_of(changed))
+            self._changed = set()
+            return
+
+        path = abspath(expanduser(path or self.path))
+        self._write(path, self._rules.values())
+        if not self.folder:
+            self.path = path
+
+    def _write(self, path, rules):
+        """
+        Writes rules to a filters file (replacing what it held)
+        """
+        problems = [problem for problem in self.problems
+                    if problem.startswith(path + ':') or not self.folder]
+        if problems:
             raise ValueError(
                 '%d rule(s) of %s were left out (%s); fix them first, as '
                 'writing the file again would lose them' % (
-                    len(self.problems), self.path, '; '.join(self.problems)))
+                    len(problems), path, '; '.join(problems)))
 
-        path = abspath(expanduser(path or self.path))
+        makedirs(dirname(path), exist_ok=True)
         temporary = path + '.tmp'
 
         with open(temporary, 'w', encoding='utf-8') as fp:
             fp.write(FILTERS_HEADER)
             fp.write('\n%s:\n' % FILTERS_KEY)
-            fp.write(self._indent(self.to_yaml()))
+            fp.write(self._indent(self.to_yaml(list(rules))))
 
         chmod(temporary, 0o600)
         replace(temporary, path)
-        self.path = path
 
     def append(self, rule, path=None):
         """
-        Adds a rule and writes it at the end of the filters file, leaving
-        everything already in the file (comments too) as it is
+        Adds a rule and writes it at the end of the filters file (for a
+        directory, the file saved rules go into), leaving everything
+        already in the file (comments too) as it is
 
         Raises ValueError if the rule doesn't make sense or its name is
         taken.
         """
         path = abspath(expanduser(path or self.path))
+        if self.folder and path == self.folder:
+            path = self.path
+
         rule = self.add(rule)
+        self.sources[rule.name] = path
 
         if not isfile(path):
             # A new file
-            self.save(path)
+            self._write(path, self.rules_of(path))
             return rule
 
         with open(path, encoding='utf-8') as fp:
@@ -690,7 +827,7 @@ class NNTPFilter(NNTPFilterBase):
             logger.warning(
                 'Rewriting %s to add the rule (its comments are lost).' % (
                     path))
-            self.save(path)
+            self._write(path, self.rules_of(path))
             return rule
 
         temporary = path + '.tmp'

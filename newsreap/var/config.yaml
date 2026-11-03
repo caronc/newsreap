@@ -4,7 +4,8 @@
 # Created by `nr --init`.  At the very least you'll want to fill in your
 # server details below (host, port, username and password).
 #
-# NewsReap looks for its configuration in these locations (in order):
+# NewsReap looks for its configuration in these locations (in order; .yml
+# works too, ie: config.yml):
 #    ~/.config/newsreap/config.yaml
 #    ~/newsreap/config.yaml
 #    ~/.newsreap/config.yaml
@@ -17,12 +18,24 @@
 #   Global Configuration
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 global:
-   # Everything NewsReap keeps (database, downloads, etc) goes in here. You
-   # can refer to this directory elsewhere in this file as %{base_dir}
-   base_dir: '__BASE_DIR__'
+   # Where NewsReap keeps things.  Left alone, each kind goes where your
+   # system expects it (these are the Linux ones):
+   #  - this file and your filters:      the directory this file is in
+   #                                      (%{config_dir})
+   #  - what can't be fetched again (the databases, the posts kept and
+   #    your PGP keys):                   ~/.local/share/newsreap
+   #                                      (%{data_dir})
+   #  - what can be fetched again (the cached headers, downloads in
+   #    progress):                        ~/.cache/newsreap (%{cache_dir})
+   #
+   # Set base_dir to keep everything in one directory instead (the caches
+   # go in its cache/ directory), or move each kind on its own:
+__BASE_DIR__
+   # data_dir: '~/.local/share/newsreap'
+   # cache_dir: '~/.cache/newsreap'
 
    # Where content is downloaded to (and prepared) before it's processed
-   work_dir: '%{base_dir}/var/tmp'
+   work_dir: '%{cache_dir}/tmp'
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   NNTP Server Definitions
@@ -155,7 +168,7 @@ processing:
 
    # Where gpg keeps the secret keys posts are decrypted with; set it to
    # ~/.gnupg to use the keys (and gpg-agent) you already have.
-   # pgp_home: '%{base_dir}/pgp'
+   # pgp_home: '%{data_dir}/pgp'
 
    # A post that couldn't be decrypted (ie: its passphrase wasn't known
    # yet) is tried again by the next 'nr update', this many times.  Answers
@@ -164,9 +177,14 @@ processing:
    # pgp_retries: 1
 
    # Rules that drop spam before it is stored, and score and tag the rest
-   # (see 'nr filter --help').  They live in filters.yaml next to this file
-   # unless another file is given here.
-   # filters: '%{base_dir}/filters.yaml'
+   # (see 'nr filter --help').  Every .yaml (or .yml) file of the filters
+   # directory next to this file is read, in the order of their names (so
+   # 00-spam.yaml comes before 50-scores.yml); rules saved from the
+   # command line go into its saved.yaml.  Its example.yaml.template shows
+   # every setting a rule can have.  Give another directory (or a single
+   # file) here; one that isn't there (or a file in it that can't be read)
+   # is reported, and the rest carry on.
+   # filters: '%{config_dir}/filters'
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server
@@ -207,12 +225,12 @@ posting:
 # most databases are supported; a larger database server (PostgreSQL,
 # MySQL) is faster than SQLite for big groups.
 database:
-   engine: 'sqlite:///%{base_dir}/newsreap.db'
+   engine: 'sqlite:///%{data_dir}/newsreap.db'
 #   engine: 'postgresql+psycopg2://user:pass@localhost/newsreap'
 #   engine: 'mysql+mysqldb://user:pass@hostname/newsreap'
 
    # Where the collections found are indexed (and searched).  By default
-   # it is an SQLite file in the cache directory; give it a database of its
+   # it is an SQLite file in the data directory; give it a database of its
    # own on a server if you index a lot:
    #  - PostgreSQL needs the pg_trgm and unaccent extensions (the owner of
    #    the database can add them; newsreap does it for you)

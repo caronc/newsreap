@@ -17,11 +17,13 @@ gevent.monkey.patch_all()
 
 import os
 import stat
+import logging
 from importlib import import_module
 
 import pytest
 from click.testing import CliRunner
 
+from newsreap.Logging import NEWSREAP_ENGINE
 from newsreap.NNTPSettings import NNTPSettings
 from newsreap.NNTPSettings import create_config
 
@@ -42,30 +44,46 @@ def config_paths(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(settings_module, 'DEFAULT_CONFIG_FILE_PATHS', paths)
     monkeypatch.setattr(cli_module, 'DEFAULT_CONFIG_FILE_PATHS', paths)
+
+    # And where the data and caches go (so nothing lands in our home)
+    monkeypatch.setattr(
+        settings_module, 'DEFAULT_DATA_DIR', str(tmp_path / 'share'))
+    monkeypatch.setattr(
+        settings_module, 'DEFAULT_CACHE_DIR', str(tmp_path / 'cache'))
     return paths
 
 
-def test_starting_configuration_is_usable(config_paths):
+def test_starting_configuration_is_usable(config_paths, tmp_path):
     """
-    The configuration written loads, and its directories are ready
+    The configuration written loads, and its directories are ready: in
+    the usual place, each kind of file goes where the system expects it
     """
     path = create_config()
     assert path == config_paths[0]
 
-    base_dir = os.path.dirname(path)
-    assert os.path.isdir(os.path.join(base_dir, 'var', 'tmp'))
+    config_dir = os.path.dirname(path)
+    data_dir = str(tmp_path / 'share')
+    cache_dir = str(tmp_path / 'cache')
+    assert os.path.isdir(data_dir)
+    assert os.path.isdir(os.path.join(cache_dir, 'tmp'))
 
     # It holds a password so only its owner may read it
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
     settings = NNTPSettings(cfg_file=path)
     assert settings.is_valid() is True
-    assert settings.base_dir == base_dir
-    assert settings.work_dir == os.path.join(base_dir, 'var', 'tmp')
+    assert (settings.config_dir, settings.data_dir, settings.cache_dir) == (
+        config_dir, data_dir, cache_dir)
+    assert settings.base_dir == data_dir
+    assert settings.work_dir == os.path.join(cache_dir, 'tmp')
     assert settings.nntp_servers[0]['host'] == 'my.server.here'
     assert settings.nntp_servers[0]['secure'] is True
     assert settings.nntp_database['engine'] == \
-        'sqlite:///%s' % os.path.join(base_dir, 'newsreap.db')
+        'sqlite:///%s' % os.path.join(data_dir, 'newsreap.db')
+    assert settings.index_database() == os.path.join(data_dir, 'index.db')
+    assert settings.group_database('a.b.test') == os.path.join(
+        cache_dir, 'search', 'a.b.test.db')
+    assert settings.filters_file() == os.path.join(config_dir, 'filters')
 
     # Only one server is set up; the backup is left as an example
     assert len(settings.nntp_servers) == 1
@@ -105,6 +123,164 @@ def test_configuration_elsewhere_is_not_shadowed(config_paths):
 
     assert error.value.args[0] == other
     assert not os.path.exists(config_paths[0])
+
+
+def test_configuration_elsewhere_keeps_everything_with_it(tmp_path):
+    """
+    A configuration written outside the usual place keeps what NewsReap
+    stores in the same directory (its base_dir)
+    """
+    usenet = str(tmp_path / 'usenet')
+    path = create_config(os.path.join(usenet, 'config.yaml'))
+    with open(path) as fp:
+        assert "   base_dir: '%s'\n" % usenet in fp.read()
+
+    settings = NNTPSettings(cfg_file=path)
+    assert (settings.base_dir, settings.data_dir, settings.cache_dir) == (
+        usenet, usenet, os.path.join(usenet, 'cache'))
+    assert settings.index_database() == os.path.join(usenet, 'index.db')
+    assert settings.work_dir == os.path.join(usenet, 'cache', 'tmp')
+    settings.close()
+
+
+def test_each_kind_of_file_can_be_moved(tmp_path):
+    """
+    data_dir and cache_dir move what can't and what can be fetched again,
+    on their own
+    """
+    path = create_config(str(tmp_path / 'conf' / 'config.yaml'))
+    with open(path) as fp:
+        content = fp.read()
+
+    content = content.replace(
+        "   # data_dir: '~/.local/share/newsreap'",
+        "   data_dir: '%s'" % (tmp_path / 'keep')).replace(
+        "   # cache_dir: '~/.cache/newsreap'",
+        "   cache_dir: '%{config_dir}/caches'")
+    with open(path, 'w') as fp:
+        fp.write(content)
+
+    settings = NNTPSettings(cfg_file=path)
+    assert settings.data_dir == str(tmp_path / 'keep')
+    assert settings.cache_dir == str(tmp_path / 'conf' / 'caches')
+    assert settings.nntp_database['engine'] == \
+        'sqlite:///%s' % (tmp_path / 'keep' / 'newsreap.db')
+    settings.close()
+
+
+def test_folders_follow_the_xdg_settings(tmp_path, monkeypatch):
+    """
+    XDG_CONFIG_HOME, XDG_DATA_HOME and XDG_CACHE_HOME are used when set
+    (a relative one is ignored, as the specification says)
+    """
+    settings_module = import_module('newsreap.NNTPSettings')
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    monkeypatch.setenv('XDG_CACHE_HOME', 'relative/cache')
+    monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
+
+    assert settings_module.user_dir('data') == str(
+        tmp_path / 'data' / 'newsreap')
+    assert settings_module.user_dir('cache') == os.path.join(
+        os.path.expanduser('~'), '.cache', 'newsreap')
+    assert settings_module.user_dir('config') == os.path.join(
+        os.path.expanduser('~'), '.config', 'newsreap')
+
+
+def test_reading_another_configuration_uses_its_directories(tmp_path):
+    """
+    Settings read a second time take the new configuration's directories
+    (in every setting that names one)
+    """
+    first = create_config(str(tmp_path / 'one' / 'config.yaml'))
+    second = create_config(str(tmp_path / 'two' / 'config.yaml'))
+
+    settings = NNTPSettings(cfg_file=first)
+    assert settings.work_dir == str(tmp_path / 'one' / 'cache' / 'tmp')
+
+    settings.read(second)
+    assert settings.work_dir == str(tmp_path / 'two' / 'cache' / 'tmp')
+    assert settings.nntp_database['engine'] == \
+        'sqlite:///%s' % (tmp_path / 'two' / 'newsreap.db')
+    settings.close()
+
+
+def test_init_writes_an_example_filters_file(tmp_path):
+    """
+    nr --init makes the filters directory with an example of every rule
+    setting; the example isn't read, and each rule in it is valid once
+    its '# ' is removed
+    """
+    import yaml
+    from newsreap.NNTPFilter import NNTPFilter
+
+    path = create_config(str(tmp_path / 'conf' / 'config.yaml'))
+    example = tmp_path / 'conf' / 'filters' / 'example.yaml.template'
+    assert example.is_file()
+
+    settings = NNTPSettings(cfg_file=path)
+    assert settings.filters_file() == str(tmp_path / 'conf' / 'filters')
+    assert len(settings.filters()) == 0
+    settings.close()
+
+    # Its rules, uncommented ('##' lines are only explanations)
+    text = '\n'.join(
+        line[2:] if line.startswith('# ') else ''
+        for line in example.read_text().splitlines()
+        if not line.startswith('##'))
+    rules = yaml.safe_load(text)['filters']
+    filters = NNTPFilter(rules=rules)
+    assert len(filters) == len(rules) > 5
+    assert {rule.action for rule in filters.values()} == {
+        'score', 'keep', 'drop'}
+
+
+def test_init_carries_on_without_a_filters_directory(tmp_path, caplog):
+    """
+    A filters directory that can't be made (ie: a file is in the way) is
+    only warned about
+    """
+    caplog.set_level(logging.WARNING, logger=NEWSREAP_ENGINE)
+    (tmp_path / 'conf').mkdir()
+    (tmp_path / 'conf' / 'filters').write_text('in the way')
+    path = create_config(str(tmp_path / 'conf' / 'config.yaml'))
+    assert os.path.isfile(path)
+    assert 'Could not prepare the filters directory' in caplog.text
+
+
+def test_a_yml_configuration_is_found_too(tmp_path, monkeypatch):
+    """
+    Each standard place is checked for config.yaml, then config.yml
+    """
+    settings_module = import_module('newsreap.NNTPSettings')
+    found = [path for path in settings_module.DEFAULT_CONFIG_FILE_PATHS
+             if path.startswith(settings_module.DEFAULT_BASE_DIR)]
+    assert found == [
+        os.path.join(settings_module.DEFAULT_BASE_DIR, 'config.yaml'),
+        os.path.join(settings_module.DEFAULT_BASE_DIR, 'config.yml')]
+
+    # One found that way is used
+    path = create_config(str(tmp_path / 'one' / 'config.yaml'))
+    yml = str(tmp_path / 'one' / 'config.yml')
+    os.rename(path, yml)
+    monkeypatch.setattr(
+        settings_module, 'DEFAULT_CONFIG_FILE_PATHS',
+        (path, yml))
+    settings = NNTPSettings()
+    assert settings.cfg_file == yml
+    settings.close()
+
+
+def test_a_yml_filters_file_is_used_too(tmp_path):
+    """
+    filters.yml next to the configuration works as filters.yaml does
+    """
+    path = create_config(str(tmp_path / 'conf' / 'config.yaml'))
+    (tmp_path / 'conf' / 'filters.yml').write_text(
+        'filters:\n  - name: old\n    subject: x\n')
+    settings = NNTPSettings(cfg_file=path)
+    assert settings.filters_file() == str(tmp_path / 'conf' / 'filters.yml')
+    assert list(settings.filters().keys()) == ['old']
+    settings.close()
 
 
 def test_existing_work_is_left_alone(tmp_path, config_paths):

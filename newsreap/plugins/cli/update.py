@@ -451,7 +451,7 @@ def reset_groups(ctx, session, groups):
                    "says).")
 @click.option('--rescore', is_flag=True,
               help="Work every score and tag out again from the saved rules "
-                   "(ie: after changing filters.yaml); no new headers are "
+                   "(ie: after changing the filters files); no new headers are "
                    "fetched.")
 @click.option('--cached', is_flag=True,
               help='Fetch no new headers; work with the ones already '
