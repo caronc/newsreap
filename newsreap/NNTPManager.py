@@ -260,12 +260,20 @@ class NNTPManager:
 
         self.hooks.add(hooks)
 
+    def window(self):
+        """
+        Returns how many requests are worth keeping queued at once: two for
+        each worker (connection to our main server), so none of them waits
+        for work
+        """
+        return max(2, 2 * self._settings.connections())
+
     def spawn_workers(self, count=1):
         """
         Spawns X workers (but never more then the total allowed)
         """
         _count = 0
-        while len(self._pool) < self._settings.nntp_processing['threads']:
+        while len(self._pool) < self._settings.connections():
             # First we build our connection object
             connection = NNTPConnection(**self._settings.nntp_servers[0])
 
@@ -274,10 +282,14 @@ class NNTPManager:
             connection.hooks = self.hooks
 
             if len(self._settings.nntp_servers) > 1:
-                # Append backup servers (if any defined)
+                # Append backup servers (if any defined); only as many
+                # workers as a backup allows connections get one
                 for idx in range(1, len(self._settings.nntp_servers)):
-                    _connection = NNTPConnection(
-                        **self._settings.nntp_servers[idx])
+                    backup = self._settings.nntp_servers[idx]
+                    if len(self._pool) >= self._settings.connections(backup):
+                        continue
+
+                    _connection = NNTPConnection(**backup)
 
                     # Directly map the connection's hooks to the ones here in
                     # the NNTPManager() object
@@ -400,8 +412,7 @@ class NNTPManager:
         self._work_tracker.lock.acquire(blocking=True)
 
         if len(self._work_tracker.available) == 0:
-            if len(self._work_tracker) < self._settings\
-                    .nntp_processing['threads']:
+            if len(self._work_tracker) < self._settings.connections():
                 # Spin up more work
                 self.spawn_workers(count=1)
 

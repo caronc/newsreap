@@ -34,6 +34,7 @@ from .objects.post.StagedArticle import StagedArticle
 from .objects.post.StagedArticleGroup import StagedArticleGroup
 from .objects.post.StagedArticleHeader import StagedArticleHeader
 
+from newsreap.HookManager import HookManager
 from .Utils import find
 from .Utils import mkdir
 from .Utils import rm
@@ -397,8 +398,7 @@ class NNTPPostFactory:
                 path=self.prep_path,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
                 status = self._prepare(
                     archive_size=archive_size, password=password,
                     *args, **kwargs)
@@ -628,8 +628,7 @@ class NNTPPostFactory:
                 path=self.prep_path,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
                 status = self._stage(
                     groups=groups,
                     split_size=split_size,
@@ -796,8 +795,7 @@ class NNTPPostFactory:
                 path=self.prep_path,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
                 status = self._upload(
                     groups=groups,
                     commit_on_file=commit_on_file,
@@ -986,8 +984,7 @@ class NNTPPostFactory:
                     article=weakref.proxy(article),
                 )
 
-                if next((r for r in response
-                         if r is not False), None) is not False:
+                if HookManager.allows(response):
                     # else response is False (this is a good thing, the message
                     # just simply does not exist on the server)
                     logger.info("Uploading '%s' to '%s'." % (
@@ -1104,8 +1101,7 @@ class NNTPPostFactory:
                 path=self.prep_path,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
                 status = self._verify(*args, **kwargs)
 
             else:
@@ -1250,8 +1246,7 @@ class NNTPPostFactory:
                 path=self.prep_path,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
                 status = self._clean(*args, **kwargs)
 
             else:

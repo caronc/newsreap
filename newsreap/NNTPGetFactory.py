@@ -27,6 +27,7 @@ from os.path import dirname
 from os.path import splitext
 from io import StringIO
 
+from newsreap.HookManager import HookManager
 from .NNTPGroup import NNTPGroup
 from .NNTPArticle import MESSAGE_ID_RE
 from .NNTPArticle import NNTPArticle
@@ -348,8 +349,7 @@ class NNTPGetFactory:
                 nzb=weaknzb,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
 
                 # perform our connect
                 status = self._download(
@@ -555,7 +555,7 @@ class NNTPGetFactory:
                 source=weak_source,
             )
 
-            if next((r for r in status if r is not False), None) is not False:
+            if HookManager.allows(status):
                 response = self._headers(source=source, *args, **kwargs)
 
             else:
@@ -795,8 +795,7 @@ class NNTPGetFactory:
                 source=weak_source,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
                 response = self._inspect(
                     source=source, size=size, *args, **kwargs)
 
@@ -884,8 +883,7 @@ class NNTPGetFactory:
                 tmp_path=self.tmp_path,
             )
 
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
                 status = self._clean(*args, **kwargs)
 
             else:

@@ -317,7 +317,7 @@ class NNTPArchiver:
             for group in post.groups])
 
     def archive(self, group, group_db_file, manager, work_dir=None,
-                force=False, window=DEFAULT_ARCHIVE_WINDOW, server=''):
+                force=False, window=None, server=''):
         """
         Fetches and keeps the small articles of a group that weren't kept
         before
@@ -328,12 +328,14 @@ class NNTPArchiver:
         - manager: the NNTPManager to fetch them with
         - work_dir: where articles are held while they are read
         - force: ask again for the articles no server had before
-        - window: how many articles are asked for at once
+        - window: how many articles are asked for at once (two for each
+          of the manager's connections when not given)
         - server: the name noted as where they came from
 
         Returns True if it ran (False if nothing was ever cached for it).
         """
         self.reset()
+        window = window or manager.window()
 
         if not isfile(group_db_file):
             # Nothing was ever cached for this group
@@ -551,7 +553,7 @@ class NNTPArchiver:
         return True
 
     def retry(self, message_ids, manager, work_dir=None,
-              window=DEFAULT_ARCHIVE_WINDOW, server=''):
+              window=None, server=''):
         """
         Fetches posts kept before again and keeps what they say now (ie: one
         waiting to be decrypted, now that its passphrase is known).  A post
@@ -564,6 +566,7 @@ class NNTPArchiver:
         Returns how many were fetched again.
         """
         self.reset()
+        window = window or manager.window()
         session = self.session()
         if session is None:
             return 0
@@ -702,13 +705,16 @@ class NNTPArchiver:
             self.refused += 1
 
     @staticmethod
-    def _fetch(manager, wanted, work_dir, group, window):
+    def _fetch(manager, wanted, work_dir, group, window, decoders=False):
         """
         Fetches the articles wanted, keeping `window` of them asked for at
         once; yields ((message_id, row), (article, status)) in the order
         given: the article (None if it wasn't fetched) and how the fetch
         went ('found', 'missing', 'denied' or 'failed'; see
         NNTPConnection.fetch_status())
+
+        - decoders: what NNTPConnection.get() decodes them with (False for
+          the article as it is; None for the usual ones, ie: yEnc)
         """
         pending = deque()
         todo = iter(wanted)
@@ -724,7 +730,7 @@ class NNTPArchiver:
                 # fetch went (asked of the same connection)
                 request = NNTPConnectionRequest(actions=[
                     ('get', (entry[0], work_dir), {
-                        'decoders': False, 'group': group}),
+                        'decoders': decoders, 'group': group}),
                     ('fetch_status', (), {}),
                 ])
                 manager.put(request)

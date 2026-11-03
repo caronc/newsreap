@@ -68,7 +68,7 @@
 #       max_archive_size: 25M
 #
 #   processing:
-#     - threads: 5
+#     - connections: 4
 #     - header_batch_size: 5000
 #     - ramdisk: /media/ramdisk
 #
@@ -199,6 +199,10 @@ if os_name == 'nt':
 else:
     ROOT = '/'
 
+# The Downloads directory line of ~/.config/user-dirs.dirs
+USER_DOWNLOAD_RE = re.compile(
+    r'^\s*XDG_DOWNLOAD_DIR\s*=\s*"(?P<path>[^"]+)"\s*$')
+
 # Where each kind of file goes (see user_dir()): the XDG variable that
 # names it, the folder used when it isn't set, and the Windows variable
 USER_DIRS = {
@@ -234,6 +238,32 @@ def user_dir(kind):
                     *(('cache', ) if kind == 'cache' else ()))
 
     return join(expanduser('~'), *fallback, 'newsreap')
+
+
+def user_download_dir():
+    """
+    Returns your Downloads directory: the one XDG_DOWNLOAD_DIR names in
+    ~/.config/user-dirs.dirs (how Linux desktops keep it), otherwise
+    ~/Downloads
+    """
+    home = expanduser('~')
+    config_home = environ.get('XDG_CONFIG_HOME', '')
+    path = join(config_home if isabs(config_home) else join(home, '.config'),
+                'user-dirs.dirs')
+    try:
+        with open(path, encoding='utf-8') as fp:
+            for line in fp:
+                found = USER_DOWNLOAD_RE.match(line)
+                if found:
+                    value = found.group('path').replace('$HOME', home)
+                    if isabs(value):
+                        return value
+
+    except OSError:
+        # Not a desktop that keeps one
+        pass
+
+    return join(home, 'Downloads')
 
 
 # The Configuration Directory
@@ -364,6 +394,10 @@ DEFAULT_SERVER_VARIABLES = {
     'priority': None,
     'enabled': True,
 
+    # How many connections this server allows us (the connections setting
+    # under processing: when not set)
+    'connections': None,
+
     # Defines The encoding thing such as the subject are encoded as
     'encoding': NNTP_DEFAULT_ENCODING,
 
@@ -377,6 +411,10 @@ DEFAULT_SERVER_VARIABLES = {
 
 # Keyword used in configuration to host all of the defined NNTP Servers
 SERVER_LIST_KEY = 'servers'
+
+# How many connections are made to a server at once when nothing says
+# otherwise (safe with every provider we know of; most allow far more)
+DEFAULT_CONNECTIONS = 4
 
 # Default Database Variables
 DEFAULT_DATABASE_VARIABLES = {
@@ -392,8 +430,11 @@ DATABASE_KEY = 'database'
 # Processing Variables mapped to their defaults if not found.
 # if None is specified, then the field is mandatory or we'll abort
 DEFAULT_PROCESSING_VARIABLES = {
-    # Default number of threads to spawn
-    'threads': 5,
+    # How many connections are made to a server at once (each one is a
+    # worker); a server can set its own (see connections()).  threads is
+    # the name it used to have (still read).
+    'connections': None,
+    'threads': None,
     # default header batchfile proccessing
     'header_batch_size': 25000,
     # ramdisk path (optional); leave blank if not set
@@ -466,6 +507,22 @@ DEFAULT_POSTING_VARIABLES = {
 
 POSTING_KEY = 'posting'
 
+# What 'nr get' does with what it downloads (see NNTPDownloader)
+DEFAULT_DOWNLOAD_VARIABLES = {
+    # Where finished downloads go (each in a directory of its own); your
+    # system's Downloads directory when not set (see download_dir())
+    'download_dir': None,
+    # Repair damaged files with their par2 files
+    'repair': True,
+    # Extract the archives (rar, 7z, zip) that were downloaded
+    'extract': True,
+    # Remove what was downloaded once it is all put together and placed
+    'cleanup': True,
+}
+
+# Keyword used in configuration for downloading
+DOWNLOAD_KEY = 'downloads'
+
 # A Parsed Configuration Shell
 VALID_SETTINGS_ENTRY = {
     GLOBAL_KEY: DEFAULT_GLOBAL_VARIABLES,
@@ -473,6 +530,7 @@ VALID_SETTINGS_ENTRY = {
     SERVER_LIST_KEY: [],
     PROCESSING_KEY: DEFAULT_PROCESSING_VARIABLES,
     POSTING_KEY: DEFAULT_POSTING_VARIABLES,
+    DOWNLOAD_KEY: DEFAULT_DOWNLOAD_VARIABLES,
 }
 
 
@@ -610,12 +668,16 @@ class NNTPSettings(NNTPDatabase):
 
         # Initializing Processing
         self.nntp_processing = DEFAULT_PROCESSING_VARIABLES.copy()
+        self._resolve_connections()
 
         # Initializing Database Config
         self.nntp_database = DEFAULT_DATABASE_VARIABLES.copy()
 
         # Initializing Posting
         self.nntp_posting = DEFAULT_POSTING_VARIABLES.copy()
+
+        # Initializing Downloading
+        self.nntp_downloads = DEFAULT_DOWNLOAD_VARIABLES.copy()
 
         # Is valid flag
         self._is_valid = False
@@ -737,6 +799,9 @@ class NNTPSettings(NNTPDatabase):
         if POSTING_KEY in cfg_data:
             _cfg_data[POSTING_KEY].update(cfg_data[POSTING_KEY])
 
+        if isinstance(cfg_data.get(DOWNLOAD_KEY), dict):
+            _cfg_data[DOWNLOAD_KEY].update(cfg_data[DOWNLOAD_KEY])
+
         if SERVER_LIST_KEY in cfg_data:
             for server in cfg_data[SERVER_LIST_KEY]:
                 defaults = DEFAULT_SERVER_VARIABLES.copy()
@@ -778,6 +843,9 @@ class NNTPSettings(NNTPDatabase):
 
         # reset posting dictionary
         self.nntp_posting = {}
+
+        # reset downloading dictionary
+        self.nntp_downloads = DEFAULT_DOWNLOAD_VARIABLES.copy()
 
         # is_valid flag reset
         self._is_valid = False
@@ -833,6 +901,7 @@ class NNTPSettings(NNTPDatabase):
             k: self.cfg_data[PROCESSING_KEY][k]
             for k in DEFAULT_PROCESSING_VARIABLES
             if k in self.cfg_data[PROCESSING_KEY]})
+        self._resolve_connections()
 
         self.nntp_database.update({
             k: self.cfg_data[DATABASE_KEY][k]
@@ -843,6 +912,11 @@ class NNTPSettings(NNTPDatabase):
             k: self.cfg_data[POSTING_KEY][k]
             for k in DEFAULT_POSTING_VARIABLES
             if k in self.cfg_data[POSTING_KEY]})
+
+        self.nntp_downloads.update({
+            k: self.cfg_data[DOWNLOAD_KEY][k]
+            for k in DEFAULT_DOWNLOAD_VARIABLES
+            if k in self.cfg_data.get(DOWNLOAD_KEY, {})})
 
         # Parse our content
         _priority = 0
@@ -1009,6 +1083,73 @@ class NNTPSettings(NNTPDatabase):
         if hasattr(self, '_mask_re'):
             # Our masks name the directories
             del self._mask_re
+
+    def _resolve_connections(self):
+        """
+        Works out how many connections are made at once (the connections
+        setting, or threads as it used to be called) and keeps both names
+        set to it
+        """
+        value = self.nntp_processing.get('connections')
+        if value is None:
+            value = self.nntp_processing.get('threads')
+
+        self.nntp_processing['connections'] = self.nntp_processing[
+            'threads'] = self._count(value, DEFAULT_CONNECTIONS, 'connections')
+
+    @staticmethod
+    def _count(value, default, name):
+        """
+        Returns a setting that must be a whole number of 1 or more (the
+        default when it isn't set, or isn't usable)
+        """
+        if value is None:
+            return default
+
+        try:
+            value = int(value)
+            if value >= 1:
+                return value
+
+        except (TypeError, ValueError):
+            pass
+
+        logger.warning("%s: '%s' isn't a number of 1 or more; using %d." % (
+            name, value, default))
+        return default
+
+    def connections(self, server=None):
+        """
+        Returns how many connections may be made to a server at once: its
+        own connections setting, otherwise the one under processing:
+        (our first server when none is given)
+        """
+        if server is None:
+            server = self.nntp_servers[0] if self.nntp_servers else {}
+
+        default = self.nntp_processing['connections']
+        return self._count(
+            server.get('connections'), default, 'connections (%s)' % (
+                server.get('host') or 'server'))
+
+    def download_dir(self):
+        """
+        Returns where finished downloads go: the download_dir setting,
+        otherwise your system's Downloads directory (XDG_DOWNLOAD_DIR in
+        ~/.config/user-dirs.dirs on Linux), otherwise ~/Downloads
+        """
+        path = self.nntp_downloads.get('download_dir')
+        if isinstance(path, str) and path.strip():
+            return abspath(expanduser(self.apply_mask(path.strip())))
+
+        return user_download_dir()
+
+    def staging_dir(self):
+        """
+        Returns where downloads are put together before they are placed
+        (each in a directory of its own); see NNTPDownloader
+        """
+        return join(self.cache_dir, 'downloads')
 
     def group_database(self, name):
         """

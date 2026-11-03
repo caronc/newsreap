@@ -30,6 +30,7 @@ from newsreap.SortedSet import sortedset
 from sortedcontainers import SortedDict as sorteddict
 import weakref
 
+from newsreap.HookManager import HookManager
 from .NNTPHeader import NNTPHeader
 from .NNTPArticle import NNTPArticle
 from .NNTPResponse import NNTPResponse
@@ -489,8 +490,7 @@ class NNTPConnection(SocketBase):
             response = self.hooks.call('pre_connect', *args, **kwargs)
 
             # Allow a response over-ride which forces a denied connection
-            if next((r for r in response
-                     if r is not False), None) is not False:
+            if HookManager.allows(response):
 
                 # call _connect() (logging in counts towards our statistics)
                 with self._recording() as stats:
@@ -635,8 +635,7 @@ class NNTPConnection(SocketBase):
 
                     # Allow a response over-ride which forces a denied
                     # post
-                    if next((r for r in _response
-                             if r is not False), None) is not False:
+                    if HookManager.allows(_response):
 
                         response = self._post(content, update_headers=True)
 
@@ -1309,8 +1308,7 @@ class NNTPConnection(SocketBase):
             )
 
             # Allow a response over-ride which forces a denied xover
-            if next((r for r in _response
-                     if r is not False), None) is not False:
+            if HookManager.allows(_response):
 
                 # What the server says its overview lines hold
                 fields = self.overview_format()
@@ -1405,8 +1403,7 @@ class NNTPConnection(SocketBase):
             )
 
             # Allow a response over-ride which forces a denied stat
-            if next((r for r in _response
-                     if r is not False), None) is not False:
+            if HookManager.allows(_response):
 
                 response = self._stat(id=id, full=full)
 
@@ -1535,7 +1532,7 @@ class NNTPConnection(SocketBase):
 
         if isinstance(id, str):
             # We're dealing a Message-ID (Article-ID)
-            return self._get(
+            return self._get_wrapper(
                 id=id,
                 work_dir=work_dir,
                 decoders=decoders,
@@ -1549,7 +1546,7 @@ class NNTPConnection(SocketBase):
         if isinstance(id, (set, tuple, sortedset, list)):
             # iterate over all items and append them to our resultset
             for entry in id:
-                _results = self._get(
+                _results = self._get_wrapper(
                     id=id.id,
                     work_dir=work_dir,
                     decoders=decoders,
@@ -1563,7 +1560,7 @@ class NNTPConnection(SocketBase):
         elif isinstance(id, NNTPArticle):
             # Support NNTPArticle Objects if they have an id defined
             if id.id:
-                return self._get(
+                return self._get_wrapper(
                     id=id.id,
                     work_dir=work_dir,
                     decoders=decoders,
@@ -1579,7 +1576,7 @@ class NNTPConnection(SocketBase):
                 if self.join_group:
                     for group in id.groups:
                         # Try each group
-                        article = self._get(
+                        article = self._get_wrapper(
                             id=_article,
                             work_dir=work_dir,
                             decoders=decoders,
@@ -1605,7 +1602,7 @@ class NNTPConnection(SocketBase):
 
                 else:
                     # Fetch our content
-                    article = self._get(
+                    article = self._get_wrapper(
                         id=_article,
                         work_dir=work_dir,
                         decoders=decoders,
@@ -1689,27 +1686,27 @@ class NNTPConnection(SocketBase):
             )
 
             # Allow a response over-ride which forces a denied stat
-            if next((r for r in _response
-                     if r is not False), None) is not False:
+            if HookManager.allows(_response):
 
                 response = self._get(
                     id=id,
                     work_dir=work_dir,
+                    decoders=decoders,
                     group=group,
                     max_bytes=max_bytes,
                 )
 
             else:
-                response = NNTPResponse(
-                    NNTPResponseCode.HOOK_OVERRIDE,
-                    'NNTP GET action blocked by hook',
-                )
+                # A hook said no; nothing is fetched
+                logger.info('Fetching <%s> was stopped by a hook.' % id)
+                self.last_fetch = 'failed'
 
         finally:
             # Prepare our status for our hook call
             status = False
             if isinstance(response, NNTPArticle):
-                status = response.header.article_exists()
+                status = response.header is not None and \
+                    response.header.article_exists()
 
             try:
                 weak_response = weakref.proxy(response)

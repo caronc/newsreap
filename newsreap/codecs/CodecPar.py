@@ -49,6 +49,10 @@ PAR_PART_RE = re.compile(
 # Size to default spliting to if not otherwise specified
 DEFAULT_BLOCK_SIZE = strsize_to_bytes('300K')
 
+# What par2 says when a repair needs more recovery blocks than it has
+PAR_BLOCKS_NEEDED_RE = re.compile(
+    r'You need (?P<count>[0-9]+) more recovery blocks?', re.IGNORECASE)
+
 # By default we create recovery records for up to 5% of the total data
 DEFAULT_RECOVERY_PERCENT = 5
 
@@ -137,6 +141,10 @@ class CodecPar(CodecFile):
                 raise AttributeError(
                     'CodecPar: Invalid recovery record percent %s%%.' %
                     self.recovery_percent)
+
+        # How many more recovery blocks the last test() said a repair needs
+        # (0 when it didn't say)
+        self.needed = 0
 
     def encode(self, content=None, *args, **kwargs):
         """
@@ -414,6 +422,11 @@ class CodecPar(CodecFile):
                 # Start our execution now
                 sp.start()
                 sp.join()
+
+                # How many more recovery blocks a repair would need (par2
+                # says so when there aren't enough)
+                found = PAR_BLOCKS_NEEDED_RE.search(sp.stdout(as_list=False))
+                self.needed = int(found.group('count')) if found else 0
 
                 # Let the caller know our status
                 if sp.response_code() is not ParReturnCode.NoRepairRequired:

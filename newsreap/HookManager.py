@@ -163,6 +163,16 @@ class HookManager:
         """
         self.hooks.clear()
 
+    @staticmethod
+    def allows(responses):
+        """
+        Returns False if a hook answered False (what call() returned), so
+        a pre_ hook can stop the action it is called before
+        """
+        return not any(
+            isinstance(response, dict) and response.get('result') is False
+            for response in responses or ())
+
     def call(self, function_name, **kwargs):
         """
         Executes the specified function while passing in the same parameters

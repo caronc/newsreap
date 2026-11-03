@@ -104,14 +104,7 @@ class NNTPGroupScanner:
 
         if not window:
             # Keep every connection busy, with a little to spare
-            try:
-                threads = manager._settings.nntp_processing['threads']
-
-            except (AttributeError, KeyError, TypeError):
-                # Not an NNTPManager(); assume a single connection
-                threads = 1
-
-            window = max(2, int(threads) * 2)
+            window = manager.window()
 
         self.window = window
         self.ramdisk = ramdisk

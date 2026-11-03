@@ -32,7 +32,6 @@ from os.path import join
 from sqlalchemy import func
 
 from .NNTPArchivePost import NNTPArchivePost
-from .NNTPArchiver import DEFAULT_ARCHIVE_WINDOW
 from .NNTPArchiver import NNTPArchiver
 from .Utils import mkdir
 from .Utils import strsize_to_bytes
@@ -139,7 +138,7 @@ class NNTPNzbReader:
         articles = {}
         for (message_id, _), (article, status) in NNTPArchiver._fetch(
                 manager, [(m, None) for _, parts in wanted for m in parts],
-                work_dir, group, DEFAULT_ARCHIVE_WINDOW):
+                work_dir, group, manager.window()):
             articles[message_id] = (article, status)
 
         for filename, parts in wanted:

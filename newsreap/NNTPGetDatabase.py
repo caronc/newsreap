@@ -19,6 +19,7 @@ gevent.monkey.patch_all()
 # access our table.
 from .objects.get.ObjectBase import ObjectBase
 from .objects.get.Vsp import Vsp
+from .objects.get.DownloadedSegment import DownloadedSegment  # noqa: F401
 from .Database import Database
 
 

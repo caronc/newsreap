@@ -141,7 +141,7 @@ def test_dropped_articles_are_never_stored():
     """
     from newsreap.NNTPFilter import NNTPFilter
     scanner = NNTPGroupScanner(
-        None, GROUP, db_file='', server='test',
+        None, GROUP, db_file='', server='test', window=2,
         filters=NNTPFilter(rules=[{'crossposts': '>2'}]))
 
     def header(message_id, *groups):

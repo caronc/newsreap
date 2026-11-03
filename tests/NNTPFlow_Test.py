@@ -248,6 +248,44 @@ def test_missing_article(nntp_server, tmp_path):
     sock.close()
 
 
+def test_a_pre_hook_can_stop_an_action(nntp_server, tmp_path):
+    """
+    A pre_ hook answering False stops the action it is called before (the
+    article isn't asked for); any other answer lets it go ahead
+    """
+    from newsreap.HookManager import HookManager
+    from newsreap.decorators.hook import hook
+
+    nntp_server.add_group(GROUP)
+    nntp_server.add_article('5', join(VAR_PATH, '00000005.ntx'), GROUP)
+
+    @hook(name='pre_get')
+    def refuse(**kwargs):
+        return False
+
+    @hook(name='pre_get')
+    def agree(**kwargs):
+        return 'fine'
+
+    sock = connect_to(nntp_server, join_group=True)
+    assert sock.connect(timeout=5.0) is True
+
+    sock.hooks = HookManager()
+    sock.hooks.add(refuse)
+    assert sock.get('5', work_dir=str(tmp_path), group=GROUP) is None
+    assert 'ARTICLE <5>' not in nntp_server.commands()
+
+    sock.hooks = HookManager()
+    sock.hooks.add(agree)
+    assert sock.get('5', work_dir=str(tmp_path), group=GROUP) is not None
+    assert 'ARTICLE <5>' in nntp_server.commands()
+    sock.close()
+
+    assert HookManager.allows([]) is True
+    assert HookManager.allows([{'result': None}, {'result': 0}]) is True
+    assert HookManager.allows([{'result': 1}, {'result': False}]) is False
+
+
 def test_fetches_say_why_nothing_came_back(nntp_server, tmp_path):
     """
     A fetch tells an article that is gone or refused to us (asking again

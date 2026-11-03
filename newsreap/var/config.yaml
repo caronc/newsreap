@@ -80,6 +80,11 @@ servers:
     # Set to False to keep this entry but not use it
     enabled: True
 
+    # How many connections your provider lets you make at once (check your
+    # account).  Leave one or two spare for your newsreader.  Without it,
+    # connections: under processing: is used.
+    # connections: 10
+
     # How many times a failed download is retried before giving up, and
     # when a connection is treated as dead:
     #  - stall_timeout: seconds without receiving anything at all
@@ -102,15 +107,18 @@ servers:
 #    use_body: False
 #    use_head: True
 #    enabled: True
+#    # Backups often allow fewer connections than your main server
+#    connections: 4
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Processing (Before and After Downloading)
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 processing:
-   # Each thread opens another connection to your provider so more work can
-   # happen at once.  Don't go higher than the number of connections your
-   # provider allows.
-   threads: 3
+   # How many connections are made to a server at once, so more work can
+   # happen at once (each server can set its own with connections:).
+   # More helps until your bandwidth is full; fetching headers rarely gets
+   # faster past about 8.  Don't go higher than your provider allows.
+   connections: 4
 
    # How many headers are processed at a time when indexing a group.
    # Between 25000 and 75000 works well; go higher with lots of CPU power
@@ -185,6 +193,31 @@ processing:
    # file) here; one that isn't there (or a file in it that can't be read)
    # is reported, and the rest carry on.
    # filters: '%{config_dir}/filters'
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#   Downloading ('nr get')
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# What an NZB file lists is downloaded into a staging directory of its own
+# (in %{cache_dir}/downloads), put back together, repaired with its par2
+# files and extracted into a directory named after it.  Running it again
+# carries on where it stopped.  Each of these can be changed for one run
+# on the command line too (ie: --no-cleanup).
+downloads:
+   # Where finished downloads go; your system's Downloads directory (ie:
+   # ~/Downloads) when not set
+   # download_dir: '~/Downloads'
+
+   # Repair damaged files with their par2 files (only the recovery volumes
+   # a repair needs are downloaded)
+   # repair: yes
+
+   # Extract the archives (rar, 7z, zip), trying --password and then the
+   # passwords the NZB file holds
+   # extract: yes
+
+   # Remove what was downloaded once it is all put together and placed
+   # (it is always kept when something couldn't be opened)
+   # cleanup: yes
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server

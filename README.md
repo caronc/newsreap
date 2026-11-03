@@ -75,7 +75,7 @@ pip install -r requirements.txt
 See [INSTALL.md](INSTALL.md) for the optional archive tools (7-Zip, rar and par2).
 
 ## Getting Started
-A walk through from nothing to a saved NZB file, using one group.  Every
+A walk through from nothing to a finished download, using one group.  Every
 command has more to it; add `--help` to any of them (ie: `nr search
 --help`).
 
@@ -93,6 +93,9 @@ servers:
     username: me
     password: secret
     secure: True
+    # How many connections your provider allows (4 when not set); more
+    # fetch faster, up to what your bandwidth can carry
+    connections: 10
 ```
 
 ### 2. Set Up the Database and Learn the Groups
@@ -142,12 +145,15 @@ On a terminal the results are shown a screen at a time: the up and down
 arrows move a row, space and `b` move a page, `/` finds text and `q`
 quits.  Add `--no-pager` to write them all out (ie: into a file).
 
-### 5. Save What You Want
+### 5. Download What You Want
 The number on the left of each search result is its id:
 ```bash
+# Download it, repair and extract it, into ~/Downloads/<its name>
+nr get 42
+
+# Or save it as an NZB file for another downloader
 nr nzb save 42 --output ~/Downloads
 ```
-Hand the NZB file to your downloader, or use `nr get` (see Downloading).
 
 ### 6. Keep Up to Date
 ```bash
@@ -173,32 +179,44 @@ nr update --watched
 - **Read one article:** `nr show <message-id>`.
 
 ## Downloading
-If you know the article-id/Message-ID of the item in question, the following
-will retrieve it for you and save it based on your downloading configuration
-defined in your configuration file.
-
-You can use the 'search' mode to get a listing of content and their associated
-Message-ID (first column).
-
+Give `nr get` an NZB file (or a collection's id from `nr search`) and it
+downloads it, puts it back together and leaves the result in a directory of
+its own in your Downloads directory:
 ```bash
-# Fetch Message-ID aajk2jb from alt.binaries.test
-nr get --group=alt.binaries.test aajk2jb
+nr get /path/to/release.nzb
+nr get 42
 
-# If your usenet server doesn't require the `join_group` option, then
-# you don't need to specify the group prior to the Message-ID. Hence this
-# would work on these servers.
-nr get aajk2jb
+# Somewhere else, with a password for its archives
+nr get release.nzb --output ~/Videos --password 'open sesame'
 
-# You can specify as many articles as you like too to fetch them all
-nr get aajk2jb aajkdb aak2jb
+# Keep what was downloaded (the parts and the files put together)
+nr get release.nzb --no-cleanup
 ```
-If you want to download an nzb file; the command doesn't change:
-```bash
-# Just specify it on the commandline
-nr get /path/to/nzbfile.nzb
 
-# You can specify more then one too (there is no limit)
-nr get /path/to/nzbfile.nzb /another/path/to/nzbfile.nzb
+What happens:
+
+- Everything is downloaded into a staging directory of its own (in
+  `~/.cache/newsreap/downloads/`), so several downloads never get in each
+  other's way.
+- Stopped part way?  Run it again: what was fetched is kept, and only what
+  is missing, damaged or was cut short is fetched again.
+- Damaged files are repaired with their par2 files, fetching only the
+  recovery volumes the repair needs.
+- Archives (rar, 7z, zip) are extracted, keeping the directories they hold;
+  `--password` is tried first, then any password the NZB file gives.
+- If something can't be opened (a password that isn't known, or damage par2
+  couldn't fix), the files are put together and left for you, and nothing
+  is removed.
+
+`--no-repair`, `--no-extract` and `--no-cleanup` turn the steps off for one
+run; the `downloads:` section of `config.yaml` sets them for good.  Each
+`nr get` uses its own connections, so running two at once can go over what
+your provider allows.
+
+A Message-ID downloads that one article as it is:
+```bash
+# Fetch Message-ID aajk2jb (--group if your server needs it)
+nr get --group=alt.binaries.test aajk2jb
 ```
 
 If you want to view a header of a particular post you can do the following:

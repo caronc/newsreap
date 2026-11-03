@@ -554,8 +554,20 @@ class CodecYenc(CodecBase):
                 self._meta[_meta['key']] = _meta
 
                 if 'end' in self._meta:
-                    # Mark the binary as being valid
-                    self.decoded._is_valid = True
+                    # Valid when what we decoded is what the poster sent: the
+                    # part's crc32 (or the file's, for a single part)
+                    expected = _meta.get('pcrc32') or (
+                        _meta.get('crc32')
+                        if self._meta['begin'].get('total', 1) == 1 else None)
+                    self.decoded._is_valid = expected is None or \
+                        expected.lower().rjust(8, '0') == self.crc32()
+
+                    if not self.decoded._is_valid:
+                        logger.warning(
+                            'yEnc part %d of %s is damaged (crc32 %s, '
+                            'expected %s).' % (
+                                self._part, self.decoded.filename,
+                                self.crc32(), expected.lower()))
 
                     # We're done!
                     break
@@ -572,6 +584,9 @@ class CodecYenc(CodecBase):
 
                     # Save part no globally if present (for sorting)
                     self._part = _meta.get('part', 1)
+
+                    # A new part; its crc32 starts again
+                    self._crc = BIN_MASK
 
                     # Create our binary instance
                     self.decoded = NNTPBinaryContent(
@@ -593,6 +608,13 @@ class CodecYenc(CodecBase):
 
                     # Update our Binary File if nessisary
                     self.decoded.part = self._part
+
+                    # Where the part goes in its file (begin counts from 1;
+                    # end is the last byte, so it is where the part stops)
+                    if isinstance(_meta.get('begin'), int) and \
+                            isinstance(_meta.get('end'), int):
+                        self.decoded._begin = max(0, _meta['begin'] - 1)
+                        self.decoded._end = _meta['end']
 
                 continue
 
