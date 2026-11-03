@@ -13,8 +13,11 @@
 # GNU Lesser General Public License for more details.
 
 import re
+from io import BytesIO
+from os.path import splitext
 
 from newsreap.NNTPArchivePost import NNTPArchivePost
+from newsreap.NNTPArchivePost import TEXT_FILES
 from newsreap.codecs.CodecUU import CodecUU
 from newsreap.decorators import hook
 from newsreap.objects.index.ArchivedPost import ArchiveKind
@@ -59,5 +62,11 @@ def uuencode(post, **kwargs):
 
     text = NNTPArchivePost.decode_text(b'\n'.join(before))[0].strip()
     post.text = text or None
+
+    if len(found) == 1 and splitext(found[0])[1].lower() in TEXT_FILES:
+        # A text file (ie: an .nfo); its text is kept too
+        content = CodecUU().decode(BytesIO(post.body))
+        if hasattr(content, 'getvalue'):
+            post.add_text(found[0], content.getvalue())
     post.kind = ArchiveKind.Binary
     post.done = True

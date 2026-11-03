@@ -42,6 +42,7 @@ from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
 from newsreap.NNTPIndexer import NNTPIndexer
+from newsreap.NNTPKeyring import NNTPKeyring
 from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 from newsreap.Utils import bytes_to_strsize
 from newsreap.Utils import mkdir
@@ -49,6 +50,8 @@ from newsreap.Utils import strsize_to_bytes
 from newsreap.objects.group.Article import Article
 from newsreap.objects.index.ArchivedPost import ArchiveKind
 from newsreap.objects.index.Collection import Collection
+from newsreap.objects.index.PGPPost import HIDDEN_KEY_ID
+from newsreap.objects.index.PGPPost import PGP_ROLES
 from newsreap.objects.index.CollectionFile import CollectionFile
 from newsreap.objects.index.Segment import Segment
 
@@ -78,7 +81,7 @@ def ask(manager, message_id, work_dir, **kwargs):
     """
     Fetches an article (the options given go to NNTPConnection.get());
     returns (article, status): the article (None if it wasn't fetched) and
-    how it went ('found', 'missing' or 'failed')
+    how it went ('found', 'missing', 'denied' or 'failed')
     """
     request = NNTPConnectionRequest(actions=[
         ('get', (message_id, work_dir), kwargs),
@@ -141,6 +144,24 @@ def show_files(files):
             entry['filename'] or '(no name)', ', '.join(details)))
 
 
+def show_keys(session, message_id):
+    """
+    Shows the PGP keys an article is tied to (signed by, encrypted for or
+    carrying; see nr pgp)
+    """
+    for role, key_id, created, key in NNTPKeyring.links(session, message_id):
+        details = []
+        if key is not None and key.user_ids:
+            details.append(key.user_ids.splitlines()[0])
+        if created:
+            details.append(created.strftime('%Y-%m-%d %H:%M'))
+
+        click.echo('PGP:        %s %s%s' % (
+            PGP_ROLES.get(role, '?'),
+            'someone (who it is was left out)' if key_id == HIDDEN_KEY_ID
+            else key_id, ' (%s)' % ', '.join(details) if details else ''))
+
+
 def show_text(text, lines=None):
     """
     Shows an article's text (only its first lines if `lines` is given)
@@ -192,6 +213,11 @@ def show_one(ctx, archiver, index_session, message_id, local, max_size,
                 archiver.store(session, fetched)
                 session.commit()
                 post = archiver.get(message_id)
+
+        elif status == 'denied':
+            logger.error(
+                "The server won't let you have %s (check your account)." % (
+                    message_id))
 
         elif status == 'failed':
             logger.error('%s could not be fetched; try again later.' % (
@@ -264,6 +290,7 @@ def show_one(ctx, archiver, index_session, message_id, local, max_size,
             'content_type': f.content_type, 'size': f.size, 'part': f.part,
             'total': f.total, 'crc32': f.crc32}
             for f in archiver.files(message_id)])
+        show_keys(archiver.session(), message_id)
         show_text(post.text, lines if big else None)
 
     return True
@@ -313,7 +340,8 @@ def show(ctx, message_ids, local, lines, max_size):
         index = NNTPIndexDatabase.from_engine(settings.index_database())
         index_session = index.session()
 
-    archiver = NNTPArchiver(settings.index_database())
+    archiver = NNTPArchiver(
+        settings.index_database(), pgp=settings.pgp(), gpg=settings.gpg())
 
     # Track how many we found
     found = 0
@@ -403,6 +431,8 @@ def fetch(ctx, message_ids, output, raw, force):
         if article is None:
             logger.error(
                 'No server has <%s>.' % message_id if status == 'missing'
+                else "The server won't let you have <%s> (check your "
+                "account)." % message_id if status == 'denied'
                 else '<%s> could not be fetched; try again later.' % (
                     message_id))
             continue

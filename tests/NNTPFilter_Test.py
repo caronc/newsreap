@@ -42,8 +42,10 @@ def filters(*rules):
 
 def dropped(rules, group=GROUP, **item):
     """
-    Returns True if the rules drop the item described
+    Returns True if the rules drop the item described (as a purge does,
+    with the rules on scores and tags too)
     """
+    item.setdefault('by_score', True)
     return rules.check(group, **item).drop is not None
 
 
@@ -267,10 +269,10 @@ def test_score_rules_see_the_score_so_far():
     assert verdict.tags == {'good', 'great'}
 
 
-def test_drop_rules_can_use_scores_and_tags():
+def test_purges_can_drop_by_score_and_tags():
     """
-    Drop rules run after scoring, so they can remove what scores too low
-    or carries a tag
+    Purges run the drop rules on scores and tags after scoring, so they
+    can remove what scores too low or carries a tag; scanning never does
     """
     rules = filters(
         {'subject': 'casino', 'score': -100, 'tag': 'spam'},
@@ -278,9 +280,16 @@ def test_drop_rules_can_use_scores_and_tags():
         {'name': 'tagged', 'tagged': ['nsfw', 'junk']},
         {'subject': 'junk', 'score': 0, 'tag': 'junk'})
 
-    assert rules.check(GROUP, subject='casino').drop.name == 'low'
-    assert rules.check(GROUP, subject='junk mail').drop.name == 'tagged'
-    assert rules.check(GROUP, subject='photos').drop is None
+    def purged(subject):
+        return rules.check(GROUP, subject=subject, by_score=True).drop
+
+    assert purged('casino').name == 'low'
+    assert purged('junk mail').name == 'tagged'
+    assert purged('photos') is None
+
+    # Scanned, they are only scored
+    verdict = rules.check(GROUP, subject='casino')
+    assert (verdict.score, verdict.drop) == (-100, None)
 
 
 @pytest.mark.parametrize('score, results', [
@@ -343,11 +352,12 @@ def test_tags_combine_like_apprise_tags():
     rules = filters(
         {'name': 'both', 'tagged': 'video, hd'},
         {'name': 'either', 'tagged': ['music', 'books']})
-    assert rules.check(GROUP, tags={'video'}, rescore=False).drop is None
-    assert rules.check(
-        GROUP, tags={'video', 'hd'}, rescore=False).drop.name == 'both'
-    assert rules.check(
-        GROUP, tags={'books'}, rescore=False).drop.name == 'either'
+    assert rules.check(GROUP, tags={'video'}, rescore=False,
+                       by_score=True).drop is None
+    assert rules.check(GROUP, tags={'video', 'hd'}, rescore=False,
+                       by_score=True).drop.name == 'both'
+    assert rules.check(GROUP, tags={'books'}, rescore=False,
+                       by_score=True).drop.name == 'either'
 
 
 def test_tags_starting_with_an_exclamation_mark_must_not_be_there():
@@ -450,6 +460,93 @@ def test_rules_can_leave_out_tags():
         rules, subject='x', tags={'mine', 'safe'}, rescore=False)
 
 
+def test_crossposts_can_be_counted():
+    """
+    crossposts compares how many groups an article was posted to; a plain
+    number is an exact count, and an unknown count never matches
+    """
+    rules = filters({'crossposts': '>3'})
+    assert dropped(rules, crossposts=5)
+    assert not dropped(rules, crossposts=3)
+    assert not dropped(rules, crossposts=None)
+
+    rules = filters({'crossposts': 2, 'action': 'drop'})
+    assert dropped(rules, crossposts=2)
+    assert not dropped(rules, crossposts=1)
+
+    # The group it was found in counts once, whatever its case
+    assert NNTPFilterRule.count_groups(
+        [GROUP, GROUP.upper(), 'alt.binaries.other']) == 2
+    assert NNTPFilterRule.count_groups([]) is None
+
+    rule = NNTPFilterRule(crossposts='>=2, <10')
+    assert rule.to_dict()['crossposts'] == '>=2, <10'
+    assert NNTPFilterRule.from_dict(rule.to_dict()).crossposts == \
+        rule.crossposts
+
+    with pytest.raises(ValueError, match='crossposts takes a number'):
+        NNTPFilterRule(crossposts='many')
+
+
+def test_header_drops_happen_before_scoring():
+    """
+    A drop rule removes an article before any score rule runs; drop rules
+    on the score are left to purges
+    """
+    checked = []
+
+    class Watched(NNTPFilterRule):
+        def matches(self, item, score=0, tags=frozenset()):
+            checked.append(self.name)
+            return super().matches(item, score, tags)
+
+    rules = NNTPFilter(now=NOW)
+    for entry in (
+            {'name': 'popular', 'subject': 'photos', 'score': 10},
+            {'name': 'spam', 'poster': '@spam.example'},
+            {'name': 'unwanted', 'score': '<5'}):
+        rules.add(Watched.from_dict(entry, now=NOW))
+
+    verdict = rules.check(GROUP, subject='photos', poster='bot@spam.example')
+    assert verdict.drop.name == 'spam'
+    assert 'popular' not in checked
+    assert verdict.score == 0
+
+    # Only scored (the spam rule is passed over without being checked; its
+    # words aren't there)
+    checked.clear()
+    verdict = rules.check(GROUP, subject='other', poster='me@example.com')
+    assert (verdict.drop, verdict.score) == (None, 0)
+    assert checked == []
+
+    # A purge judges it on its score too
+    assert rules.check(
+        GROUP, subject='other', by_score=True).drop.name == 'unwanted'
+    assert rules.check(
+        GROUP, subject='photos', by_score=True).drop is None
+
+    # Asked only for its score, nothing is dropped
+    verdict = rules.check(
+        GROUP, subject='photos', poster='bot@spam.example', drop=False)
+    assert (verdict.score, verdict.drop) == (10, None)
+
+
+def test_keep_rules_on_the_score_only_protect_in_purges():
+    """
+    A keep rule on the score can't stop a drop rule on the header (that
+    one runs first); in a purge it protects from drop rules on the score
+    """
+    rules = filters(
+        {'name': 'popular', 'subject': 'photos', 'score': 10},
+        {'name': 'spam', 'poster': '@spam.example'},
+        {'name': 'loved', 'score': '>5', 'action': 'keep'},
+        {'name': 'quiet', 'score': '<20'})
+
+    assert dropped(rules, subject='photos', poster='bot@spam.example')
+    assert not dropped(rules, subject='photos', poster='me@example.com')
+    assert dropped(rules, subject='other', poster='me@example.com')
+
+
 def test_keep_rules_protect_from_drop_rules():
     """
     A keep rule wins over every drop rule
@@ -474,7 +571,7 @@ def test_stored_scores_are_used_unless_rescoring():
         {'name': 'low', 'score': '<0'})
 
     verdict = rules.check(GROUP, subject='x', score=-5, tags={'old'},
-                          rescore=False)
+                          rescore=False, by_score=True)
     assert verdict.score == -5
     assert verdict.tags == {'old'}
     assert verdict.drop.name == 'low'

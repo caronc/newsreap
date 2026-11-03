@@ -49,6 +49,7 @@ from newsreap.objects.nntp.Group import Group
 from newsreap.objects.nntp.GroupTrack import GroupTrack
 from newsreap.objects.nntp.Server import Server
 from newsreap.objects.nntp.Common import get_groups
+from newsreap.objects.nntp.Common import get_group_options
 
 from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPGroupScanner import NNTPGroupScanner
@@ -438,12 +439,16 @@ def reset_groups(ctx, session, groups):
 @click.argument('groups', nargs=-1)
 @click.option('--watched', '-w', is_flag=True, help='All watched groups.')
 @options(*HEADER_OPTIONS)
-@click.option('--content', is_flag=True,
+@click.option('--content/--no-content', default=None,
               help='Also keep what the small articles say (see --max-size) '
-                   "so 'nr search --posts' can search their text.")
-@click.option('--nzb', is_flag=True,
+                   "so 'nr search --posts' can search their text.  Without "
+                   "either, each group does as 'nr group watch' set (or as "
+                   "the content setting says).")
+@click.option('--nzb/--no-nzb', default=None,
               help='Also read the NZB files posted (no bigger than '
-                   '--max-size) into the index.')
+                   '--max-size) into the index.  Without either, each group '
+                   "does as 'nr group watch' set (or as the nzb setting "
+                   "says).")
 @click.option('--rescore', is_flag=True,
               help="Work every score and tag out again from the saved rules "
                    "(ie: after changing filters.yaml); no new headers are "
@@ -484,6 +489,11 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
          kept, so their text can be searched (nr search --posts)
       4. --nzb: the NZB files posted are read into the index
       5. --rescore: every score and tag is worked out again
+
+    A group can be told to always do steps 3 and 4 ('nr group watch
+    --content --nzb'), or every group can (the content and nzb settings
+    under processing: in the configuration file).  --no-content and
+    --no-nzb leave them out for one run.
 
     Without dates or counts, a group fetched before carries on from where
     it left off (anything missed, and everything new).  The first time, a
@@ -532,14 +542,23 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
         complete = index_groups(
             ctx['NNTPSettings'], session, groups, settle=settle) and complete
 
-    if content:
+    # The groups whose content is kept and whose NZB files are read
+    settings = ctx['NNTPSettings']
+    options = get_group_options(session, groups.values())
+    with_content = chosen(
+        groups, options, 'content', content,
+        None if rescore else settings.content())
+    with_nzb = chosen(
+        groups, options, 'nzb', nzb, None if rescore else settings.nzb())
+
+    if with_content:
         complete = fetch_content(
-            ctx, groups, max_size=max_size, force=force, hooks=hooks,
+            ctx, with_content, max_size=max_size, force=force, hooks=hooks,
             default_hooks=not no_default_hooks) and complete
 
-    if nzb:
+    if with_nzb:
         complete = read_nzbs(
-            ctx, groups, max_size=max_size, force=force) and complete
+            ctx, with_nzb, max_size=max_size, force=force) and complete
 
     if rescore:
         rescore_groups(ctx, groups)
@@ -549,6 +568,29 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
             'Not everything was done; run the same command again to do the '
             'rest.')
         exit(1)
+
+
+def chosen(groups, options, name, given, default):
+    """
+    Returns the groups (name -> id) a step is done for:
+    - given: what the command line said (True or False); None if nothing
+    - options: what each group says (see get_group_options())
+    - default: what the configuration file says; None does the step only
+      when asked (ie: --rescore runs)
+    """
+    if given is not None:
+        return groups if given else {}
+
+    if default is None:
+        return {}
+
+    found = {}
+    for group, group_id in groups.items():
+        value = options.get(group_id, {}).get(name)
+        if value if value is not None else default:
+            found[group] = group_id
+
+    return found
 
 
 @click.command(name='search')
@@ -754,7 +796,8 @@ def fetch_content(ctx, groups, max_size=None, force=False, hooks=None,
             settings.index_database(), hooks=hooks,
             default_hooks=default_hooks,
             max_size=max_article_size(settings, max_size),
-            filters=load_filters(settings))
+            filters=load_filters(settings), pgp=settings.pgp(),
+            gpg=settings.gpg(), retries=settings.pgp_retries())
 
     except ValueError as e:
         logger.error(str(e))

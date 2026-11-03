@@ -17,13 +17,14 @@ from email import message_from_bytes
 from email import policy
 from email.header import decode_header
 from email.header import make_header
+from os.path import splitext
 
+from .codecs.CodecAscii import CodecAscii
+
+# The character sets tried (in order) when text doesn't say which one it
+# uses (still importable from here)
+from .codecs.CodecAscii import FALLBACK_CHARSETS  # noqa: F401
 from .objects.index.ArchivedPost import ArchiveKind
-
-# The character sets tried (in order) when an article doesn't say which one
-# it uses (or says one that doesn't work); latin-1 always works, so it is
-# the last resort
-FALLBACK_CHARSETS = ('utf-8', 'cp1252', 'latin-1')
 
 # The first line of a full article (as ARTICLE returns it) is a header
 # ("Name: value"); a body on its own (as BODY returns it) usually isn't
@@ -31,6 +32,15 @@ HEADER_LINE_RE = re.compile(br'^[A-Za-z0-9-]+:[ \t]')
 
 # Where the header ends and the body starts
 HEADER_END_RE = re.compile(br'\r?\n\r?\n')
+
+# The kinds of file whose text is kept when one is posted (small and
+# readable: release notes, checksum lists, ...)
+TEXT_FILES = frozenset((
+    '.nfo', '.diz', '.txt', '.sfv', '.md5', '.sha1', '.sha256',
+))
+
+# The biggest text file kept
+MAX_TEXT_FILE = 65536
 
 
 class NNTPArchivePost:
@@ -44,6 +54,8 @@ class NNTPArchivePost:
     - text: what it says, decoded so it can be searched (None for binaries)
     - encoding / charset: how its text was stored
     - files: what the files it holds or carries say about themselves
+    - pgp / pgp_keys: the PGP keys it names and the key blocks it carries
+      (only kept when the pgp setting is on; see NNTPKeyring)
     - done: set by a hook that has dealt with the article, so the hooks
       after it leave it alone
     """
@@ -76,7 +88,13 @@ class NNTPArchivePost:
         self.encoding = []
         self.charset = ''
         self.files = []
+        self.pgp = []
+        self.pgp_keys = []
         self.done = raw is None
+
+        # Why a message encrypted for one of our keys couldn't be decrypted
+        # (see WaitReason); empty if nothing failed
+        self.locked = ''
 
         # The parsed article (worked out when first needed)
         self._message = None
@@ -151,29 +169,41 @@ class NNTPArchivePost:
             'crc32': (crc32 or '').lower()[:8],
         })
 
+    def add_pgp(self, key_id, role, created=None):
+        """
+        Notes a PGP key the article names (see PGPRole: signed by it,
+        encrypted for it, ...); key_id is its 16 character hex key ID, or
+        'hidden' when the sender left it out (see HIDDEN_KEY_ID)
+        """
+        if key_id:
+            self.pgp.append((key_id, role, created))
+
+    def add_text(self, filename, data):
+        """
+        Keeps the text of a small text file the article holds (see
+        TEXT_FILES), after any text it has already; returns True if it was
+        kept
+        """
+        if not filename or not data or len(data) > MAX_TEXT_FILE or \
+                splitext(filename)[1].lower() not in TEXT_FILES:
+            return False
+
+        text = self.decode_text(data, filename=filename)[0].strip()
+        if not text:
+            return False
+
+        self.text = '%s\n\n%s' % (self.text, text) if self.text else text
+        return True
+
     @staticmethod
-    def decode_text(data, charset=None):
+    def decode_text(data, charset=None, filename=None):
         """
-        Returns (text, charset) for the bytes given: decoded with the
-        character set given if it works, otherwise the first of
-        FALLBACK_CHARSETS that does; line endings become '\\n'
+        Returns (text, charset) for the bytes given; see
+        CodecAscii.to_text() for how the character set is worked out
+        - filename: the file the text came from (if any); .nfo files are
+          read as DOS text
         """
-        for name in (charset, *FALLBACK_CHARSETS):
-            if not name:
-                continue
-
-            try:
-                text = data.decode(name)
-
-            except (LookupError, UnicodeDecodeError):
-                # Not a character set we know, or not this one
-                continue
-
-            return text.replace('\r\n', '\n').replace('\r', '\n'), \
-                name.lower()
-
-        # Never reached; latin-1 decodes anything
-        return data.decode('latin-1'), 'latin-1'
+        return CodecAscii.to_text(data, charset, filename)
 
     def __str__(self):
         return '<%s>' % self.message_id

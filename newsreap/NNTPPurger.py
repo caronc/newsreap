@@ -44,6 +44,7 @@ from sqlalchemy import literal
 
 from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPFilterRule import FilterItem
+from .NNTPFilterRule import NNTPFilterRule
 from .NNTPFilterRule import tags_to_text
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
@@ -60,6 +61,8 @@ from .objects.index.CollectionAlias import CollectionAlias
 from .objects.index.CollectionFile import CollectionFile
 from .objects.index.CollectionMeta import CollectionMeta
 from .objects.index.FileGroup import FileGroup
+from .objects.index.PGPPost import PGPPost
+from .objects.index.PGPWait import PGPWait
 from .objects.index.Segment import Segment
 
 # Logging
@@ -194,7 +197,7 @@ class NNTPPurger:
         score, tags = stored
         return self.filters.check_item(
             groups, item, score=score or 0, tags=frozenset(tags),
-            rescore=self.rescore)
+            rescore=self.rescore, drop=self.drop, by_score=True)
 
     def purge_headers(self, group, group_db_file):
         """
@@ -256,7 +259,8 @@ class NNTPPurger:
                         subject=row.subject, poster=row.poster,
                         message_id=row.message_id, posted=row.posted_date,
                         size=row.size, body=extra.get('body'),
-                        filenames=extra.get('filenames'))
+                        filenames=extra.get('filenames'),
+                        crossposts=NNTPFilterRule.count_groups(groups))
 
                     now = stored.get(row.message_id, (0, frozenset()))
                     verdict = self._judge(groups, item, now)
@@ -383,6 +387,12 @@ class NNTPPurger:
             for chunk in chunked(dropped):
                 session.query(ArchiveFile)\
                     .filter(ArchiveFile.message_id.in_(chunk))\
+                    .delete(synchronize_session=False)
+                session.query(PGPPost)\
+                    .filter(PGPPost.message_id.in_(chunk))\
+                    .delete(synchronize_session=False)
+                session.query(PGPWait)\
+                    .filter(PGPWait.message_id.in_(chunk))\
                     .delete(synchronize_session=False)
                 session.query(ArchiveGroup)\
                     .filter(ArchiveGroup.message_id.in_(chunk))\
@@ -525,7 +535,8 @@ class NNTPPurger:
                     posted=entry.first_posted, filenames=[entry.filename])
 
                 verdict = self.filters.check_item(
-                    file_groups, item, *best(entry.id), rescore=False)
+                    file_groups, item, *best(entry.id), rescore=False,
+                    by_score=True)
 
                 if scoped and self.drop and verdict.drop is not None:
                     lost_files.append(entry.id)
@@ -548,7 +559,8 @@ class NNTPPurger:
 
                 score, tags = ranks.get(message_id, (0, frozenset()))
                 verdict = self.filters.check_item(
-                    file_groups, item, score, tags, rescore=False)
+                    file_groups, item, score, tags, rescore=False,
+                    by_score=True)
 
                 if scoped and self.drop and verdict.drop is not None:
                     lost_segments.append(message_id)

@@ -66,6 +66,7 @@ from sqlalchemy import text
 from .NNTPArticle import NNTPArticle
 from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPEmptyContent import NNTPEmptyContent
+from .NNTPFilterRule import NNTPFilterRule
 from .NNTPFilterRule import parse_time
 from .NNTPFilterRule import score_tests
 from .NNTPFilterRule import tag_logic
@@ -93,6 +94,8 @@ from .objects.index.CollectionFile import CollectionFile
 from .objects.index.CollectionMeta import CollectionMeta
 from .objects.index.FileGroup import FileGroup
 from .objects.index.GroupClock import GroupClock
+from .objects.index.PGPPost import PGPPost
+from .objects.index.PGPWait import PGPWait
 from .objects.index.Segment import Segment
 
 # Logging
@@ -824,11 +827,13 @@ class NNTPIndexer:
         dropped = set()
         for row in rows:
             extra = known.get(row.message_id, {})
+            where = [group, *(row.xref or '').split()]
             verdict = self.filters.check(
-                [group, *(row.xref or '').split()], subject=row.subject,
+                where, subject=row.subject,
                 poster=row.poster, message_id=row.message_id,
                 posted=row.posted_date, size=row.size,
-                body=extra.get('body'), filenames=extra.get('filenames'))
+                body=extra.get('body'), filenames=extra.get('filenames'),
+                crossposts=NNTPFilterRule.count_groups(where))
 
             if verdict.drop is not None:
                 dropped.add(row.message_id)
@@ -2053,6 +2058,12 @@ class NNTPIndexer:
         for ids in chunked(posts):
             session.query(ArchiveFile)\
                 .filter(ArchiveFile.message_id.in_(ids))\
+                .delete(synchronize_session=False)
+            session.query(PGPPost)\
+                .filter(PGPPost.message_id.in_(ids))\
+                .delete(synchronize_session=False)
+            session.query(PGPWait)\
+                .filter(PGPWait.message_id.in_(ids))\
                 .delete(synchronize_session=False)
             session.query(ArchivedPost)\
                 .filter(ArchivedPost.message_id.in_(ids))\

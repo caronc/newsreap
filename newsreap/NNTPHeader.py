@@ -48,6 +48,7 @@ VALID_HEADER_ENTRIES = (
     'Content-Type',
     'Mime-Version',
     'Content-Transfer-Encoding',
+    'Content-Disposition',
 )
 
 # What we stick infront of any entry that is not marked in the Valid Header

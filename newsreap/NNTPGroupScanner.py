@@ -42,6 +42,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 
 from .NNTPArticleRanks import NNTPArticleRanks
+from .NNTPFilterRule import NNTPFilterRule
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
 from .codecs.CodecArticleIndex import XoverGrouping
@@ -486,10 +487,12 @@ class NNTPGroupScanner:
             if self.filters is not None:
                 # Judged in every group it was posted to, so it is judged
                 # the same way whichever group it is found in
+                where = [self.group, *groups]
                 verdict = self.filters.check(
-                    [self.group, *groups], subject=row['subject'],
+                    where, subject=row['subject'],
                     poster=row['poster'], message_id=row['message_id'],
-                    posted=row['posted_date'], size=row['size'])
+                    posted=row['posted_date'], size=row['size'],
+                    crossposts=NNTPFilterRule.count_groups(where))
 
                 if verdict.drop is not None:
                     # Never stored

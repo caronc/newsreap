@@ -248,6 +248,30 @@ def test_missing_article(nntp_server, tmp_path):
     sock.close()
 
 
+def test_fetches_say_why_nothing_came_back(nntp_server, tmp_path):
+    """
+    A fetch tells an article that is gone or refused to us (asking again
+    won't help) from one that failed (it might work later)
+    """
+    nntp_server.add_group(GROUP)
+    path = join(VAR_PATH, '00000005.ntx')
+    for message_id in ('5', 'denied', 'login', 'busy'):
+        nntp_server.add_article(message_id, path, GROUP)
+
+    nntp_server.on(r'^ARTICLE <denied>$', '502 Access denied')
+    nntp_server.on(r'^ARTICLE <login>$', '480 Authentication required')
+    nntp_server.on(r'^ARTICLE <busy>$', '503 Program fault')
+
+    sock = connect_to(nntp_server, join_group=True)
+    assert sock.connect(timeout=5.0) is True
+    for message_id, status in (
+            ('5', 'found'), ('missing', 'missing'), ('denied', 'denied'),
+            ('login', 'denied'), ('busy', 'failed')):
+        sock.get(message_id, work_dir=str(tmp_path), group=GROUP)
+        assert sock.fetch_status() == status, message_id
+    sock.close()
+
+
 def test_dropped_connection_is_retried(nntp_server, tmp_path):
     """
     A response cut short is fetched again on a new connection

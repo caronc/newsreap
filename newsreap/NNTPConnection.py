@@ -68,6 +68,8 @@ from .codecs.CodecArticleIndex import OVERVIEW_EXTRAS
 from .codecs.CodecArticleIndex import XoverGrouping
 from .codecs.CodecArticleIndex import overview_extras
 from .codecs.CodecGroups import CodecGroups
+from .codecs.CodecMime import CodecMime
+from .codecs.CodecPGP import CodecPGP
 from .codecs.CodecUU import CodecUU
 from .codecs.CodecYenc import CodecYenc
 
@@ -440,8 +442,8 @@ class NNTPConnection(SocketBase):
         self._action = None
 
         # How our last article fetch went: 'found', 'missing' (no server had
-        # it) or 'failed' (something went wrong; it may be there); see
-        # fetch_status()
+        # it), 'denied' (the server won't let us have it) or 'failed'
+        # (something went wrong; it may be there); see fetch_status()
         self.last_fetch = None
 
         # Used to cache group list responses
@@ -1788,17 +1790,22 @@ class NNTPConnection(SocketBase):
         if decoders is None:
             # Prepare a default list of decoders
             decoders = list()
+            header = None
             if not self.use_body:
                 # BODY calls pull down header information too
-                decoders.append(
-                    CodecHeader(encoding=self.encoding, work_dir=work_dir),
-                )
+                header = CodecHeader(encoding=self.encoding, work_dir=work_dir)
+                decoders.append(header)
 
             decoders.extend([
+                # MIME parts (it reads the boundary from the header)
+                CodecMime(work_dir=work_dir, header=header,
+                          max_bytes=max_bytes),
                 # Yenc Encoder/Decoder
                 CodecYenc(work_dir=work_dir, max_bytes=max_bytes),
                 # UUEncoder/Decoder
                 CodecUU(work_dir=work_dir, max_bytes=max_bytes),
+                # PGP signatures, keys and encrypted messages
+                CodecPGP(work_dir=work_dir, max_bytes=max_bytes),
             ])
 
         elif decoders is False:
@@ -1865,7 +1872,9 @@ class NNTPConnection(SocketBase):
 
             # Track the articles we couldn't fetch
             self._action.failed += 1
-            self.last_fetch = 'failed'
+            self.last_fetch = 'denied' \
+                if response.code in NNTPResponseCode.FETCH_DENIED \
+                else 'failed'
             return None
 
         # If we reach here, we have data we can work with; build our article

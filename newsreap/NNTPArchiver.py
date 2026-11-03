@@ -25,6 +25,13 @@ be read and searched offline.
 - Articles are kept in the index database, found by their Message-ID, so
   one posted to several groups is fetched and kept once.
 - Work is saved a chunk at a time; stopping part way loses nothing.
+- With `pgp` on, the PGP keys posts carry (and which posts each key signed
+  or was encrypted for) are kept too (see NNTPKeyring), and posts
+  encrypted for a secret key we hold are decrypted (see NNTPGnuPG).  The
+  ones that can't be yet are tried again by the next archive() of their
+  group (up to `retries` times), with retry(), or by a forced archive().
+  An answer trying again won't change (ie: the server no longer has it,
+  or it isn't for any of our keys) is given up on at once.
 """
 
 import gevent.monkey
@@ -50,6 +57,7 @@ from .NNTPArchivePost import NNTPArchivePost
 from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPConnectionRequest import NNTPConnectionRequest
 from .NNTPSearchTerm import SEARCH_ANY
+from .NNTPFilterRule import NNTPFilterRule
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
 from .NNTPIndexDatabase import PG_POSTER_DOCUMENT
@@ -60,6 +68,8 @@ from .NNTPIndexer import chunked
 from .NNTPIndexer import TERM_PARAMS
 from .NNTPIndexer import keyword_terms
 from .NNTPIndexer import parse_keywords
+from .NNTPKeyring import ENCRYPTED_TYPE
+from .NNTPKeyring import NNTPKeyring
 from .NNTPIndexer import rank_query
 from .Utils import scan_pylib
 from .Utils import strsize_to_bytes
@@ -70,6 +80,11 @@ from .objects.index.ArchiveGroup import ArchiveGroup
 from .objects.index.ArchivedPost import ArchiveKind
 from .objects.index.ArchivedPost import ArchivedPost
 from .objects.index.CollectionFile import CollectionFile
+from .objects.index.PGPPost import PGPPost
+from .objects.index.PGPPost import PGPRole
+from .objects.index.PGPWait import WAIT_FETCH
+from .objects.index.PGPWait import WAIT_FINAL
+from .objects.index.PGPWait import WaitReason
 from .objects.index.Segment import Segment
 
 # Logging
@@ -86,6 +101,9 @@ DEFAULT_ARCHIVE_CHUNK_SIZE = 500
 
 # How many articles are asked for at once (across the connections)
 DEFAULT_ARCHIVE_WINDOW = 10
+
+# How many times a post that couldn't be decrypted is tried again on its own
+DEFAULT_PGP_RETRIES = 1
 
 # The kinds of posts searches return unless asked for others
 ARCHIVE_SEARCHED = (ArchiveKind.Text, ArchiveKind.Binary)
@@ -110,7 +128,8 @@ class NNTPArchiver:
 
     def __init__(self, db_file, hooks=None, default_hooks=True,
                  max_size=DEFAULT_ARCHIVE_MAX_SIZE,
-                 chunk_size=DEFAULT_ARCHIVE_CHUNK_SIZE, filters=None):
+                 chunk_size=DEFAULT_ARCHIVE_CHUNK_SIZE, filters=None,
+                 pgp=False, gpg=None, retries=DEFAULT_PGP_RETRIES):
         """
         Prepares an archiver
 
@@ -123,9 +142,17 @@ class NNTPArchiver:
         - filters: the NNTPFilter that scores and tags articles (and drops
           the ones it no longer wants, without fetching them); without it,
           the scores and tags given when they were cached are used
+        - pgp: keep the PGP keys posts carry and name (see NNTPKeyring)
+        - gpg: the NNTPGnuPG posts encrypted for our secret keys are
+          decrypted with (only with pgp on)
+        - retries: how many times archive() tries a post of its group that
+          couldn't be decrypted again (0 leaves it to retry())
         """
         self.db_file = db_file
         self.filters = filters or None
+        self.pgp = bool(pgp)
+        self.gpg = gpg if self.pgp else None
+        self.retries = max(0, int(retries or 0))
 
         # Rules that need an article's text (or file names) are checked again
         # once it is fetched
@@ -169,6 +196,11 @@ class NNTPArchiver:
         self.known = 0
         self.failed = 0
         self.dropped = 0
+        self.keys = 0
+        self.decrypted = 0
+        self.locked = 0
+        self.retried = 0
+        self.given_up = 0
 
     def session(self, create=False):
         """
@@ -217,7 +249,7 @@ class NNTPArchiver:
             return post
 
         # Each one in turn fills in what it knows
-        self.hooks.call('archive_convert', post=post)
+        self.hooks.call('archive_convert', post=post, gpg=self.gpg)
 
         if post.kind == ArchiveKind.Text and post.text is None:
             # Nothing could make sense of it
@@ -257,6 +289,19 @@ class NNTPArchiver:
         session.add_all(
             ArchiveFile(message_id=post.message_id, **f) for f in post.files)
 
+        if self.pgp:
+            # The PGP keys it carries and names
+            self.keys += NNTPKeyring.store_post(session, post)
+
+        if self._waiting(post):
+            # Why it couldn't be decrypted (so it can be tried again)
+            self._note(session, post.message_id,
+                       post.locked or WaitReason.Failed)
+
+        elif self.gpg is not None and 'pgp' in post.encoding:
+            # Decrypted; it no longer waits
+            NNTPKeyring.done_waiting(session, [post.message_id])
+
         # The groups it was found in
         NNTPIndexer._insert_ignore(session, ArchiveGroup, [
             {'message_id': post.message_id, 'name': str(group)[:128]}
@@ -293,6 +338,15 @@ class NNTPArchiver:
         # Where we are (by article number)
         last = None
 
+        # The posts of this group still waiting to be decrypted that are
+        # tried again once the new ones are kept (the ones this run keeps
+        # wait for the next one)
+        due = set()
+        if self.gpg is not None and self.retries:
+            due = NNTPKeyring.locked(
+                session, self.gpg.secret_keys(), retries=self.retries,
+                final=False, group=group)
+
         try:
             while True:
                 # The next small articles (all of them when forced, so the
@@ -324,6 +378,19 @@ class NNTPArchiver:
                     ArchivedPost.message_id, ArchivedPost.kind)
                     .filter(ArchivedPost.message_id.in_(ids)))
 
+                # Posts holding PGP blocks kept before PGP keys were are
+                # read again when forced (their keys weren't noted), and so
+                # are the ones still waiting to be decrypted
+                again = set()
+                if force and self.pgp:
+                    again = NNTPKeyring.unread(session, known)
+                    if self.gpg is not None:
+                        again |= NNTPKeyring.locked(
+                            session, self.gpg.secret_keys(), known)
+
+                # Read again here, so not once more at the end
+                due.difference_update(again)
+
                 # What our filters make of them (the ones they no longer want
                 # are let go of instead of fetched)
                 ranks = {}
@@ -332,11 +399,12 @@ class NNTPArchiver:
                     if self.filters is None:
                         continue
 
+                    where = [group, *(row.xref or '').split()]
                     verdict = self.filters.check(
-                        [group, *(row.xref or '').split()],
-                        subject=row.subject, poster=row.poster,
+                        where, subject=row.subject, poster=row.poster,
                         message_id=message_id, posted=row.posted_date,
-                        size=row.size)
+                        size=row.size,
+                        crossposts=NNTPFilterRule.count_groups(where))
 
                     if verdict.drop is not None and message_id not in known:
                         dropped.append(row.message_id)
@@ -352,7 +420,7 @@ class NNTPArchiver:
                         continue
 
                     kind = known.get(message_id)
-                    if kind is None or (
+                    if kind is None or message_id in again or (
                             force and kind == ArchiveKind.Missing):
                         wanted.append((message_id, row))
 
@@ -368,6 +436,15 @@ class NNTPArchiver:
                 handled = [m for m, _ in zip(ids, rows) if m in known]
                 for (message_id, row), (article, status) in self._fetch(
                         manager, wanted, work_dir, group, window):
+
+                    if article is None and message_id in again:
+                        # Read again for its PGP keys, but it is gone (or
+                        # failed); what was kept stays as it was
+                        self._note(
+                            session, message_id, WAIT_FETCH.get(
+                                status, WaitReason.Unreachable),
+                            create=False)
+                        continue
 
                     if article is None and status != 'missing':
                         # Something went wrong (the server may still have
@@ -394,7 +471,9 @@ class NNTPArchiver:
                             subject=post.subject, poster=post.poster,
                             message_id=message_id, posted=post.posted,
                             size=post.size, body=post.text,
-                            filenames=[f['filename'] for f in post.files])
+                            filenames=[f['filename'] for f in post.files],
+                            crossposts=NNTPFilterRule.count_groups(
+                                [group, *(row.xref or '').split()]))
 
                         if verdict.drop is not None:
                             handled.remove(message_id)
@@ -452,11 +531,147 @@ class NNTPArchiver:
 
                 logger.debug('Archived %s up to article %d.' % (group, last))
 
+            if due:
+                # Their turn to be tried again
+                self._retry(session, due, manager, work_dir, window, server)
+
         finally:
             cached.close()
             cache.close()
 
         return True
+
+    def retry(self, message_ids, manager, work_dir=None,
+              window=DEFAULT_ARCHIVE_WINDOW, server=''):
+        """
+        Fetches posts kept before again and keeps what they say now (ie: one
+        waiting to be decrypted, now that its passphrase is known).  A post
+        that can't be fetched keeps what it had.
+
+        - message_ids: the posts (they must have been kept)
+        - manager: the NNTPManager to fetch them with
+        - work_dir: where articles are held while they are read
+
+        Returns how many were fetched again.
+        """
+        self.reset()
+        session = self.session()
+        if session is None:
+            return 0
+
+        return self._retry(
+            session, message_ids, manager, work_dir or gettempdir(), window,
+            server)
+
+    def _retry(self, session, message_ids, manager, work_dir, window, server):
+        """
+        Fetches posts kept before again (see retry()); returns how many were
+        """
+        ids = list(dict.fromkeys(m.strip().strip('<>') for m in message_ids))
+        done = 0
+        for chunk in chunked(ids, self.chunk_size):
+            posts = {post.message_id: post for post in session.query(
+                ArchivedPost).filter(ArchivedPost.message_id.in_(chunk))}
+
+            # Each is asked for in a group it was found in
+            by_group = {}
+            for message_id, name in session.query(
+                    ArchiveGroup.message_id, ArchiveGroup.name)\
+                    .filter(ArchiveGroup.message_id.in_(list(posts)))\
+                    .order_by(ArchiveGroup.name):
+                by_group.setdefault(message_id, name)
+
+            wanted = {}
+            for message_id, entry in posts.items():
+                wanted.setdefault(by_group.get(message_id), []).append(
+                    (message_id, entry))
+
+            kept = []
+            for group, entries in wanted.items():
+                for (message_id, entry), (article, status) in self._fetch(
+                        manager, entries, work_dir, group, window):
+                    self.retried += 1
+                    if article is None:
+                        # Gone (or failed); what was kept stays as it was
+                        self.failed += 1
+                        self._note(
+                            session, message_id, WAIT_FETCH.get(
+                                status, WaitReason.Unreachable),
+                            create=False)
+                        continue
+
+                    post = NNTPArchivePost(
+                        message_id, raw=article.body.getvalue(),
+                        subject=entry.subject, poster=entry.poster,
+                        posted=entry.posted, size=entry.size,
+                        groups=set() if group is None else {group},
+                        server=server or entry.server)
+
+                    self.convert(post)
+                    if post.kind == ArchiveKind.Refused:
+                        # It made sense before; keep what we had
+                        self._note(session, message_id, WaitReason.Failed,
+                                   create=False)
+                        continue
+
+                    self.store(session, post)
+                    kept.append(post)
+                    self._count_pgp(post)
+                    done += 1
+
+            session.commit()
+            for post in kept:
+                self.hooks.call('post_archive', post=post)
+
+        return done
+
+    def _waiting(self, post):
+        """
+        Returns True if a post holds a message encrypted for one of our
+        secret keys (or for a hidden one) that couldn't be decrypted
+        """
+        return self.gpg is not None and any(
+            f['content_type'] == ENCRYPTED_TYPE for f in post.files) \
+            and bool(self.gpg.holds(
+                key_id for key_id, role, _ in post.pgp
+                if role == PGPRole.EncryptedFor))
+
+    def _note(self, session, message_id, reason, create=True):
+        """
+        Notes why a post still waits to be decrypted (see
+        NNTPKeyring.note_waiting()), counting it if it is now given up on
+        """
+        entry = NNTPKeyring.note_waiting(
+            session, message_id, reason, create=create)
+
+        if entry is None or entry.reason == WaitReason.NoKey:
+            # Not waiting, or it wasn't for us (a hidden recipient)
+            return
+
+        if entry.reason in WAIT_FINAL or entry.tries >= self.retries:
+            # Not tried again on its own
+            self.given_up += 1
+            logger.warning(
+                "<%s> could not be decrypted (%s); it is no longer tried on "
+                "its own ('nr pgp decrypt' tries it)." % (
+                    message_id, entry.reason))
+
+        else:
+            logger.warning(
+                "<%s> could not be decrypted (%s); the next 'nr update' tries "
+                "it again." % (message_id, entry.reason))
+
+    def _count_pgp(self, post):
+        """
+        Counts a post that was decrypted (or still couldn't be)
+        """
+        if 'pgp' in post.encoding:
+            # Read with one of our secret keys
+            self.decrypted += 1
+
+        elif self._waiting(post) and post.locked != WaitReason.NoKey:
+            # For one of our keys, but it couldn't be opened yet
+            self.locked += 1
 
     def _count(self, post):
         """
@@ -466,6 +681,7 @@ class NNTPArchiver:
             self.missing += 1
             return
 
+        self._count_pgp(post)
         self.fetched += 1
         if post.kind == ArchiveKind.Text:
             self.texts += 1
@@ -482,7 +698,7 @@ class NNTPArchiver:
         Fetches the articles wanted, keeping `window` of them asked for at
         once; yields ((message_id, row), (article, status)) in the order
         given: the article (None if it wasn't fetched) and how the fetch
-        went ('found', 'missing' or 'failed'; see
+        went ('found', 'missing', 'denied' or 'failed'; see
         NNTPConnection.fetch_status())
         """
         pending = deque()
@@ -526,7 +742,7 @@ class NNTPArchiver:
     def find(self, keywords=(), groups=None, kinds=ARCHIVE_SEARCHED,
              limit=None, case_sensitive=False, tags=None, without_tags=None,
              min_score=None, max_score=None, terms=None, scores=None,
-             after=None, before=None, oldest=False):
+             after=None, before=None, oldest=False, key_ids=None):
         """
         Returns the posts (newest first) with every keyword in their
         subject, text or file names (see parse_keywords(); %p looks in the
@@ -549,6 +765,8 @@ class NNTPArchiver:
         - after / before: only posts posted at or after / before this (a
           date or how long ago, ie: 90d)
         - oldest: oldest first (instead of newest first)
+        - key_ids: only posts naming one of these PGP key IDs (signed by
+          it, encrypted for it or carrying it; see NNTPKeyring.resolve())
         """
         session = self.session()
         if session is None:
@@ -587,6 +805,12 @@ class NNTPArchiver:
             query = query.filter(ArchivedPost.message_id.in_(
                 select(ArchiveGroup.message_id)
                 .where(ArchiveGroup.name.in_(list(groups)))))
+
+        if key_ids is not None:
+            # Tied to (at least) one of the PGP keys
+            query = query.filter(ArchivedPost.message_id.in_(
+                select(PGPPost.message_id)
+                .where(PGPPost.key_id.in_(list(key_ids)))))
 
         query = query.order_by(
             ArchivedPost.posted.asc(), ArchivedPost.id.asc()) if oldest \
@@ -840,6 +1064,21 @@ class NNTPArchiver:
 
         if self.failed:
             text += ', %d failed (asked for again next time)' % self.failed
+
+        if self.keys:
+            text += ', %d new PGP key(s)' % self.keys
+
+        if self.retried:
+            text += ', %d locked post(s) tried again' % self.retried
+
+        if self.decrypted:
+            text += ', %d decrypted' % self.decrypted
+
+        if self.locked:
+            text += ", %d still locked (see 'nr pgp decrypt')" % self.locked
+
+        if self.given_up:
+            text += ', %d no longer tried on their own' % self.given_up
 
         return text
 

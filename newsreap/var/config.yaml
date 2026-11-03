@@ -136,6 +136,33 @@ processing:
    # ('nr search --posts').  Files they hold are only noted, never kept.
    archive_max_size: 64KB
 
+   # What 'nr update' does for every group without being asked: keep what
+   # the small articles say (as --content does) and read the NZB files
+   # posted (as --nzb does).  Keeping content means fetching every small
+   # article, which suits discussion groups more than busy binary ones, so
+   # it is usually better set for each group ('nr group watch <group>
+   # --content') than here.  Both are off unless set to yes.
+   # content: yes
+   # nzb: yes
+
+   # Keep the PGP keys found in the posts 'nr update --content' fetches, and
+   # which posts each key signed or was encrypted for, so you can see who
+   # posted what and search by key ('nr pgp', 'nr search --key').  Only
+   # public details are kept.  With your own secret key imported ('nr pgp
+   # import'), the posts encrypted for you are decrypted too (this needs
+   # gpg).  Off unless set to yes.
+   # pgp: yes
+
+   # Where gpg keeps the secret keys posts are decrypted with; set it to
+   # ~/.gnupg to use the keys (and gpg-agent) you already have.
+   # pgp_home: '%{base_dir}/pgp'
+
+   # A post that couldn't be decrypted (ie: its passphrase wasn't known
+   # yet) is tried again by the next 'nr update', this many times.  Answers
+   # that won't change (the server no longer has it, or it isn't for any of
+   # your keys) aren't tried again.  0 leaves it to 'nr pgp decrypt'.
+   # pgp_retries: 1
+
    # Rules that drop spam before it is stored, and score and tag the rest
    # (see 'nr filter --help').  They live in filters.yaml next to this file
    # unless another file is given here.

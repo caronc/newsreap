@@ -1,0 +1,16 @@
+# gitleaks (https://github.com/gitleaks/gitleaks): files it leaves alone.
+#
+# These are keys made only for the tests (a TLS key for the test NNTP
+# server, and a PGP key whose passphrase is in the tests).  They protect
+# nothing.  Everything else is still checked with gitleaks' own rules.
+title = "NewsReap"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Keys made for the tests"
+paths = [
+    '''^tests/var/pgp/''',
+    '''^tests/var/ssl/''',
+]

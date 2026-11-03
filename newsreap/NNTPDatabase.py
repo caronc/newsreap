@@ -19,6 +19,7 @@ gevent.monkey.patch_all()
 # with the ObjectBase
 from .objects.nntp.Group import Group
 from .objects.nntp.GroupAlias import GroupAlias
+from .objects.nntp.GroupOption import GroupOption
 from .objects.nntp.GroupTrack import GroupTrack
 from .objects.nntp.Server import Server
 

@@ -212,13 +212,91 @@ def test_uuencoded_files_are_only_noted():
     A uuencoded file isn't kept; its name is
     """
     post = converted(article(
-        'begin 644 notes.txt\n'
+        'begin 644 notes.dat\n'
         'M5&AI<R!I<R!A(&QI;F4@;V8@=&5X=\'1H870@:7,@9F%I<FQY(&QO;F<@86YD\n'
         '`\nend\n'))
     assert post.kind == ArchiveKind.Binary
     assert post.text is None
     assert [(f['filename'], f['codec']) for f in post.files] == [
-        ('notes.txt', 'uuencode')]
+        ('notes.dat', 'uuencode')]
+
+
+def test_small_text_files_have_their_text_kept():
+    """
+    The text of a small text file posted on its own (ie: an .nfo or .sfv,
+    yEnc encoded or uuencoded) is kept so it can be searched; .nfo files
+    are read as DOS text
+    """
+    from zlib import crc32
+    from newsreap.codecs.CodecYenc import yenc_encode
+
+    def yenc(name, data):
+        encoded, _ = yenc_encode(data)
+        return article(
+            b'=ybegin line=128 size=%d name=%s\r\n%s\r\n'
+            b'=yend size=%d crc32=%08x\r\n' % (
+                len(data), name.encode(), encoded.rstrip(b'\r\n'),
+                len(data), crc32(data)))
+
+    nfo = '╔═══════╗\r\n║ Holiday.Movie.2026 ║\r\n╚═══════╝\r\n'
+    post = converted(yenc('release.nfo', nfo.encode('cp437')))
+    assert post.kind == ArchiveKind.Binary
+    assert post.files[0]['filename'] == 'release.nfo'
+    assert post.text == nfo.replace('\r\n', '\n').strip()
+
+    post = converted(yenc('release.sfv', b'a.rar 01234567\r\n'))
+    assert post.text == 'a.rar 01234567'
+
+    # Part of a bigger file, or not a kind of text file: only noted
+    assert converted(yenc('movie.mkv', b'Holiday')).text is None
+
+    post = converted(article(
+        'begin 644 notes.txt\n'
+        'M5&AI<R!I<R!A(&QI;F4@;V8@=&5X=\'1H870@:7,@9F%I<FQY(&QO;F<@86YD\n'
+        '`\nend\n'))
+    assert post.kind == ArchiveKind.Binary
+    assert post.text == 'This is a line of textthat is fairly long and'
+
+
+def test_pgp_blocks_are_noted():
+    """
+    A signed post keeps its text (and notes its signature); a post that is
+    only an encrypted message is a file
+    """
+    from tests.CodecPGP_Test import sample
+
+    post = converted(article(
+        b'Before\n' + sample('clearsigned.asc') + b'After\n'))
+    assert post.kind == ArchiveKind.Text
+    assert post.text == \
+        'Before\nAfter\nHello Usenet.\n- a dash line\nFrom here'
+    assert [(f['codec'], f['content_type']) for f in post.files] == [
+        ('pgp', 'application/pgp-signature')]
+
+    post = converted(article(sample('encrypted.asc')))
+    assert post.kind == ArchiveKind.Binary
+    assert post.text is None
+    assert [(f['codec'], f['content_type']) for f in post.files] == [
+        ('pgp', 'application/pgp-encrypted')]
+
+    post = converted(article(sample('signed.asc')))
+    assert post.files[0]['filename'] == 'note.txt'
+
+    # Only looks like one
+    post = converted(article('-----BEGIN PGP nothing here'))
+    assert post.kind == ArchiveKind.Text
+    assert post.files == []
+
+
+def test_text_mixing_character_sets_reads_right():
+    """
+    A UTF-8 post quoting latin-1 text comes out right on every line, even
+    when it claims to be latin-1
+    """
+    post = converted(article(
+        'Café — yes\n'.encode() + b'> caf\xe9\n',
+        Content_Type='text/plain; charset=iso-8859-1'))
+    assert post.text == 'Café — yes\n> café'
 
 
 def test_sentences_starting_with_begin_stay_text():

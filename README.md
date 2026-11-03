@@ -15,7 +15,9 @@ NewsReap supports features such as:
 * Aliases allow you to not only group multiple Usenet groups into 1; you can use aliases to also simplify the reference to the group itself.
 * Filters keep your database trim and ranked: drop spam before it is ever
   stored (or purge it later, with a dry run first), and score and tag what
-  you care about (`nr filter --help`).
+  you care about (`nr filter --help`).  Drop rules that only look at the
+  header (subject, poster, posting time, size, how many groups it was
+  crossposted to) run first, so spam is never scored or stored.
 
 Some under the hood stuff that developers should appreciate about NewsReap are:
 * It suports character sets and does it's best to allow you to work with unicode characters
@@ -58,6 +60,100 @@ pip install -r requirements.txt
 ```
 
 See [INSTALL.md](INSTALL.md) for the optional archive tools (7-Zip, rar and par2).
+
+## Getting Started
+A walk through from nothing to a saved NZB file, using one group.  Every
+command has more to it; add `--help` to any of them (ie: `nr search
+--help`).
+
+### 1. Point NewsReap at Your Server
+```bash
+# Writes ~/.config/newsreap/config.yaml (it never overwrites one)
+nr --init
+```
+
+Open that file and fill in your provider's details under `servers:`:
+```yaml
+servers:
+  - host: news.example.com
+    port: 563
+    username: me
+    password: secret
+    secure: True
+```
+
+### 2. Set Up the Database and Learn the Groups
+```bash
+# Creates the database NewsReap keeps its settings in
+nr db init
+
+# Lists every group your server carries (do this again now and then)
+nr update groups
+```
+
+### 3. Fetch a Group
+A group's article headers (subject, poster, date and size; not the
+content) are fetched and kept on your machine, then put together into
+files and collections (one collection is one upload, such as a release).
+The first time, say how far back to go:
+```bash
+# a.b. is short for alt.binaries.
+nr update a.b.test2 --newest 200000
+
+# Or by date
+nr update a.b.test2 --days 7
+
+# Later runs carry on from where the last one stopped
+nr update a.b.test2
+```
+
+`nr status` shows what is kept (and how big it is) at any time.
+
+### 4. Search
+```bash
+# The collections of a group, newest first
+nr search -g a.b.test2
+
+# Only the ones whose name has these words
+nr search holiday photos
+
+# Leave out what has a word (put -- before it; options go before the --,
+# since everything after it is a word to search for)
+nr search holiday -- -2019
+
+# Every article header, one line each (as a newsreader lists them)
+nr search --raw -g a.b.test2
+```
+
+On a terminal the results are shown a screen at a time: the up and down
+arrows move a row, space and `b` move a page, `/` finds text and `q`
+quits.  Add `--no-pager` to write them all out (ie: into a file).
+
+### 5. Save What You Want
+The number on the left of each search result is its id:
+```bash
+nr nzb save 42 --output ~/Downloads
+```
+Hand the NZB file to your downloader, or use `nr get` (see Downloading).
+
+### 6. Keep Up to Date
+```bash
+# Remember a group, and give it a shorter name
+nr group watch alt.binaries.test2
+nr alias add test2 alt.binaries.test2
+
+# Fetch every watched group (a good one for a crontab)
+nr update --watched
+```
+
+### Where to Go Next
+- **Read discussions:** `nr update <group> --content` keeps the text of
+  small articles, so `nr search --posts <words>` finds what people wrote
+  (see More Than Headers).
+- **Drop spam and rank what you like:** filters remove articles before
+  they are ever kept, and score and tag the rest (`nr filter --help`).
+  Try `nr filter purge ... --dry-run` first to see what a rule removes.
+- **Read one article:** `nr show <message-id>`.
 
 ## Downloading
 If you know the article-id/Message-ID of the item in question, the following
@@ -223,7 +319,7 @@ nr group watch alt.binaries.sounds
 nr group watch alt.binaries.multimedia
 
 # You can create aliases too so you don't have to always type so much.
-nr alias add alt.binaries.sounds sounds
+nr alias add sounds alt.binaries.sounds
 
 # You can handle all interactions with that group by just
 # identifying it's alias now!
@@ -248,7 +344,8 @@ nr update a.b.test2
 nr status
 
 # Everything (newest first, or --oldest-first; a screen at a time on a
-# terminal), or what has keywords in it
+# terminal: up/down move a row, space/b a page, / finds, q quits), or what
+# has keywords in it
 nr search -g a.b.test2
 nr search --oldest-first
 nr search holiday photos
@@ -314,12 +411,80 @@ nr show '<message-id@example.com>' another@example.com
 nr fetch '<message-id@example.com>' --output ~/Downloads
 ```
 
+### PGP Keys
+Some posts are signed or encrypted with PGP, and some carry a key someone
+is sharing.  NewsReap can keep those keys, and which posts each one
+signed or was encrypted for, so you can see who posted what.  No key or
+passphrase is needed; only public details are kept.  It is off until you
+add this under `processing:` in your configuration file:
+```yaml
+processing:
+   pgp: yes
+```
+
+Keys are then picked up by `nr update <group> --content`; add `--force`
+once to read the posts you kept before turning it on.
+```bash
+# The keys kept (and how many posts each is tied to)
+nr pgp list
+
+# Everything about a key: by its key ID, fingerprint or part of a name
+nr pgp show 'someone@example.com'
+
+# The posts tied to a key
+nr search --key 11349D4561E2FDA5
+
+# Keep a key someone gave you, or hand one on
+nr pgp import friend.asc
+nr pgp export 'someone@example.com' --output someone.asc
+```
+
+#### Reading Posts Encrypted for You
+Import your own secret key and the posts encrypted for it are decrypted as
+they are kept, so their text can be searched like any other.  This needs
+[gpg](https://gnupg.org) (most Linux systems have it; on Windows install
+Gpg4win).
+```bash
+# gpg keeps it in <base_dir>/pgp (set pgp_home: ~/.gnupg to use your own)
+nr pgp import my-secret-key.asc
+
+# If the key has a passphrase, give it once; it is checked and kept in a
+# file only you can read
+nr pgp passphrase 'me@example.com'
+
+# Read the posts kept before (or that couldn't be read yet)
+nr pgp decrypt
+```
+
+Nothing ever stops to ask for a passphrase.  A post whose key needs one
+that isn't known (or a wrong one) is kept as it is, still encrypted, and
+tried again later:
+
+- The next `nr update <group> --content` fetches it again, up to
+  `pgp_retries` times (1 unless set under `processing:`).
+- It is given up on at once when trying again can't help: the server no
+  longer has it or won't let you have it, or none of your keys open it.
+- Importing a secret key or giving a passphrase gives the posts it may
+  open their tries back.
+- `nr pgp decrypt` tries them all now (`--all` includes the ones given up
+  on), and `nr status` says how many are waiting.
+
+Keep in mind that the
+decrypted text is stored in the index like any other post's, so if your
+index lives on a shared database server, others with access to it can
+read it.
+
 ### Keeping Up
 Watch the groups you care about and fetch them as often as you like:
 
 ```bash
 nr group watch a.b.test2
 nr update --watched
+
+# A group can always keep its posts' text (--content) or read the NZB
+# files posted to it (--nzb), without being asked each time
+nr group watch alt.discuss.coffee --content
+nr group watch a.b.test2 --nzb
 
 # Consider adding this to a crontab:
 cat << _EOF > /etc/cron.d/newsreap
@@ -347,12 +512,15 @@ tox -e format
 
 # Build the source and wheel packages
 tox -e build
+
+# Run nr from your checkout
+tox -e nr -- search holiday
 ```
 
 Tests that need the 7-Zip, rar or par2 tools are skipped when those tools
 aren't installed.
 
-### Testing conversations with an NNTP Server
+### Testing Conversations with an NNTP Server
 `tests/FakeNNTPServer.py` is a small scripted NNTP server for testing how
 NewsReap talks to a server:
 - Out of the box it answers like a typical provider would (login,

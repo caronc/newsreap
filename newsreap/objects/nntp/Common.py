@@ -12,8 +12,12 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import ProgrammingError
+
 from .Group import Group
 from .GroupAlias import GroupAlias
+from .GroupOption import GroupOption
 from newsreap.NNTPGroup import NNTPGroup
 
 # Logging
@@ -147,3 +151,53 @@ def get_groups(session, lookup=None, watched=False):
                 results.update(groups)
 
     return results
+
+
+def get_group_options(session, group_ids):
+    """
+    Returns {group id: {'content': ..., 'nzb': ...}} for the groups given
+    that have options set ('nr group watch --content'); a value of None
+    means the group follows the configuration file
+    """
+    ids = list(group_ids)
+    if not session or not ids:
+        return {}
+
+    try:
+        return {
+            option.group_id: {'content': option.content, 'nzb': option.nzb}
+            for option in session.query(GroupOption)
+            .filter(GroupOption.group_id.in_(ids))}
+
+    except (OperationalError, ProgrammingError):
+        # A database made before group options existed (they're added the
+        # first time one is set)
+        session.rollback()
+        return {}
+
+
+def set_group_options(session, group_ids, **options):
+    """
+    Sets options (content=True, nzb=False, ...) on the groups given; an
+    option given as None goes back to following the configuration file.
+    Returns how many groups changed (not committed).
+    """
+    # A database made before group options existed gets the table now (on
+    # our own connection; another would wait on what we haven't committed)
+    GroupOption.__table__.create(bind=session.connection(), checkfirst=True)
+
+    changed = 0
+    for group_id in group_ids:
+        option = session.get(GroupOption, group_id)
+        if option is None:
+            option = GroupOption(group_id=group_id)
+            session.add(option)
+
+        before = (option.content, option.nzb)
+        for name, value in options.items():
+            setattr(option, name, value)
+
+        if (option.content, option.nzb) != before:
+            changed += 1
+
+    return changed

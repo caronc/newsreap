@@ -14,8 +14,9 @@
 
 """
 A rule looks at an article's subject, poster, Message-ID, posting time,
-size, score and tags (only the ones it names; anything left out isn't
-checked) and, when they match, does one of three things:
+size, how many groups it was posted to, score and tags (only the ones it
+names; anything left out isn't checked) and, when they match, does one of
+three things:
 
 - score: adds to the article's score and/or tags it (every score rule
   that matches adds up)
@@ -32,6 +33,7 @@ A rule written in YAML looks like this:
       after: 2026-01-01             # only articles posted in this range
       before: 90d                   # (a date, or how long ago)
       size: { over: 10MB }
+      crossposts: '>5'              # groups it was posted to (comparisons)
       score: '<10'                  # (comparisons; quote them)
       not_tagged: trusted           # (tags work like Apprise's)
       action: drop
@@ -91,8 +93,8 @@ FILTER_TEXT_OPS = ('contains', 'is', 'starts', 'ends', 'glob', 'regex')
 # Every setting a rule may have (anything else is a mistake)
 FILTER_RULE_KEYS = (
     'name', 'action', 'groups', 'match', 'case_sensitive',
-    *FILTER_TEXT_FIELDS, 'after', 'before', 'size', 'tagged', 'not_tagged',
-    'score', 'tag',
+    *FILTER_TEXT_FIELDS, 'after', 'before', 'size', 'crossposts', 'tagged',
+    'not_tagged', 'score', 'tag',
 )
 
 # What a tag may look like: letters, numbers and a few symbols (tags are
@@ -321,15 +323,17 @@ class FilterItem:
     """
 
     __slots__ = ('subject', 'poster', 'message_id', 'posted', 'size',
-                 'body', 'filename', '_folded')
+                 'crossposts', 'body', 'filename', '_folded')
 
     def __init__(self, subject='', poster='', message_id='', posted=None,
-                 size=None, body=None, filenames=None):
+                 size=None, body=None, filenames=None, crossposts=None):
         """
         Prepares an item
 
         - posted: when it was posted (UTC); None if we don't know
         - size: its size in bytes; None if we don't know
+        - crossposts: how many groups it was posted to (its Xref); None if
+          we don't know
         - body: its text; None if we don't know it (ie: only its header
           was fetched)
         - filenames: the names of the files it holds; None if we don't
@@ -340,6 +344,7 @@ class FilterItem:
         self.message_id = (message_id or '').strip().strip('<>')
         self.posted = posted
         self.size = size
+        self.crossposts = crossposts
         self.body = body
         self.filename = None if filenames is None \
             else [name for name in filenames if name]
@@ -523,7 +528,7 @@ class NNTPFilterRule:
     def __init__(self, name=None, action=None, groups=None, match='all',
                  case_sensitive=False, subject=None, poster=None,
                  message_id=None, body=None, filename=None, after=None,
-                 before=None, size=None,
+                 before=None, size=None, crossposts=None,
                  tagged=None, not_tagged=None, score=None,
                  tag=None, now=None):
         """
@@ -601,6 +606,9 @@ class NNTPFilterRule:
             self.size_over = self._bytes(size.get('over'), 'size over')
             self.size_under = self._bytes(size.get('under'), 'size under')
 
+        # How many groups it was posted to (comparisons, ie: '>5')
+        self.crossposts = self._counts(crossposts, 'crossposts')
+
         # Its score and tags (as worked out by the score rules)
         # The tags it must (or mustn't) have; see tag_logic()
         self.tagged = self._logic(tagged, 'tagged')
@@ -611,8 +619,9 @@ class NNTPFilterRule:
             # It would match everything
             raise ValueError(
                 'the rule has nothing to match on (give it a subject, '
-                'poster, message_id, after, before, size, a score to '
-                "compare with (ie: score: '<-50'), tagged or not_tagged)")
+                'poster, message_id, after, before, size, crossposts, a '
+                "score to compare with (ie: score: '<-50'), tagged or "
+                'not_tagged)')
 
         if not self.name:
             self.name = self.suggest_name()
@@ -662,6 +671,10 @@ class NNTPFilterRule:
             if value is not None:
                 entry[key] = value
 
+        if self.crossposts:
+            entry['crossposts'] = ', '.join(
+                '%s%d' % test for test in self.crossposts)
+
         for key, logic in (('tagged', self.tagged),
                            ('not_tagged', self.not_tagged)):
             if logic:
@@ -692,8 +705,16 @@ class NNTPFilterRule:
         return len(self.text) + sum(
             value is not None for value in (
                 self.after, self.before, self.size_over, self.size_under,
-                self.score_tests or None)) + \
+                self.crossposts or None, self.score_tests or None)) + \
             bool(self.tagged) + bool(self.not_tagged)
+
+    @property
+    def ranked(self):
+        """
+        True if the rule looks at the score or tags the score rules give
+        (so it can only be checked once they have run)
+        """
+        return bool(self.score_tests or self.tagged or self.not_tagged)
 
     def uses(self, field):
         """
@@ -708,6 +729,9 @@ class NNTPFilterRule:
 
         if field == 'posted':
             return self.after is not None or self.before is not None
+
+        if field == 'crossposts':
+            return bool(self.crossposts)
 
         if field == 'score':
             return bool(self.score_tests)
@@ -769,6 +793,14 @@ class NNTPFilterRule:
             found = item.size is not None and \
                 (self.size_over is None or item.size > self.size_over) and \
                 (self.size_under is None or item.size < self.size_under)
+            if found != wanted:
+                return found
+
+        if self.crossposts:
+            # A count we don't know never matches
+            found = item.crossposts is not None and all(
+                SCORE_TESTS[op](item.crossposts, value)
+                for op, value in self.crossposts)
             if found != wanted:
                 return found
 
@@ -956,6 +988,38 @@ class NNTPFilterRule:
                 amount = number
 
         return tuple(tests), amount
+
+    @staticmethod
+    def _counts(value, name):
+        """
+        Returns the comparisons a count was given (ie: '>5', '>=2, <10'); a
+        plain number is an exact count
+        """
+        if value is None:
+            return ()
+
+        problem = "%s takes a number (ie: 3) or comparisons (ie: '>5')" % (
+            name)
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ValueError(problem)
+
+        tests = []
+        for term in str(value).split(','):
+            found = SCORE_TERM_RE.match(term)
+            if not found:
+                raise ValueError('%s, not %s' % (problem, value))
+
+            tests.append((found.group('op') or '=', int(found.group('value'))))
+
+        return tuple(tests)
+
+    @staticmethod
+    def count_groups(groups):
+        """
+        Returns how many groups an article was posted to, from the group it
+        was found in and its Xref (ie: [group, *xref.split()])
+        """
+        return len({group.lower() for group in groups if group}) or None
 
     @staticmethod
     def _bytes(value, name):

@@ -129,6 +129,24 @@ def test_one_update_fetches_headers_content_and_nzb_files(tmp_path):
         assert '2/2 file(s)  holiday' in nr('search', 'holiday').output
         assert '<talk@x>' in nr('search', '--posts', 'cafe').output
 
+        # Written straight out when asked
+        result = nr('search', '--no-pager', 'holiday')
+        assert result.exit_code == 0, result.output
+        assert '2/2 file(s)  holiday' in result.output
+
+        # At most as many as asked for, of every kind
+        def rows(*args):
+            result = nr('search', *args)
+            assert result.exit_code == 0, result.output
+            return [line for line in result.output.splitlines()
+                    if line.startswith(('[', '  ['))]
+
+        assert len(rows('--raw', '-g', GROUP)) == 3
+        assert len(rows('--raw', '-g', GROUP, '--limit', '1')) == 1
+        assert len(rows('--limit', '1')) == 1
+        assert len(rows('--raw', '--collections', '-g', GROUP, '-l', '1')) \
+            == 2
+
         # Nothing is fetched twice
         count = fetched(server)
         result = nr('update', GROUP, '--content', '--nzb')
@@ -154,6 +172,96 @@ def test_one_update_fetches_headers_content_and_nzb_files(tmp_path):
         # --rescore never fetches headers, so it can't be told which
         result = nr('update', GROUP, '--rescore', '--newest', '10')
         assert result.exit_code == 1
+
+
+def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
+        tmp_path):
+    """
+    A group can be told what nr update always does for it ('nr group watch
+    --content --no-nzb'); the configuration file decides for the rest, and
+    the command line still wins for one run
+    """
+    import sqlite3
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000002 0000000001 y\n' % GROUP)
+
+    nzb = nzb_file(tmp_path / 'holiday.nzb', 'Holiday', (1, 2), total=2)
+    with open(nzb, 'rb') as fp:
+        nzb_data = fp.read()
+
+    articles = {
+        'talk@x': (article('Has anyone been to the café?',
+                           Subject='Coffee'), 'Coffee'),
+        'nzb@x': (yenc_article('holiday.nzb', nzb_data,
+                               Subject='holiday.nzb'),
+                  'Holiday [1/1] - "holiday.nzb" yEnc (1/1)'),
+    }
+
+    with FakeNNTPServer(group_list=str(group_list),
+                        join_group=False) as server:
+        server.add_group(GROUP, 2, 1, 2)
+        for no, (message_id, (raw, subject)) in enumerate(
+                articles.items(), 1):
+            path = tmp_path / ('%d.msg' % no)
+            path.write_bytes(raw)
+            server.add_article(message_id, str(path), GROUP)
+            server.add_overview(
+                GROUP, no, subject, POSTER, POSTED + timedelta(minutes=no),
+                message_id, size=len(raw))
+
+        # Every group reads its NZB files unless it says otherwise
+        config = config_for(server, tmp_path / 'config.yaml', nzb='yes')
+        runner = CliRunner()
+
+        def nr(*args):
+            return runner.invoke(cli, ['--config', config, *args], obj={})
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('update', 'groups').exit_code == 0
+
+        # A database made before group options existed still works
+        db = sqlite3.connect(tmp_path / 'newsreap.db')
+        db.execute('DROP TABLE group_option')
+        db.commit()
+        db.close()
+        assert nr('group', 'list').exit_code == 0
+
+        result = nr('group', 'watch', GROUP, '--content', '--no-nzb')
+        assert result.exit_code == 0, result.output
+        assert '%s: content, no nzb' % GROUP in result.output
+        assert '(content, no nzb)' in nr('group', 'list').output
+        assert 'no content, nzb' in nr('status').output
+
+        # Left out for one run
+        result = nr('update', '--watched', '--no-content')
+        assert result.exit_code == 0, result.output
+        assert 'article(s) kept' not in result.output
+        assert 'NZB file(s)' not in result.output
+        assert fetched(server) == 0
+
+        # As the group says
+        result = nr('update', '--watched')
+        assert result.exit_code == 0, result.output
+        assert 'article(s) kept' in result.output
+        assert 'NZB file(s)' not in result.output
+
+        # --rescore only does what it is asked
+        result = nr('update', GROUP, '--rescore')
+        assert result.exit_code == 0, result.output
+        assert 'NZB file(s)' not in result.output
+
+        # Back to what the configuration file says
+        result = nr('group', 'watch', GROUP, '--default')
+        assert '%s: as the configuration file says' % GROUP in result.output
+        result = nr('update', GROUP, '--cached')
+        assert result.exit_code == 0, result.output
+        assert '1 NZB file(s) read' in result.output
+        assert 'article(s) kept' not in result.output
+
+        assert nr('group', 'watch', GROUP, '--default', '--nzb')\
+            .exit_code == 1
 
 
 def test_the_update_steps_can_still_be_run_on_their_own(tmp_path):

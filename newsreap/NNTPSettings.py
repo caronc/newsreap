@@ -347,6 +347,21 @@ DEFAULT_PROCESSING_VARIABLES = {
     # The file our filters (scores, tags and what is dropped) are kept in;
     # filters.yaml next to the configuration file when not set
     'filters': None,
+    # What 'nr update' does for every group that doesn't say otherwise
+    # ('nr group watch --content'): keep what the small articles say, and
+    # read the NZB files posted; both off unless turned on
+    'content': False,
+    'nzb': False,
+    # Keep the PGP keys found in archived posts, and which posts each key
+    # signed or was encrypted for (see NNTPKeyring); off unless turned on
+    'pgp': False,
+    # Where gpg keeps the secret keys posts are decrypted with (see
+    # NNTPGnuPG); <base_dir>/pgp when not set
+    'pgp_home': None,
+    # How many times 'nr update' tries a post that couldn't be decrypted
+    # again on its own (ie: its passphrase wasn't known yet); 0 leaves it to
+    # 'nr pgp decrypt'
+    'pgp_retries': 1,
 }
 
 # Keyword used in configuration to host all of the defined NNTP Servers
@@ -869,6 +884,70 @@ class NNTPSettings(NNTPDatabase):
 
         return join(
             self.base_dir, 'cache', 'index%s' % SQLITE_DATABASE_EXTENSION)
+
+    def pgp(self):
+        """
+        Returns True if the PGP keys found in archived posts are kept (the
+        pgp setting; see NNTPKeyring)
+        """
+        return parse_bool(self.nntp_processing.get('pgp'), False)
+
+    def content(self):
+        """
+        Returns True if 'nr update' keeps what the small articles of a group
+        say without being asked (the content setting); a group can say
+        otherwise (see 'nr group watch')
+        """
+        return parse_bool(self.nntp_processing.get('content'), False)
+
+    def nzb(self):
+        """
+        Returns True if 'nr update' reads the NZB files posted to a group
+        without being asked (the nzb setting); a group can say otherwise
+        (see 'nr group watch')
+        """
+        return parse_bool(self.nntp_processing.get('nzb'), False)
+
+    def pgp_home(self):
+        """
+        Returns where gpg keeps the secret keys posts are decrypted with
+        (the pgp_home setting, ie: ~/.gnupg to share your own); <base_dir>/pgp
+        when not set
+        """
+        path = self.nntp_processing.get('pgp_home')
+        if isinstance(path, str) and path.strip():
+            return abspath(expanduser(self.apply_mask(path.strip())))
+
+        return join(self.base_dir, 'pgp')
+
+    def pgp_retries(self):
+        """
+        Returns how many times 'nr update' tries a post that couldn't be
+        decrypted again on its own (the pgp_retries setting)
+        """
+        value = self.nntp_processing.get('pgp_retries')
+        try:
+            return max(0, int(value))
+
+        except (TypeError, ValueError):
+            if value is not None:
+                logger.warning(
+                    "pgp_retries: '%s' isn't a number; using %d." % (
+                        value, DEFAULT_PROCESSING_VARIABLES['pgp_retries']))
+
+            return DEFAULT_PROCESSING_VARIABLES['pgp_retries']
+
+    def gpg(self):
+        """
+        Returns the NNTPGnuPG posts are decrypted with; None if the pgp
+        setting is off
+        """
+        if not self.pgp():
+            return None
+
+        from newsreap.NNTPGnuPG import NNTPGnuPG
+        return NNTPGnuPG(self.pgp_home(), passphrases=join(
+            self.base_dir, 'pgp', 'passphrases'))
 
     def filters_file(self):
         """

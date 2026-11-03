@@ -37,6 +37,9 @@ from .objects.index.CollectionMeta import CollectionMeta
 from .objects.index.FileGroup import FileGroup
 from .objects.index.GroupClock import GroupClock
 from .objects.index.NzbImport import NzbImport
+from .objects.index.PGPKey import PGPKey
+from .objects.index.PGPPost import PGPPost
+from .objects.index.PGPWait import PGPWait
 from .objects.index.Segment import Segment
 
 # The ObjectBase which contains all of the data required to

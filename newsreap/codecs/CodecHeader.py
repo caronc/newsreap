@@ -25,13 +25,17 @@ import logging
 from newsreap.Logging import NEWSREAP_CODEC
 logger = logging.getLogger(NEWSREAP_CODEC)
 
-# Check for begin and end
+# A header line ("Name: value"); the value may be empty (ie: a blank
+# Subject)
 HEADER_RE = re.compile(
-    br'^(\s*(?P<key>[a-z0-9-]+)\s*:\s*(?P<value>.*[^\s])\s*'
-    # Sometimes lines start with a tab in the header section
-    br'|\t\s*(?P<extra>.*[^\s])\s*)$',
+    br'^\s*(?P<key>[a-z0-9_.-]+)\s*:\s*(?P<value>.*?)\s*$',
     re.IGNORECASE | re.ASCII,
 )
+
+# A long header can be continued on the lines after it; each of those
+# starts with a space or a tab (ie: '  boundary="abc"' after
+# 'Content-Type: multipart/mixed;')
+FOLDED_RE = re.compile(br'^[ \t]+(?P<extra>\S.*?)\s*$', re.ASCII)
 
 
 class CodecHeader(CodecBase):
@@ -77,35 +81,50 @@ class CodecHeader(CodecBase):
         """
 
         if isinstance(line, str):
-            line = line.encode(self.encoding)
-
-        header_re = HEADER_RE.match(line)
-        if not header_re:
-            return None
+            line = line.encode('utf-8')
 
         if relative and self.header_parsed:
             # Content has already been parsed, we now disable
             # this function
             return None
 
-        _key = header_re.group('key')
-        if _key:
-            _value = header_re.group('value')
-            self.last_key = _key
+        # A line starting with a tab continues the header before it (once
+        # there is one); so does one starting with spaces, unless it reads
+        # like a header of its own
+        header_re = None if line[:1] == b'\t' else HEADER_RE.match(line)
+        folded = FOLDED_RE.match(line) \
+            if self.last_key and not header_re else None
 
-        elif self.last_key:
-            # append our old value
-            _key = self.last_key
-            _value = header_re.group('extra')
-
-        else:
-            # Can't be a header
+        if not (folded or header_re):
+            # Not a header line
             return None
 
+        if folded:
+            # More of the header before it
+            return {
+                'key': self.last_key,
+                'value': self._text(folded.group('extra')),
+                'folded': True,
+            }
+
+        self.last_key = self._text(header_re.group('key'))
         return {
-            'key': _key.decode(self.encoding),
-            'value': _value.decode(self.encoding),
+            'key': self.last_key,
+            'value': self._text(header_re.group('value')),
         }
+
+    def _text(self, value):
+        """
+        Returns a header's bytes as text: UTF-8 when it is, otherwise the
+        server's character set (anything it can't read is replaced, so a
+        broken header never stops us)
+        """
+        try:
+            return value.decode('utf-8')
+
+        except UnicodeDecodeError:
+            # Not UTF-8; most likely the server's own character set
+            return value.decode(self.encoding, 'replace')
 
     def decode(self, stream):
         """ read from the specified stream and process
@@ -185,6 +204,10 @@ class CodecHeader(CodecBase):
             if not header['key'] in self.decoded:
                 self.decoded[header['key']] = header['value']
 
+            elif header.get('folded'):
+                # The rest of a long header
+                self.decoded[header['key']] += ' ' + header['value']
+
             else:
                 # Append our content to the last match
                 self.decoded[header['key']] += ',' + header['value']
@@ -229,6 +252,9 @@ class CodecHeader(CodecBase):
         # Initialize Header Parsed Flag; This is used to ensure
         # the decoding of headers is only performed once
         self.header_parsed = False
+
+        # No header read yet for a line to continue
+        self.last_key = None
 
     def __setitem__(self, key, item):
         """

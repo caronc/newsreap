@@ -114,6 +114,12 @@ class NNTPResponseCode:
     # 482 Authentication rejected
     ACTION_FAILED = (431, 436, 439, 441, 452, 482)
 
+    # An article the server won't let us have (asking again won't help)
+    # 450 Authorization required for this command
+    # 480 Authentication required
+    # 502 Access restriction or permission denied
+    FETCH_DENIED = (450, 480, 502)
+
     # 420 No current article selected
     # 420 No article with that number
     # 421 No next article in this group

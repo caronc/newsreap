@@ -131,11 +131,31 @@
 #   nr show "<message-id@example.com>" other-id@example.com
 #   nr fetch "<message-id@example.com>" --output ~/Downloads
 #
+#   # With 'pgp: yes' under processing in config.yaml, the PGP keys found
+#   # in kept articles are kept too (and which articles each one signed or
+#   # was encrypted for); list them, see who posted what, and pass them on
+#   nr pgp list
+#   nr pgp show "someone@example.com"
+#   nr search --key 11349D4561E2FDA5
+#   nr pgp import friend.asc
+#   nr pgp export 11349D4561E2FDA5 --output friend.asc
+#
+#   # Import your own secret key (needs gpg) and the articles encrypted
+#   # for it are decrypted as they are kept; give its passphrase once, and
+#   # read the ones kept before (or that couldn't be read yet)
+#   nr pgp import my-secret-key.asc
+#   nr pgp passphrase "me@example.com"
+#   nr pgp decrypt
+#
 #   # Newsreap also maintains a watch list which is groups you just always
 #   # intend to index. It can be a conbination of aliases you set up, or
 #   # just a few individual groups. The below adds our 'test' group to
 #   # a watch list.
 #   nr group watch test
+#
+#   # A group can also always keep what its small articles say, or read
+#   # the NZB files posted to it, without --content or --nzb being given
+#   nr group watch test --content --nzb
 #
 #   # We can now fetch (and index) every watched group:
 #   nr -vvv update --watched

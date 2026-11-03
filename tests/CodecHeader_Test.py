@@ -320,3 +320,50 @@ class CodecUU_Header(TestBase):
             # it will become valid again once we clear the key
             del ch_py['X-%s' % k]
             assert ch_py.is_valid() is True
+
+
+def test_long_headers_continued_on_more_lines_are_joined(tmp_path):
+    """
+    A header continued on the lines after it (starting with spaces or a
+    tab) is read whole, and an empty header doesn't end the header
+    """
+    from io import BytesIO
+
+    codec = CodecHeader(work_dir=str(tmp_path))
+    stream = BytesIO(
+        b'Subject:\r\n'
+        b'Content-Type: multipart/mixed;\r\n'
+        b'  boundary="abc"\r\n'
+        b'X-Long: first\r\n'
+        b'\tsecond\r\n'
+        b'From: someone@example.com\r\n'
+        b'\r\n'
+        b'the body\r\n')
+
+    header = codec.decode(stream)
+    assert header['Subject'] == ''
+    assert header['Content-Type'] == 'multipart/mixed; boundary="abc"'
+    assert header['X-Long'] == 'first second'
+    assert header['From'] == 'someone@example.com'
+    assert stream.read() == b'the body\r\n'
+
+    # A header seen twice still joins with a comma
+    codec.reset()
+    header = codec.decode(BytesIO(b'X-A: 1\r\nX-A: 2\r\n\r\n'))
+    assert header['X-A'] == '1,2'
+
+
+def test_headers_in_other_character_sets_are_read(tmp_path):
+    """
+    UTF-8 is read as UTF-8; anything else with the server's character set
+    """
+    from io import BytesIO
+
+    codec = CodecHeader(work_dir=str(tmp_path), encoding='ISO-8859-1')
+    header = codec.decode(BytesIO(
+        'X-A: café\r\n'.encode() + b'X-B: caf\xe9\r\n\r\n'))
+    assert (header['X-A'], header['X-B']) == ('café', 'café')
+
+    codec = CodecHeader(work_dir=str(tmp_path), encoding='utf-8')
+    header = codec.decode(BytesIO(b'X-B: caf\xe9\r\n\r\n'))
+    assert header['X-B'] == 'caf\ufffd'

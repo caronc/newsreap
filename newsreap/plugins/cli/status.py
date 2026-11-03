@@ -43,6 +43,7 @@ from newsreap import __version__
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
 from newsreap.NNTPIndexer import SESSION_KEY
+from newsreap.NNTPKeyring import NNTPKeyring
 from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 from newsreap.Utils import bytes_to_strsize
 from newsreap.objects.group.Article import Article
@@ -257,6 +258,22 @@ def show_setup(ctx):
     except ValueError as e:
         detail('Filters', 'unusable: %s' % e)
 
+    detail('Always (nr update)', '%s (groups can say otherwise; see nr '
+           'group watch)' % ', '.join(
+               name if value else 'no %s' % name for name, value in (
+                   ('content', settings.content()), ('nzb', settings.nzb()))))
+
+    detail('PGP keys', 'kept from archived posts (see nr pgp)'
+           if settings.pgp() else "not kept (set 'pgp: yes' under "
+           "processing to keep them)")
+
+    gpg = settings.gpg()
+    if gpg is not None:
+        detail('Decrypting', 'with %d secret key(s) in %s' % (
+            len(set(gpg.secret_keys().values())), gpg.home)
+            if gpg.available() else
+            "not done (gpg isn't installed)")
+
     heading('Servers')
     for no, server in enumerate(settings.nntp_servers):
         secure = 'TLS, certificate checked' if server.get('secure') and \
@@ -300,9 +317,11 @@ def show_storage(settings, cached):
     detail('Total', bytes_to_strsize(sum(s for s in sizes if s)))
 
 
-def show_index(index):
+def show_index(index, gpg=None, retries=0):
     """
     Shows what the index holds
+    - gpg: the NNTPGnuPG posts are decrypted with (if any)
+    - retries: how many times 'nr update' tries them again on its own
     """
     heading('Collections')
     if index is None:
@@ -348,6 +367,23 @@ def show_index(index):
                count(kinds.get(ArchiveKind.Refused))))
     detail('Scored or tagged', count(
         index.query(func.count(ArticleRank.message_id)).scalar()))
+
+    keys, posts = NNTPKeyring.counts(index)
+    if keys or posts:
+        detail('PGP keys', '%s (%s post(s) tied to a key)' % (
+            count(keys), count(posts)))
+
+    if gpg is not None and gpg.available():
+        secret = gpg.secret_keys()
+        waiting = len(NNTPKeyring.locked(index, secret, final=False))
+        if waiting:
+            # The ones 'nr update' has run out of tries for
+            done = waiting - len(NNTPKeyring.locked(
+                index, secret, final=False, retries=retries))
+            detail('Not decrypted yet', "%s (%s; see 'nr pgp decrypt')" % (
+                count(waiting),
+                '%s no longer tried by nr update' % count(done) if done
+                else 'nr update tries them again'))
 
     read = index.query(func.count(NzbImport.message_id)).scalar() or 0
     unusable = index.query(func.count(NzbImport.message_id))\
@@ -417,7 +453,7 @@ def status(ctx):
         show_groups(settings, session, index_db)
 
         show_aliases(session)
-        show_index(index_db)
+        show_index(index_db, settings.gpg(), settings.pgp_retries())
 
     finally:
         if index is not None:

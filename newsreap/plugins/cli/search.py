@@ -14,9 +14,14 @@
 
 import logging
 import click
+import os
+import shlex
+import subprocess
 import sys
 
 from os import listdir
+from os.path import basename
+from shutil import which
 from os.path import isdir
 from os.path import isfile
 from os.path import dirname
@@ -47,6 +52,7 @@ from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.NNTPArticleRanks import NNTPArticleRanks
 from newsreap.NNTPFilterRule import tags_to_text
 from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
+from newsreap.NNTPKeyring import NNTPKeyring
 from newsreap.NNTPIndexer import COLLECTION_FIELDS
 from newsreap.NNTPIndexer import keyword_terms
 from newsreap.NNTPSearchTerm import SEARCH_ANY
@@ -73,20 +79,108 @@ NEWSREAP_CLI_PLUGINS = {
 }
 
 
-def page(lines):
+def page(lines, pager=True):
     """
     Shows lines of results a screen at a time (as 'less' does) when they
-    go to a terminal, or all of them when they don't (ie: into a file);
-    returns False if there were none
+    go to a terminal, or all of them when they don't (ie: into a file) or
+    `pager` is off; returns False if there were none
     """
     lines = iter(lines)
     first = next(lines, None)
     if first is None:
         return False
 
-    click.echo_via_pager(
-        '%s\n' % line for line in chain([first], lines))
+    command = pager_command() if pager else None
+    if command is None:
+        for line in chain([first], lines):
+            click.echo(line)
+        return True
+
+    run_pager(command, chain([first], lines))
     return True
+
+
+def pager_command():
+    """
+    Returns the pager to show results with (the PAGER setting, or less);
+    None when there is no terminal to page on (ie: written to a file)
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+
+    command = shlex.split(os.environ.get('PAGER', ''))
+    if not command:
+        if os.environ.get('TERM') in ('dumb', 'emacs'):
+            # A terminal that can't page
+            return None
+        command = ['less']
+
+    path = which(command[0])
+    return [path, *command[1:]] if path else None
+
+
+def run_pager(command, lines):
+    """
+    Hands lines to a pager (see pager_command()) and waits for it to be
+    closed.
+
+    less reads your keys from the terminal its error messages go to.  Run
+    through tox, that is a terminal tox keeps to itself (it only shows
+    what is written to it), so the pager gets its errors sent to the
+    terminal you type into instead.
+    """
+    env = dict(os.environ)
+    if basename(command[0]) == 'less' and len(command) == 1 and \
+            not env.get('LESS'):
+        # Keep colours (as click does)
+        env['LESS'] = '-R'
+
+    keyboard = None
+    try:
+        keyboard = os.open(os.ttyname(sys.stdin.fileno()), os.O_RDWR)
+
+    except OSError:
+        # Leave its errors where ours go
+        pass
+
+    try:
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stderr=keyboard, env=env,
+            text=True, errors='replace')
+
+    finally:
+        if keyboard is not None:
+            os.close(keyboard)
+
+    try:
+        for line in lines:
+            process.stdin.write('%s\n' % line)
+
+    except BrokenPipeError:
+        # Closed before everything was shown
+        pass
+
+    except BaseException:
+        # Don't leave it running (and the terminal in a mess)
+        process.terminate()
+        raise
+
+    finally:
+        try:
+            process.stdin.close()
+
+        except BrokenPipeError:
+            pass
+
+        # less catches Ctrl-C for itself (it stops a search); wait until it
+        # is closed
+        while True:
+            try:
+                process.wait()
+                break
+
+            except KeyboardInterrupt:
+                pass
 
 
 def lookup_groups(ctx, groups):
@@ -111,10 +205,12 @@ def lookup_groups(ctx, groups):
     return names
 
 
-def raw_lines(ctx, groups, keywords, rank, terms, case_sensitive):
+def raw_lines(ctx, groups, keywords, rank, terms, case_sensitive,
+              limit=None):
     """
     Searches the article headers 'nr update' cached (the ones not indexed
-    yet, or not let go of yet); yields the lines found
+    yet, or not let go of yet); yields the lines found (at most `limit`
+    articles, across every group)
     """
     # Where the articles' scores and tags are (if anything was ever indexed)
     index = None
@@ -127,7 +223,7 @@ def raw_lines(ctx, groups, keywords, rank, terms, case_sensitive):
     try:
         yield from raw_group_lines(
             ctx, groups, keywords, rank, terms, case_sensitive,
-            index_session)
+            index_session, limit)
 
     finally:
         if index is not None:
@@ -135,11 +231,16 @@ def raw_lines(ctx, groups, keywords, rank, terms, case_sensitive):
 
 
 def raw_group_lines(ctx, groups, keywords, rank, terms, case_sensitive,
-                    index_session):
+                    index_session, limit=None):
     """
     Yields the cached headers of each group that match (see raw_lines())
     """
+    # How many more may be shown
+    left = limit or None
     for name in groups:
+        if left is not None and left <= 0:
+            break
+
         db_file = ctx['NNTPSettings'].group_database(name)
         if not isfile(db_file):
             logger.warning("There is no cached content for '%s'." % name)
@@ -147,81 +248,106 @@ def raw_group_lines(ctx, groups, keywords, rank, terms, case_sensitive,
 
         db = NNTPGroupDatabase.from_file(db_file)
         session = db.session()
-
-        query = session.query(Article)
-        plain, wild = keyword_terms(keywords, case_sensitive)
-        for exclude, column, value in plain:
-            column = getattr(Article, column)
-            found = func.instr(column, value) > 0 if case_sensitive \
-                else column.icontains(value, autoescape=True)
-            query = query.filter(~found if exclude else found)
-
-        # Every condition narrows the results down further
-        for term in [*wild, *terms]:
-            if term.field == 'message_id':
-                # Searched without its < and > (whichever way it was cached)
-                column = func.trim(Article.message_id, '<>')
-
-            else:
-                column = Article.poster if term.field == 'poster' \
-                    else Article.subject
-
-            found = term.condition('sqlite', column)
-            if term.field == 'message_id' and term.exact() is not None:
-                # Looked up directly
-                found = and_(Article.message_id.in_(
-                    [term.exact(), '<%s>' % term.exact()]), found)
-
-            query = query.filter(~found if term.negate else found)
-
-        # When they were posted is narrowed down here; their scores and
-        # tags are kept with the index (see NNTPArticleRanks)
-        query = rank_query(
-            query, literal(0), literal(''),
-            (Article.posted_date, Article.posted_date),
-            after=rank.get('after'), before=rank.get('before'))\
-            .order_by(Article.article_no)
-
-        # The group's name before the first one found
-        heading = '%s:' % name
-        entries = iter(query.yield_per(RAW_PAGE_SIZE))
-        while True:
-            page = list(islice(entries, RAW_PAGE_SIZE))
-            if not page:
-                break
-
-            ranks = NNTPArticleRanks.load(
-                index_session, [entry.message_id for entry in page]) \
-                if index_session is not None else {}
-
-            for entry in page:
-                score, tags = ranks.get(entry.message_id, (0, frozenset()))
-                if not NNTPArticleRanks.matches(
-                        score, tags, tags_wanted=rank.get('tags'),
-                        without_tags=rank.get('without_tags'),
-                        min_score=rank.get('min_score'),
-                        max_score=rank.get('max_score'),
-                        scores=rank.get('scores')):
+        try:
+            for line in raw_group_query(
+                    session, name, keywords, rank, terms, case_sensitive,
+                    index_session):
+                if not line.startswith(' '):
+                    # The group's heading
+                    yield line
                     continue
 
-                if heading:
-                    yield heading
-                    heading = None
+                if left is not None:
+                    if left <= 0:
+                        break
+                    left -= 1
 
-                yield '  [%.5d] %s%s' % (
-                    entry.article_no, entry.subject, rank_text(
-                        SimpleNamespace(
-                            score=score, tags=tags_to_text(tags))))
+                yield line
 
-        session.close()
-        db.close()
+        finally:
+            session.close()
+            db.close()
+
+
+def raw_group_query(session, name, keywords, rank, terms, case_sensitive,
+                    index_session):
+    """
+    Yields the lines of one group's cached headers that match: its heading
+    (the group's name) before the first, then one line per article
+    """
+    query = session.query(Article)
+    plain, wild = keyword_terms(keywords, case_sensitive)
+    for exclude, column, value in plain:
+        column = getattr(Article, column)
+        found = func.instr(column, value) > 0 if case_sensitive \
+            else column.icontains(value, autoescape=True)
+        query = query.filter(~found if exclude else found)
+
+    # Every condition narrows the results down further
+    for term in [*wild, *terms]:
+        if term.field == 'message_id':
+            # Searched without its < and > (whichever way it was cached)
+            column = func.trim(Article.message_id, '<>')
+
+        else:
+            column = Article.poster if term.field == 'poster' \
+                else Article.subject
+
+        found = term.condition('sqlite', column)
+        if term.field == 'message_id' and term.exact() is not None:
+            # Looked up directly
+            found = and_(Article.message_id.in_(
+                [term.exact(), '<%s>' % term.exact()]), found)
+
+        query = query.filter(~found if term.negate else found)
+
+    # When they were posted is narrowed down here; their scores and
+    # tags are kept with the index (see NNTPArticleRanks)
+    query = rank_query(
+        query, literal(0), literal(''),
+        (Article.posted_date, Article.posted_date),
+        after=rank.get('after'), before=rank.get('before'))\
+        .order_by(Article.article_no)
+
+    # The group's name before the first one found
+    heading = '%s:' % name
+    entries = iter(query.yield_per(RAW_PAGE_SIZE))
+    while True:
+        page = list(islice(entries, RAW_PAGE_SIZE))
+        if not page:
+            break
+
+        ranks = NNTPArticleRanks.load(
+            index_session, [entry.message_id for entry in page]) \
+            if index_session is not None else {}
+
+        for entry in page:
+            score, tags = ranks.get(entry.message_id, (0, frozenset()))
+            if not NNTPArticleRanks.matches(
+                    score, tags, tags_wanted=rank.get('tags'),
+                    without_tags=rank.get('without_tags'),
+                    min_score=rank.get('min_score'),
+                    max_score=rank.get('max_score'),
+                    scores=rank.get('scores')):
+                continue
+
+            if heading:
+                yield heading
+                heading = None
+
+            yield '  [%.5d] %s%s' % (
+                entry.article_no, entry.subject, rank_text(
+                    SimpleNamespace(
+                        score=score, tags=tags_to_text(tags))))
 
 
 def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
-               oldest=False, notes=None):
+               oldest=False, notes=None, keys=()):
     """
     Searches the articles 'nr update --content' kept; yields the lines
     found (what to say if there is nothing to search is added to notes)
+    - keys: only the posts tied to one of these PGP keys (key IDs,
+      fingerprints or names)
     """
     archiver = NNTPArchiver(
         ctx['NNTPSettings'].index_database(), default_hooks=False)
@@ -233,10 +359,20 @@ def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
                     "--content' first.")
             return
 
+        key_ids = None
+        if keys:
+            key_ids = set()
+            for key in keys:
+                found = NNTPKeyring.resolve(archiver.session(), key)
+                if not found and notes is not None:
+                    notes.append("No PGP key matches '%s' (see 'nr pgp "
+                                 "list')." % key)
+                key_ids.update(found)
+
         found = archiver.find(
             keywords, groups=groups, limit=limit,
             case_sensitive=case_sensitive, terms=terms, oldest=oldest,
-            **rank)
+            key_ids=key_ids, **rank)
 
         # Their scores and tags (kept with every article's)
         ranks = NNTPArticleRanks.load(
@@ -277,6 +413,10 @@ def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
               help='Show at most this many.')
 @click.option('--oldest-first', '-O', 'oldest', is_flag=True,
               help='Oldest first (instead of newest first).')
+@click.option('--pager/--no-pager', default=True,
+              help='Show the results a screen at a time on a terminal (the '
+                   'default; PAGER picks the pager, less otherwise), or '
+                   'write them all out.')
 @click.option('--collections', is_flag=True,
               help='Search the collections (what is searched unless --posts '
                    'or --raw is given; add it to search them too).')
@@ -286,19 +426,24 @@ def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
 @click.option('--raw', is_flag=True,
               help='Search the cached article headers of the groups given '
                    '(ie: what is not indexed yet).')
+@click.option('--key', '-k', 'keys', multiple=True,
+              help='Only posts signed by, encrypted for or carrying this PGP '
+                   'key (a key ID, fingerprint or part of its name; implies '
+                   '--posts; see nr pgp).')
 @ranked
 @matching
 @click.pass_obj
 def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
-           oldest, collections, posts, raw, rank, terms):
+           oldest, pager, collections, posts, raw, keys, rank, terms):
     """
     Search everything indexed (across every group).
 
     Each keyword must be in a collection's name or one of its file subjects
     (newest first, or oldest first with --oldest-first); with none,
     everything is listed.  On a terminal they are shown a screen at a time
-    (as 'less' does); piped or saved to a file, all of them are written
-    out.  Collections whose articles are still arriving are only shown
+    (as 'less' does: up and down move a row, space and b a page, / finds,
+    q quits); piped or saved to a file (or with --no-pager), all of them
+    are written out.  Collections whose articles are still arriving are only shown
     with --forming.  Case and accents don't matter unless --case-sensitive
     is given; Usenet subjects are rarely written the same way twice.
 
@@ -339,7 +484,7 @@ def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
     """
     # What is searched (collections unless told otherwise)
     kinds = [kind for kind, wanted in (
-        ('collections', collections), ('posts', posts), ('raw', raw))
+        ('collections', collections), ('posts', posts or keys), ('raw', raw))
         if wanted] or ['collections']
 
     # What each kind of search can look at
@@ -384,14 +529,21 @@ def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
     if 'posts' in kinds:
         sections.append(('Posts', post_lines(
             ctx, keywords, set(names) if names else None, limit, rank,
-            terms, not ignore_case, oldest=oldest, notes=notes)))
+            terms, not ignore_case, oldest=oldest, notes=notes,
+            keys=keys)))
 
     if 'raw' in kinds:
         sections.append(('Cached headers', raw_lines(
-            ctx, names, keywords, rank, terms, not ignore_case)))
+            ctx, names, keywords, rank, terms, not ignore_case,
+            limit=limit)))
 
     def lines():
         for title, found in sections:
+            if limit and title != 'Cached headers':
+                # At most this many of each kind (reading stops there; the
+                # cached headers count their own, leaving out headings)
+                found = islice(found, limit)
+
             first = next(found, None)
             if first is None:
                 continue
@@ -404,7 +556,7 @@ def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
             yield from found
 
     try:
-        if not page(lines()):
+        if not page(lines(), pager=pager):
             click.echo('Nothing found.')
             for note in notes:
                 click.echo(note)

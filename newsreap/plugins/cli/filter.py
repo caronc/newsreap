@@ -66,8 +66,8 @@ NEWSREAP_CLI_PLUGINS = {
 
 
 # The options conditions() adds (besides the find style ones)
-CONDITION_OPTIONS = ('after', 'before', 'larger', 'smaller', 'tagged',
-                     'match_any', 'groups', 'name')
+CONDITION_OPTIONS = ('after', 'before', 'larger', 'smaller', 'crossposts',
+                     'tagged', 'match_any', 'groups', 'name')
 
 
 def conditions(command):
@@ -76,7 +76,8 @@ def conditions(command):
     same find style options 'nr search' takes (--subject, --isubject,
     --regex-subject, --iregex-subject, and the same for --poster, --body,
     --filename and --message-id; ! in front leaves out), plus posting
-    time, size, tags, groups and the rule's name.  The command is given
+    time, size, how many groups it was posted to, tags, groups and the
+    rule's name.  The command is given
     them as `conditions` (a dict).
     """
     def wrapper(*args, terms, **kwargs):
@@ -98,6 +99,11 @@ def conditions(command):
                      help='Only articles bigger than this (ie: 10MB).'),
         click.option('--smaller', default=None,
                      help='Only articles smaller than this (ie: 1KB).'),
+        click.option('--crossposts', default=None, metavar='COUNT',
+                     help="Only articles posted to this many groups: a "
+                          "number, or comparisons (ie: '>5', '>=2, <10').  "
+                          "Known from the cached headers (not for posts "
+                          "kept or collections)."),
         click.option('--tagged', multiple=True,
                      help="Only what has this tag; !tag for what doesn't.  "
                           "Give it more than once for any of them, or as "
@@ -150,6 +156,7 @@ def make_rule(ctx, action, conditions, score=None, tags=()):
         'after': conditions['after'],
         'before': conditions['before'],
         'tagged': list(conditions['tagged']) or None,
+        'crossposts': conditions['crossposts'],
     })
 
     larger, smaller = conditions['larger'], conditions['smaller']
@@ -358,10 +365,14 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
         nr filter purge --iposter '*@spam.example' --dry-run
         nr filter purge --isubject '*casino*' --isubject '!*review*'
         nr filter purge --ibody '*buy now*' --tagged '!trusted' --save
+        nr filter purge --score '<-50' --dry-run
 
     What matches is removed from the header caches, the index and the
     archive; try it with --dry-run first, then add --save to keep dropping
-    the same things when new articles arrive.  Bodies are only known for
+    the same things when new articles arrive.  A saved rule on the score or
+    tags (--score, --tagged) is only used by purges, since new articles are
+    scored after the header rules have had their say; run this again to
+    clear out what scores low.  Bodies are only known for
     archived posts (and file names for indexed and archived ones), so
     those conditions only reach them.  Without conditions, every saved rule
     (filters.yaml) is applied again, and scores and tags are worked out

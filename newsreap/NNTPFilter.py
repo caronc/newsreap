@@ -31,10 +31,16 @@ and rank what is kept (scores and tags).  They live in a YAML file
 
 Every article starts with a score of 0 and no tags.  For each article:
 
-1. every score rule that matches adds its score and tags (in the order
+1. if a keep rule matches, it is kept (none of the drop rules run)
+2. otherwise the first drop rule to match removes it, as though it was
+   never there: nothing is scored, stored or indexed
+3. every score rule that matches adds its score and tags (in the order
    they are listed, so a later rule can look at the score so far)
-2. if a keep rule matches, it is kept
-3. otherwise the first drop rule that matches removes it
+
+Only what the header says (subject, poster, time, size, crossposts...)
+decides steps 1 and 2.  Keep and drop rules that look at the score or
+tags are only used by purges ('nr filter purge'; try --dry-run first),
+after the scores are worked out.
 
 See NNTPFilterRule for what a rule can look at.  The rules are read once
 (when NewsReap starts working) and checked in memory.
@@ -72,11 +78,14 @@ FILTERS_KEY = 'filters'
 FILTERS_HEADER = """\
 # NewsReap filters (see 'nr filter --help')
 #
-# Every article starts with a score of 0.  Score rules (score: and/or tag:)
-# all add up; then a keep rule (action: keep) protects an article, or the
-# first drop rule (action: drop) to match removes it.  Anything a rule
-# doesn't name isn't checked.  Case and accents don't matter unless
-# case_sensitive: true is set.
+# A keep rule (action: keep) protects an article from every drop rule.
+# Otherwise the first drop rule (action: drop) to match removes it before
+# anything else is done, as though it was never there.  The rest start with
+# a score of 0 and every score rule (score: and/or tag:) that matches adds
+# up.  Keep and drop rules that compare the score or tags (ie: score:
+# '<-50') are only used by 'nr filter purge' (try --dry-run first).
+# Anything a rule doesn't name isn't checked.  Case and accents don't
+# matter unless case_sensitive: true is set.
 #
 #  - name: recovery
 #    subject: { regex: '\\.par2\\b' }
@@ -87,6 +96,10 @@ FILTERS_HEADER = """\
 #    groups: [alt.binaries.*]
 #    poster: "@spam.example"
 #    after: 2026-01-01
+#    action: drop
+#
+#  - name: crossposted
+#    crossposts: '>5'                  # posted to more than 5 groups
 #    action: drop
 #
 # score: is a number to add (10, -50), comparisons to match on ('<-50',
@@ -303,6 +316,18 @@ class _Plan:
         self.drop = _Phase([r for r in rules
                             if r.action == FilterAction.Drop])
 
+        # The keep and drop rules that only look at the header run before
+        # any scoring (a dropped article is never scored); the ones on the
+        # score or tags are only used by purges
+        self.keep_header = _Phase([
+            rule for _, rule in self.keep.rules if not rule.ranked])
+        self.keep_ranked = _Phase([
+            rule for _, rule in self.keep.rules if rule.ranked])
+        self.drop_header = _Phase([
+            rule for _, rule in self.drop.rules if not rule.ranked])
+        self.drop_ranked = _Phase([
+            rule for _, rule in self.drop.rules if rule.ranked])
+
 
 class NNTPFilter(NNTPFilterBase):
     """
@@ -497,7 +522,8 @@ class NNTPFilter(NNTPFilterBase):
 
     def check(self, groups, subject='', poster='', message_id='',
               posted=None, size=None, score=0, tags=(), rescore=True,
-              body=None, filenames=None):
+              body=None, filenames=None, crossposts=None, drop=True,
+              by_score=False):
         """
         Returns what our rules make of an item (see FilterVerdict)
 
@@ -509,15 +535,27 @@ class NNTPFilter(NNTPFilterBase):
           the ones given are kept and only the keep and drop rules run
         - body / filenames: its text and the names of the files it holds,
           when known (rules on them never match otherwise)
+        - crossposts: how many groups it was posted to (see
+          NNTPFilterRule.count_groups()); None when we don't know
+        - drop: run the drop rules (without them, only its score and tags
+          are worked out)
+        - by_score: also run the keep and drop rules that look at the
+          score or tags (purges do; scanning doesn't)
+
+        An item a header rule drops isn't scored: its verdict keeps the
+        score and tags given (0 and none when rescoring).
         """
         item = FilterItem(
             subject=subject, poster=poster, message_id=message_id,
-            posted=posted, size=size, body=body, filenames=filenames)
+            posted=posted, size=size, body=body, filenames=filenames,
+            crossposts=crossposts)
 
         return self.check_item(
-            groups, item, score=score, tags=tags, rescore=rescore)
+            groups, item, score=score, tags=tags, rescore=rescore, drop=drop,
+            by_score=by_score)
 
-    def check_item(self, groups, item, score=0, tags=(), rescore=True):
+    def check_item(self, groups, item, score=0, tags=(), rescore=True,
+                   drop=True, by_score=False):
         """
         Same as check(), with a FilterItem already prepared
         """
@@ -526,6 +564,23 @@ class NNTPFilter(NNTPFilterBase):
         if rescore:
             score = 0
             tags = set()
+
+        kept = False
+        if drop:
+            # What the header says decides first (nothing else is done to
+            # an article that is dropped)
+            for _, rule in plan.keep_header.candidates(item):
+                if rule.matches(item):
+                    # Protected from every drop rule
+                    kept = True
+                    break
+
+            else:
+                for _, rule in plan.drop_header.candidates(item):
+                    if rule.matches(item):
+                        return FilterVerdict(score, frozenset(tags), rule)
+
+        if rescore:
             for _, rule in plan.score.candidates(item):
                 if rule.matches(item, score, tags):
                     if rule.score is not None:
@@ -534,14 +589,15 @@ class NNTPFilter(NNTPFilterBase):
 
         tags = frozenset(tags)
 
-        for _, rule in plan.keep.candidates(item):
-            if rule.matches(item, score, tags):
-                # Protected from every drop rule
-                return FilterVerdict(score, tags, None)
+        if drop and by_score and not kept:
+            # The rules on its score and tags (only purges use them)
+            for _, rule in plan.keep_ranked.candidates(item):
+                if rule.matches(item, score, tags):
+                    return FilterVerdict(score, tags, None)
 
-        for _, rule in plan.drop.candidates(item):
-            if rule.matches(item, score, tags):
-                return FilterVerdict(score, tags, rule)
+            for _, rule in plan.drop_ranked.candidates(item):
+                if rule.matches(item, score, tags):
+                    return FilterVerdict(score, tags, rule)
 
         return FilterVerdict(score, tags, None)
 
@@ -663,9 +719,12 @@ class NNTPFilter(NNTPFilterBase):
         """
         Returns the score our rules give an article
         """
+        groups = self._legacy_groups(group, xgroups)
         return self.check(
-            self._legacy_groups(group, xgroups), subject=subject, poster=poster,
-            message_id=kwargs.get('id', ''), posted=date, size=size).score
+            groups, subject=subject, poster=poster,
+            message_id=kwargs.get('id', ''), posted=date, size=size,
+            crossposts=NNTPFilterRule.count_groups(groups),
+            drop=False).score
 
     def whitelist(self, group, poster, date, subject, size, lines, xgroups,
                   *args, **kwargs):
@@ -675,7 +734,8 @@ class NNTPFilter(NNTPFilterBase):
         groups = self._legacy_groups(group, xgroups)
         item = FilterItem(
             subject=subject, poster=poster, message_id=kwargs.get('id', ''),
-            posted=date, size=size)
+            posted=date, size=size,
+            crossposts=NNTPFilterRule.count_groups(groups))
 
         score = kwargs.get('score', 0)
         for _, rule in self.plan(groups).keep.candidates(item):
@@ -692,7 +752,8 @@ class NNTPFilter(NNTPFilterBase):
         groups = self._legacy_groups(group, xgroups)
         item = FilterItem(
             subject=subject, poster=poster, message_id=kwargs.get('id', ''),
-            posted=date, size=size)
+            posted=date, size=size,
+            crossposts=NNTPFilterRule.count_groups(groups))
 
         score = kwargs.get('score', 0)
         for _, rule in self.plan(groups).drop.candidates(item):

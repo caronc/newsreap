@@ -134,6 +134,29 @@ def test_batches_split_ranges():
         (1, 100), (101, 200), (201, 250), (300, 300)]
 
 
+def test_dropped_articles_are_never_stored():
+    """
+    An article a drop rule matches (ie: posted to too many groups) isn't
+    handed on to be stored or scored
+    """
+    from newsreap.NNTPFilter import NNTPFilter
+    scanner = NNTPGroupScanner(
+        None, GROUP, db_file='', server='test',
+        filters=NNTPFilter(rules=[{'crossposts': '>2'}]))
+
+    def header(message_id, *groups):
+        return {'id': message_id, 'article_no': 1, 'subject': 'test',
+                'poster': 'me@example.com', 'size': 10, 'lines': 1,
+                'date': POSTED, 'xgroups': {GROUP, *groups}}
+
+    rows = scanner._rows([
+        header('one@x'), header('two@x', 'alt.b.two'),
+        header('spam@x', 'alt.b.two', 'alt.b.three')])
+    assert [row['message_id'] for row in rows] == ['one@x', 'two@x']
+    assert scanner.dropped == 1
+    assert 'spam@x' not in scanner._ranks
+
+
 def test_scanned_ranges_merge(usenet):
     """
     Ranges that touch or overlap become one; other servers are kept apart

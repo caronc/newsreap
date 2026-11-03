@@ -27,6 +27,8 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
 
 from newsreap.objects.nntp.Common import get_groups
+from newsreap.objects.nntp.Common import get_group_options
+from newsreap.objects.nntp.Common import set_group_options
 
 # Logging
 import logging
@@ -46,14 +48,53 @@ NEWSREAP_CLI_PLUGINS = {
 # Define our functions below
 # all functions are prefixed with what is identified
 # above or they are simply ignored.
+def describe_options(options):
+    """
+    Returns what a group's options say (ie: 'content, no nzb'); empty when
+    it follows the configuration file
+    """
+    return ', '.join(
+        name if options[name] else 'no %s' % name
+        for name in ('content', 'nzb')
+        if options and options.get(name) is not None)
+
+
 @click.command(name='watch')
 @click.argument('groups', nargs=-1)
+@click.option('--content/--no-content', default=None,
+              help="Always keep what its small articles say when 'nr "
+                   "update' runs (as --content does); --no-content never "
+                   "does.")
+@click.option('--nzb/--no-nzb', default=None,
+              help="Always read the NZB files posted to it when 'nr update' "
+                   "runs (as --nzb does); --no-nzb never does.")
+@click.option('--default', 'defaults', is_flag=True,
+              help='Go back to the content and nzb settings under '
+                   'processing: in the configuration file.')
 @click.pass_obj
-def group_watch(ctx, groups):
+def group_watch(ctx, groups, content, nzb, defaults):
     """
     Adds a group to a watch list.
 
+    'nr update --watched' fetches what is new in every watched group.  A
+    group can also be told what else 'nr update' does for it, so it never
+    has to be asked for:
+
+    \b
+        nr group watch alt.discuss.coffee --content
+        nr group watch a.b.test --nzb --no-content
+
+    Without them, a group follows the content and nzb settings under
+    processing: in the configuration file (both off unless set).  The
+    options of 'nr update' (ie: --no-content) still win for one run.
+
     """
+    if defaults and (content is not None or nzb is not None):
+        logger.error(
+            '--default puts the options back; leave out --content and '
+            '--nzb (or --default).')
+        exit(1)
+
     session = ctx['NNTPSettings'].session()
     if not session:
         logger.error("The database is not correctly configured.")
@@ -84,9 +125,24 @@ def group_watch(ctx, groups):
             logger.info("Added the group '%s' to the watchlist." % name)
             pending_commits += 1
 
+    options = {'content': None, 'nzb': None} if defaults else {
+        name: value for name, value in (('content', content), ('nzb', nzb))
+        if value is not None}
+
+    if options:
+        pending_commits += set_group_options(
+            session, groups.values(), **options)
+
     if pending_commits > 0:
         # commit our results
         session.commit()
+
+    if options:
+        found = get_group_options(session, groups.values())
+        for name, _id in groups.items():
+            click.echo('%s: %s' % (
+                name, describe_options(found.get(_id)) or
+                'as the configuration file says'))
 
     return
 
@@ -181,12 +237,18 @@ def group_list(ctx, all):
             pass
 
         if results is not None:
+            # What 'nr update' does for each of them on its own
+            options = get_group_options(
+                session, [r.id for r in results]) if not all else {}
+
             # Display result fetched from the database
             for r in results:
-                print(('%-65s %10s %s' % (
+                extra = describe_options(options.get(r.id))
+                print(('%-65s %10s %s%s' % (
                     r.name,
                     r.count,
                     r.flags,
+                    ' (%s)' % extra if extra else '',
                 )))
             return
 
