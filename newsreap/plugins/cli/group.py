@@ -27,6 +27,7 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
 
 from newsreap.objects.nntp.Common import get_groups
+from newsreap.objects.nntp.Common import missing_groups
 from newsreap.objects.nntp.Common import get_group_options
 from newsreap.objects.nntp.Common import set_group_options
 
@@ -102,6 +103,13 @@ def group_watch(ctx, groups, content, nzb, defaults):
 
     # Track our database updates
     pending_commits = 0
+
+    # A name that matches nothing is most likely a typo; nothing is watched
+    missing = missing_groups(session, groups)
+    if missing:
+        logger.error('No group or alias is called %s; nothing was added.' %
+                     ', '.join("'%s'" % name for name in missing))
+        exit(1)
 
     groups = get_groups(session, groups)
     if not groups:
@@ -193,18 +201,16 @@ def group_unwatch(ctx, groups):
     return
 
 
-@click.command(name='list')
+@click.command(name='ls')
 @click.option('--all', '-a', is_flag=True, help='Include all.')
 @click.pass_obj
 def group_list(ctx, all):
     """
-    List all groups.
+    List the watched groups (every group the servers carry with --all).
 
-    If more then one name is specified, then content is filtered based on what
-    is typed.
-
-    If content is already cached in a database; that is used. Otherwise the
-    first available news server is polled for the information.
+    The groups come from the database, so run 'nr update groups' first to
+    learn them (and again now and then to keep them current).  With --all
+    and nothing set up yet, the first server is asked instead.
     """
     # PEP8 E712 does not allow us to make a comparison to a boolean value
     # using the == instead of the keyword 'in'.  However SQLAlchemy

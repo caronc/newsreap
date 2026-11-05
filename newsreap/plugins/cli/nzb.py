@@ -14,7 +14,7 @@
 
 # Lists the collections 'nr update index' found, saves them as NZB files and
 # adds NZB files to the index:
-#   nr nzb list [keywords] [--group <group|alias>]
+#   nr nzb ls [keywords] [--group <group|alias>]
 #   nr nzb save <id|gid> [<id|gid> ...] [--output <file or directory>]
 #   nr nzb import <nzb file> [<nzb file> ...] [--merge]
 #
@@ -89,7 +89,7 @@ def open_index(ctx):
     return NNTPIndexer(ctx['NNTPSettings'].index_database())
 
 
-@click.command(name='list')
+@click.command(name='ls')
 @click.argument('keywords', nargs=-1)
 @click.option('--group', '-g', 'groups', multiple=True,
               help='Only collections found in this group or alias (can be '
@@ -116,7 +116,7 @@ def nzb_list(ctx, keywords, groups, complete, forming, limit,
     subjects (case doesn't matter unless --case-sensitive is given); put a
     dash in front of a keyword to leave out the ones that have it:
 
-        nr nzb list holiday --group photos -- -2019
+        nr nzb ls holiday --group photos -- -2019
 
     See 'nr search' for more ways to search.
 
@@ -159,7 +159,7 @@ def nzb_save(ctx, ids, output, force):
     """
     Save collections as NZB files.
 
-    Use the ids 'nr nzb list' shows (or a collection's GID).
+    Use the ids 'nr nzb ls' shows (or a collection's GID).
 
     """
     if output and len(set(ids)) > 1 and not isdir(output):

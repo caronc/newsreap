@@ -28,6 +28,29 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 
 def get_groups(session, lookup=None, watched=False):
     """
+    See _get_groups(); None (with an error saying why) when the database
+    isn't set up yet
+    """
+    try:
+        return _get_groups(session, lookup=lookup, watched=watched)
+
+    except (OperationalError, ProgrammingError):
+        session.rollback()
+        logger.error("The database isn't set up yet; run 'nr db init' first.")
+        return None
+
+
+def missing_groups(session, lookups):
+    """
+    Returns the names given (groups or aliases) that match no group, in
+    the order given (each is warned about by get_groups())
+    """
+    return [name for name in lookups
+            if str(name).strip() and not get_groups(session, name)]
+
+
+def _get_groups(session, lookup=None, watched=False):
+    """
     Returns a dictionary of groups indexed by their names and their value
     set to the database key in the Group table.
 

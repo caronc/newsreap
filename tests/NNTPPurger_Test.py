@@ -567,8 +567,9 @@ def test_filters_from_the_command_line(tmp_path):
         index_db = str(tmp_path / 'index.db')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, '-y', *args],
+                                 obj={}, **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
@@ -576,9 +577,17 @@ def test_filters_from_the_command_line(tmp_path):
         assert nr('update', 'index', GROUP).exit_code == 0
         assert len(headers(db_file, index_db)) == 4
 
+        # Without -y you are asked, and no removes nothing
+        result = runner.invoke(cli, [
+            '--config', config, 'filter', 'purge', '--iposter',
+            '*@spam.example>'], obj={}, input='n\n')
+        assert 'Nothing was removed.' in result.output
+        assert len(headers(db_file, index_db)) == 4
+
         # Nothing is saved yet
         assert 'There are no saved rules' in nr('filter', 'list').output
-        assert 'There are no saved rules' in nr('filter', 'purge').output
+        assert 'There are no saved rules' in nr(
+            'filter', 'purge', '--saved').output
 
         # A score needs a score or tag, and something to match on
         assert nr('filter', 'score', '--isubject', 'x').exit_code == 1
@@ -770,7 +779,7 @@ def test_filters_from_the_command_line(tmp_path):
         assert 'good.part1.rar' not in result.output
 
         # Each search only takes what it can look at
-        for command in (('search', '--ibody', 'x'),
+        for command in (('search', '--collections', '--ibody', 'x'),
                         ('search', '--raw', '-g', GROUP, '--ifilename', 'x'),
                         ('nzb', 'list', '--body', 'x'),
                         ('search', '--iregex-subject', '(')):
@@ -793,8 +802,16 @@ def test_filters_from_the_command_line(tmp_path):
         assert 'index: 0 file(s) dropped, 0 collection(s) removed, ' \
             '0 rescored' in result.output
 
-        # Applying the saved rules again finds nothing more to drop
+        # Without conditions or --saved, nothing is purged (only help)
         result = nr('filter', 'purge')
+        assert result.exit_code == 1
+        assert 'Usage:' in result.output
+        assert 'index:' not in result.output
+        assert nr('filter', 'purge', '--saved', '--iposter', 'x').exit_code \
+            == 1
+
+        # Applying the saved rules again finds nothing more to drop
+        result = nr('filter', 'purge', '--saved')
         assert result.exit_code == 0, result.output
         assert 'index: 0 file(s) dropped, 0 collection(s) removed' \
             in result.output
@@ -839,7 +856,7 @@ def test_broken_rules_are_left_out_and_broken_files_stop(tmp_path):
         for command in (('update', GROUP),
                         ('update', 'index', GROUP),
                         ('update', 'archive', GROUP),
-                        ('filter', 'purge'),
+                        ('filter', 'purge', '--saved'),
                         ('filter', 'list')):
             result = nr(*command)
             assert result.exit_code == 1, command

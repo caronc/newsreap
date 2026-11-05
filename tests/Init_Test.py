@@ -359,3 +359,54 @@ def test_version_is_shown(option):
     assert result.exit_code == 0
     assert result.output.startswith('NewsReap v%s\n' % __version__)
     assert 'GPLv3' in result.output
+
+
+def test_init_names_the_download_directory(tmp_path, monkeypatch):
+    """
+    The configuration written names the Downloads directory found (so it
+    is easy to see and change), and it is the one used
+    """
+    downloads = tmp_path / 'My Downloads'
+    (tmp_path / 'xdg').mkdir()
+    (tmp_path / 'xdg' / 'user-dirs.dirs').write_text(
+        'XDG_DOWNLOAD_DIR="%s"\n' % downloads)
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+
+    path = create_config(str(tmp_path / 'usenet' / 'config.yaml'))
+    with open(path) as fp:
+        assert "   download_dir: '%s'\n" % downloads in fp.read()
+
+    settings = NNTPSettings(cfg_file=path)
+    assert settings.download_dir() == str(downloads)
+    settings.close()
+
+
+def test_the_shipped_template_is_a_working_configuration():
+    """
+    The template 'nr --init' copies is valid YAML on its own (someone may
+    copy it by hand), and both lines it fills in are there to find
+    """
+    import yaml
+    from newsreap.NNTPSettings import CONFIG_TEMPLATE
+    from newsreap.NNTPSettings import TEMPLATE_BASE_DIR
+    from newsreap.NNTPSettings import TEMPLATE_DOWNLOAD_DIR
+
+    with open(CONFIG_TEMPLATE) as fp:
+        content = fp.read()
+
+    assert isinstance(yaml.safe_load(content), dict)
+    assert content.count(TEMPLATE_BASE_DIR) == 1
+    assert content.count(TEMPLATE_DOWNLOAD_DIR) == 1
+
+
+def test_masks_can_be_written_in_any_case(tmp_path):
+    """
+    %{CACHE_DIR} is the same as %{cache_dir}
+    """
+    settings = NNTPSettings(cfg_file=create_config(
+        str(tmp_path / 'usenet' / 'config.yaml')))
+    assert settings.apply_mask('%{CACHE_DIR}/x') == \
+        settings.apply_mask('%{cache_dir}/x') == \
+        os.path.join(settings.cache_dir, 'x')
+    assert settings.apply_mask('%{Mine}', mask_map={'%{mine}': 'it'}) == 'it'
+    settings.close()

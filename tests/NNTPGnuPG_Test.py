@@ -624,3 +624,45 @@ def test_still_encrypted_files_are_noted(index_engine, gpg):
             .filter(ArchiveFile.message_id == 'reader@x')] == [
         ('pgp', 'application/pgp-encrypted')]
     archiver.close()
+
+
+def test_programs_are_started_without_forking_us(tmp_path, monkeypatch):
+    """
+    gpg (and every other program) is started without a copy of our own
+    process being made first: in such a copy our other connections could
+    run for a moment and send their commands again on the sockets they
+    share with us (mixing one article's reply into the next)
+    """
+    import gevent.os
+    import gevent.subprocess
+    import os
+    from newsreap.SubProcess import SubProcess
+    from newsreap.Utils import start_program
+    from newsreap.Utils import wait_program
+
+    def forked(*args, **kwargs):
+        raise AssertionError('our process was forked to start a program')
+
+    for module, name in ((os, 'fork'), (gevent.os, 'fork'),
+                         (gevent.os, 'fork_and_watch'),
+                         (gevent.os, 'fork_gevent'),
+                         (gevent.subprocess, 'fork_and_watch')):
+        monkeypatch.setattr(module, name, forked)
+
+    gpg = NNTPGnuPG(str(tmp_path / 'gpg'))
+    assert gpg.import_keys(sample('reader-secret.asc')) == [
+        READER_FINGERPRINT]
+    assert READER_KEY_ID in gpg.secret_keys(refresh=True)
+
+    assert wait_program(start_program(['true'])) == 0
+    with pytest.raises(FileNotFoundError):
+        start_program(['newsreap-no-such-program'])
+
+    process = SubProcess(['true'])
+    process.start()
+    process.join()
+    assert process.successful()
+
+    # (the test's own clean up may fork)
+    monkeypatch.undo()
+    stop_agent(tmp_path / 'gpg')

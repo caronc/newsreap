@@ -44,6 +44,11 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 # Default Binding Address
 DEFAULT_BIND_ADDR = '0.0.0.0'
 
+# How long connect() keeps trying (seconds) when it isn't given a timeout;
+# a server that is down is given up on after this (and retried, if at all,
+# by whoever asked)
+DEFAULT_CONNECT_TIMEOUT = 30.0
+
 # Number of seconds to wait for a connection to expire/timeout
 # or fail to connect before failing out right
 socket.setdefaulttimeout(10.0)
@@ -440,9 +445,10 @@ class SocketBase:
             self.port,
         ))
 
-        if timeout:
-            socket.setdefaulttimeout(timeout)
-            logger.debug("Socket timeout set to :%ds" % (timeout))
+        # How long we keep trying; only our own socket waits this long (the
+        # default for every other socket is left alone)
+        timeout = timeout or DEFAULT_CONNECT_TIMEOUT
+        logger.debug("Socket timeout set to :%ds" % (timeout))
 
         # Get reference time
         cur_time = datetime.now()
@@ -470,6 +476,7 @@ class SocketBase:
                     # Keep alive flag
                     self.socket.setsockopt(
                         socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    self.socket.settimeout(timeout)
 
                     try:
                         self.socket.connect(address)

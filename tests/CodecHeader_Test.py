@@ -63,11 +63,20 @@ class CodecUU_Header(TestBase):
             'value': 'Entry',
         }
 
-        # some spaces are allowed
-        assert ch.detect(' AnotHER-Valid-HeaDER  : EnTRy') == {
+        # some spaces are allowed (before any header is read)
+        assert CodecHeader().detect(' AnotHER-Valid-HeaDER  : EnTRy') == {
             'key': 'AnotHER-Valid-HeaDER',
             'value': 'EnTRy',
         }
+
+        # After a header, a line starting with a space continues it, even
+        # when it holds a colon (RFC 5322 folding)
+        ch = CodecHeader()
+        assert ch.detect('Xref: news.example.com')['key'] == 'Xref'
+        assert ch.detect(' alt.binaries.test:123') == {
+            'key': 'Xref', 'value': 'alt.binaries.test:123', 'folded': True}
+        assert ch.detect('Subject: Re:')['key'] == 'Subject'
+        assert ch.detect(' Re: hello')['folded'] is True
 
 
     def test_decoding_01(self):

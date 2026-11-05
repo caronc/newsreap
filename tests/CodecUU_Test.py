@@ -54,13 +54,13 @@ class CodecUU_Test(TestBase):
             "=ybegin line=1024 size=12345",
         ) is None
 
-        yenc_meta = ud.detect(
-            "begin BDP FILENAME",
-        )
-        # The BDP (Bad Permission) assumes to be part of the filename
-        assert len(yenc_meta) == 2
-        assert yenc_meta['key'] == 'begin'
-        assert yenc_meta['name'] == 'BDP FILENAME'
+        # A begin line needs its file mode; without one it is just text
+        # (ie: a sentence that starts with 'Begin')
+        assert ud.detect("begin BDP FILENAME") is None
+        assert ud.detect("Begin the upload tomorrow, folks") is None
+
+        # Either case is the same keyword
+        assert ud.detect("BEGIN 644 FILENAME")['key'] == 'begin'
 
     def test_uu_headers(self):
         """

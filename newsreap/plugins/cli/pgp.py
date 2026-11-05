@@ -15,11 +15,11 @@
 # The PGP keys found in archived posts (turn it on with 'pgp: yes' under
 # processing in config.yaml; 'nr update <group> --content' then keeps
 # them):
-#   nr pgp list [<name|key id>]
+#   nr pgp ls [<name|key id>]
 #   nr pgp show <name|key id|fingerprint> [...]
 #   nr pgp import <file> [...]
 #   nr pgp export <name|key id|fingerprint> [...]
-#   nr pgp forget <key id|fingerprint> [...]
+#   nr pgp rm <key id|fingerprint> [...]
 #
 # Posts encrypted for you are decrypted as they are kept once your secret
 # key is imported (gpg does the work):
@@ -190,7 +190,7 @@ def keys_named(session, names):
     return list(found.values())
 
 
-@click.command(name='list')
+@click.command(name='ls')
 @click.argument('name', required=False)
 @click.pass_obj
 def pgp_list(ctx, name):
@@ -447,14 +447,18 @@ def pgp_export(ctx, names, output):
         for key in keys:
             output.write(key.armored or '')
 
+        # Every name has to find a key (each one that didn't was said)
+        missing = [name for name in names
+                   if not NNTPKeyring.find(session, name)]
+
     finally:
         db.close()
 
-    if not keys:
+    if not keys or missing:
         exit(1)
 
 
-@click.command(name='forget')
+@click.command(name='rm')
 @click.argument('names', nargs=-1, required=True)
 @click.pass_obj
 def pgp_forget(ctx, names):
@@ -513,7 +517,7 @@ def pgp_passphrase(ctx, name, forget):
     Keep the passphrase of one of your secret keys.
 
     Name the key by its key ID, its fingerprint or part of a name or email
-    address (see 'nr pgp list').  The passphrase is asked for (it isn't
+    address (see 'nr pgp ls').  The passphrase is asked for (it isn't
     shown), checked against the key, and kept in a file only you can read,
     so posts encrypted for the key are decrypted without asking.
 

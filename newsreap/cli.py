@@ -38,7 +38,7 @@
 #   nr update groups
 #
 #   # You can list them all now by typing:
-#   nr group list --all
+#   nr group ls --all
 #
 #   # Aliases allow you to simplify group reference so you don't have to type
 #   # the whole name out each time. The below creates an alias called
@@ -46,7 +46,7 @@
 #   nr alias add test alt.binaries.test
 #
 #   # You can list the aliases and what they're associated with by typing
-#   nr alias list
+#   nr alias ls
 #
 #   # You can also associate more then one group with the same alias
 #   nr alias add test alt.binaries.testing alt.binaries.test.files
@@ -103,8 +103,8 @@
 #   # List the collections (newest first, filtered by keywords and
 #   # optionally by group or alias) and save any of them as an NZB file
 #   # using the id shown on the left (or its GID)
-#   nr nzb list holiday -- -2019
-#   nr nzb list --group test --complete
+#   nr nzb ls holiday -- -2019
+#   nr nzb ls --group test --complete
 #   nr nzb save 42 --output ~/Downloads
 #
 #   # Add NZB files you were given to the index (the only way to put
@@ -134,7 +134,7 @@
 #   # With 'pgp: yes' under processing in config.yaml, the PGP keys found
 #   # in kept articles are kept too (and which articles each one signed or
 #   # was encrypted for); list them, see who posted what, and pass them on
-#   nr pgp list
+#   nr pgp ls
 #   nr pgp show "someone@example.com"
 #   nr search --key 11349D4561E2FDA5
 #   nr pgp import friend.asc
@@ -186,7 +186,22 @@
 #
 #   # Search the cached article headers instead (ie: what isn't indexed
 #   # yet); the below only shows articles that scored 30 or more
-#   nr search --raw -g test --minscore 30 "keyword or string 1"
+#   nr search --articles -g test --minscore 30 "keyword or string 1"
+#
+#   # Hand what a search finds to another command (-q gives only their
+#   # ids), or remove it (shown first, and you are asked)
+#   nr search holiday -q | xargs nr get
+#
+#   # Or download what is found as it was posted: the files (-d), the
+#   # articles that are only text (-x), every article as sent (-a) and an
+#   # NZB file of each (-z); a run again skips what is already there
+#   nr search holiday -d -z -o ~/Usenet
+#   nr search --articles -g test --iposter '*bot*' --delete
+#
+#   # Clear out downloads that didn't finish, leftover work files or old
+#   # indexed headers (you say which, and are asked first)
+#   nr prune downloads --days 14 --dry-run
+#   nr prune work
 #
 #   # Keep the database trim: see what a rule would remove (everywhere:
 #   # header caches, index and archive), remove it, and keep the rule
@@ -206,16 +221,16 @@
 #   # once for any of them, or 'a, b' for both; every search takes them
 #   nr search -t 'video, hd' -t music -T junk --maxscore 100
 #   nr search --posts -t chat "some words"
-#   nr nzb list -t recovery
+#   nr nzb ls -t recovery
 #
 #   # Rules can compare scores ('<-50', '>23, <34') and leave out tags
 #   nr filter purge --score '<-50' --tagged '!trusted' --dry-run
 #
 #   # After editing the filters files by hand: apply them to what is stored
-#   nr filter purge
+#   nr filter purge --saved
 #   nr filter rescore
-#   nr filter list
-#   nr filter remove spam
+#   nr filter ls
+#   nr filter rm spam
 #
 #  If you setup you filters right, you can download content by group or
 #  single files.  Just pay attention to the id on the left (in your search)
@@ -231,6 +246,7 @@ from os.path import isdir
 from os.path import isfile
 
 # Path
+from newsreap.CliOptions import AliasedGroup
 from newsreap.CliOptions import DefaultGroup
 from newsreap.NNTPSettings import CLI_PLUGINS_MAPPING
 
@@ -481,7 +497,9 @@ for k, v in plugins.items():
                             name=sf, **({
                                 'cls': DefaultGroup,
                                 'default': group_default,
-                            } if group_default else {}))(_click_group_func)
+                            } if group_default else {
+                                'cls': AliasedGroup,
+                            }))(_click_group_func)
 
                         # Set the flag and fall through
                         command = False

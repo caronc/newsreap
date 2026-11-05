@@ -14,6 +14,7 @@
 
 import re
 from newsreap.SortedSet import sortedset
+from datetime import UTC
 from datetime import datetime
 from os.path import isfile
 from os.path import abspath
@@ -125,7 +126,10 @@ class NNTPSegmentedPost:
         if not isinstance(self.utc, datetime):
             # Convert into datetime
             try:
-                self.utc = datetime.fromtimestamp(int(self.utc))
+                # Seconds since 1970 (UTC), kept as a naive UTC time like
+                # every other date we keep
+                self.utc = datetime.fromtimestamp(
+                    int(self.utc), UTC).replace(tzinfo=None)
 
             except (TypeError, ValueError):
                 # Used None, uninitialized, or Used bad value

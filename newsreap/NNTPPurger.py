@@ -51,7 +51,6 @@ from .NNTPIndexDatabase import NNTPIndexDatabase
 from .NNTPIndexer import NNTPIndexer
 from .NNTPIndexer import chunked
 from .objects.group.Article import Article
-from .objects.index.ArchiveFile import ArchiveFile
 from .objects.index.ArchiveGroup import ArchiveGroup
 from .objects.index.ArchivedPost import ArchivedPost
 from .objects.index.Collection import Collection
@@ -61,8 +60,6 @@ from .objects.index.CollectionAlias import CollectionAlias
 from .objects.index.CollectionFile import CollectionFile
 from .objects.index.CollectionMeta import CollectionMeta
 from .objects.index.FileGroup import FileGroup
-from .objects.index.PGPPost import PGPPost
-from .objects.index.PGPWait import PGPWait
 from .objects.index.Segment import Segment
 
 # Logging
@@ -384,22 +381,7 @@ class NNTPPurger:
             if self.dry_run or not (dropped or changed):
                 continue
 
-            for chunk in chunked(dropped):
-                session.query(ArchiveFile)\
-                    .filter(ArchiveFile.message_id.in_(chunk))\
-                    .delete(synchronize_session=False)
-                session.query(PGPPost)\
-                    .filter(PGPPost.message_id.in_(chunk))\
-                    .delete(synchronize_session=False)
-                session.query(PGPWait)\
-                    .filter(PGPWait.message_id.in_(chunk))\
-                    .delete(synchronize_session=False)
-                session.query(ArchiveGroup)\
-                    .filter(ArchiveGroup.message_id.in_(chunk))\
-                    .delete(synchronize_session=False)
-                session.query(ArchivedPost)\
-                    .filter(ArchivedPost.message_id.in_(chunk))\
-                    .delete(synchronize_session=False)
+            NNTPIndexer.forget_posts(session, dropped)
 
             NNTPArticleRanks.save(session, changed)
             NNTPArticleRanks.forget(session, dropped)

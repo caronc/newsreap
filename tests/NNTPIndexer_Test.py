@@ -1267,8 +1267,9 @@ def test_index_and_save_from_the_command_line(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
@@ -1376,8 +1377,11 @@ def test_index_and_save_from_the_command_line(tmp_path):
         # Settling can be told every group was seen up to now
         assert nr('update', 'index', 'both', '--settle').exit_code == 0
 
-        # Delete it; it doesn't come back
-        result = nr('delete', '1')
+        # Delete it (you are asked first); it doesn't come back
+        result = nr('delete', '1', input='n\n')
+        assert 'Nothing was removed.' in result.output
+        assert '3/3 file(s)' in nr('nzb', 'list').output
+        result = nr('-y', 'delete', '1')
         assert result.exit_code == 0
         assert 'Removed [1] Holiday.Photos' in result.output
         assert nr('delete', '1').exit_code == 1
@@ -1412,8 +1416,9 @@ def test_fetched_headers_can_be_searched_right_away(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0

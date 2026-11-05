@@ -42,6 +42,7 @@ import gevent.monkey
 gevent.monkey.patch_all()
 
 import re
+from collections import namedtuple
 from datetime import datetime
 from datetime import timedelta
 from datetime import UTC
@@ -62,6 +63,8 @@ from sqlalchemy import select
 from sqlalchemy import union
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import text
+from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
 
 from .NNTPArticle import NNTPArticle
 from .NNTPArticleRanks import NNTPArticleRanks
@@ -89,6 +92,8 @@ from .objects.index.Collection import CollectionSource
 from .objects.index.Collection import CollectionState
 from .objects.index.Collection import COLLECTION_FORMED
 from .objects.index.ArchiveFile import ArchiveFile
+from .objects.index.ArchiveGroup import ArchiveGroup
+from .objects.index.ArchivedPost import ArchivedPost
 from .objects.index.CollectionAlias import CollectionAlias
 from .objects.index.CollectionFile import CollectionFile
 from .objects.index.CollectionMeta import CollectionMeta
@@ -141,6 +146,10 @@ NEWZNAB_COUNTER_RE = re.compile(r'\((\d+)/(\d+)\)', re.ASCII)
 # posters; a leading - leaves out what has it (a leading + is dropped)
 KEYWORD_RE = re.compile(
     r'^(?P<column>%[sp])?(?P<op>[+-])?(?P<text>.+)$', re.ASCII | re.DOTALL)
+
+# Where a keyword is split into choices ('alert|danger' finds either; \|
+# is a | itself)
+KEYWORD_OR_RE = re.compile(r'(?<!\\)\|')
 
 # How each score comparison (see score_tests()) is written in SQL
 SQL_COMPARISONS = {
@@ -218,6 +227,21 @@ STREAM_SIZE = 500
 # The most variables SQLite takes in one statement is far higher than
 # this, but keeping our IN (...) lists small keeps them fast
 IN_LIST_SIZE = 500
+
+# How many rows note_fetched() writes before it commits
+NOTE_COMMIT_SIZE = 5000
+
+# The longest Message-ID there can be (RFC 5536); a longer one can't be
+# kept as it is, so its article is left out
+MAX_MESSAGE_ID = 250
+
+# The longest collection and file key kept (see fit_key())
+MAX_KEY = 512
+
+# What a download learned about an article (see Segment): whether it
+# carries a file or is only text (see ArchiveKind), the crc32 of the
+# article as sent, and of the text file written of it (None when unknown)
+SegmentNote = namedtuple('SegmentNote', ('kind', 'crc32', 'text_crc32'))
 
 
 def parse_subject(subject):
@@ -486,6 +510,48 @@ def parse_keywords(keywords):
     return parsed
 
 
+def keyword_choices(keywords, case_sensitive=False):
+    """
+    Returns each search keyword (see parse_keywords()) as (exclude,
+    choices): what has any one of its choices is found
+
+    - 'alert|danger' finds either word (\\| is a | itself)
+    - a - in front leaves out what has any of them ('-sample|proof')
+    - %p in front looks in the posters (for every choice after it too)
+    - choices: (column, value, term) each; term is the NNTPSearchTerm of a
+      choice holding a * or ? wildcard (its value is None then), else None
+    """
+    found = []
+    for keyword in keywords:
+        parsed = [KEYWORD_RE.match(part.replace('\\|', '|'))
+                  for part in KEYWORD_OR_RE.split(keyword) if part]
+        parsed = [part for part in parsed if part]
+        if not parsed:
+            # Nothing to look for
+            continue
+
+        exclude = parsed[0].group('op') == '-'
+        column = 'subject'
+        choices = []
+        for part in parsed:
+            if part.group('column'):
+                column = 'poster' if part.group('column') == '%p' \
+                    else 'subject'
+
+            value = part.group('text')
+            if WILDCARD_RE.search(value):
+                choices.append((column, None, NNTPSearchTerm(
+                    'poster' if column == 'poster' else SEARCH_ANY,
+                    '*%s*' % value, case_sensitive=case_sensitive)))
+
+            else:
+                choices.append((column, value, None))
+
+        found.append((exclude, choices))
+
+    return found
+
+
 def keyword_terms(keywords, case_sensitive=False):
     """
     Splits search keywords (see parse_keywords()) into:
@@ -602,6 +668,17 @@ def rank_text(entry):
 
     return '  {%s}' % ' '.join(
         (['%+d' % score] if score else []) + tags.split())
+
+
+def fit_key(key, limit=MAX_KEY):
+    """
+    Returns a key that fits its column: one too long keeps its start and
+    ends with a hash of all of it, so two long keys never become one
+    """
+    if len(key) <= limit:
+        return key
+
+    return '%s#%s' % (key[:limit - 33], md5(key.encode('utf-8')).hexdigest())
 
 
 def chunked(items, size=IN_LIST_SIZE):
@@ -855,6 +932,15 @@ class NNTPIndexer:
 
         - ranks: Message-ID -> (score, tags) of the articles (see _rank())
         """
+        long_ids = [row for row in rows
+                    if len(row.message_id or '') > MAX_MESSAGE_ID]
+        if long_ids:
+            logger.debug('Left out %d article(s) with a Message-ID longer '
+                         'than %d characters.' % (
+                             len(long_ids), MAX_MESSAGE_ID))
+            rows = [row for row in rows
+                    if len(row.message_id or '') <= MAX_MESSAGE_ID]
+
         # The articles we already have: a scanned file found in another
         # group is tagged with this one too; one an NZB file lists is left
         # just as the NZB file has it
@@ -906,16 +992,16 @@ class NNTPIndexer:
                     info['name'] = 'Obfuscated post by %s' % poster
 
                 info['name'] = info['name'][:256]
-                info['collection_key'] = '%s\n%s\n%s' % (
-                    SESSION_KEY, poster, how)
+                info['collection_key'] = fit_key('%s\n%s\n%s' % (
+                    SESSION_KEY, poster, how))
 
             else:
                 # The files of one collection share a poster and a name
                 name = info['desc'] or release_name(info['filename']) or \
                     info['base']
                 info['name'] = name[:256]
-                info['collection_key'] = '%s\n%s\n%d' % (
-                    poster, name, info['files'])
+                info['collection_key'] = fit_key('%s\n%s\n%d' % (
+                    poster, name, info['files']))
 
             entries.append((row, poster, info))
 
@@ -995,7 +1081,8 @@ class NNTPIndexer:
                 info['base'] = '(the files of an obfuscated post)'
 
             else:
-                info['file_key'] = '%d\n%s' % (window['id'], info['base'])
+                info['file_key'] = fit_key(
+                    '%d\n%s' % (window['id'], info['base']))
 
         # Look up (or add) the files we need
         self._resolve(
@@ -1135,6 +1222,33 @@ class NNTPIndexer:
                     .update({Collection.score: wanted,
                              Collection.tags: text},
                             synchronize_session=False)
+
+    def forget_ranks(self, message_ids):
+        """
+        Lets go of the scores and tags of articles (ie: their cached headers
+        were removed); see NNTPArticleRanks
+        """
+        session = self.session()
+        if session is None:
+            return
+
+        NNTPArticleRanks.forget(session, message_ids)
+        session.commit()
+
+    @staticmethod
+    def forget_posts(session, message_ids):
+        """
+        Removes kept posts (what 'nr update --content' kept) and everything
+        tied to them: their files, PGP ties, why they wait to be decrypted
+        and the groups they were found in.  Not committed.
+        """
+        # Children first; database servers check their foreign keys
+        for ids in chunked(list(message_ids)):
+            for table in (ArchiveFile, PGPPost, PGPWait, ArchiveGroup,
+                          ArchivedPost):
+                session.query(table)\
+                    .filter(table.message_id.in_(ids))\
+                    .delete(synchronize_session=False)
 
     @staticmethod
     def _insert_ignore(session, table, rows):
@@ -1437,20 +1551,22 @@ class NNTPIndexer:
             values['now'] = now
             params.append(bindparam('now', type_=DateTime()))
 
-        # Update the scanned collections still forming (and the settled
-        # ones; late parts can still complete them, but once settled they
-        # stay that way)
+        # Update the scanned collections still forming, and the settled ones
+        # that late parts have completed (once settled they stay that way,
+        # so the rest of them are left alone; there can be millions)
+        complete = \
+            'segments >= segments_expected AND ' \
+            '(files_expected = 0 OR files >= files_expected) AND ' \
+            '(segments_expected > 0 OR collection.key NOT LIKE :session)'
         session.execute(text(
             'UPDATE collection SET state = CASE '
-            'WHEN segments >= segments_expected AND '
-            '  (files_expected = 0 OR files >= files_expected) AND '
-            '  (segments_expected > 0 OR collection.key NOT LIKE :session) '
-            '  THEN :complete '
+            'WHEN ' + complete + ' THEN :complete '
             'WHEN state = :settled OR last_posted IS NULL THEN :settled '
             'WHEN ' + days('last_posted') + ' < ' + seen + ' - :days '
             '  THEN :settled '
             'ELSE :forming END '
-            'WHERE source = :scan AND state IN (:forming, :settled)')
+            'WHERE source = :scan AND (state = :forming OR '
+            '  (state = :settled AND ' + complete + '))')
             .bindparams(*params), values)
 
         # Give every newly formed collection its GID
@@ -1558,9 +1674,10 @@ class NNTPIndexer:
         """
         Returns collections (newest first) with every keyword in their name
         or the subject or name of one of their files (see
-        parse_keywords()):
+        keyword_choices()):
         - a keyword starting with '-' must not be in any of them
         - a keyword starting with '%p' is looked for in the posters instead
+        - 'a|b' finds what has either
 
         - groups: only collections with a file found in one of these groups
         - complete: True for only complete ones, False for only incomplete
@@ -1607,14 +1724,22 @@ class NNTPIndexer:
             states.append(CollectionState.Forming)
 
         query = session.query(Collection).filter(Collection.state.in_(states))
-        plain, wild = keyword_terms(keywords, case_sensitive)
-        for no, (exclude, column, value) in enumerate(plain):
-            found = Collection.id.in_(self._search(
-                session, no, column, value, case_sensitive))
+
+        # Each keyword finds what has any one of its choices
+        no = 0
+        for exclude, choices in keyword_choices(keywords, case_sensitive):
+            found = []
+            for column, value, term in choices:
+                no += 1
+                found.append(self._term(session, no, term) if term else
+                             Collection.id.in_(self._search(
+                                 session, no, column, value, case_sensitive)))
+
+            found = or_(*found)
             query = query.filter(~found if exclude else found)
 
         # Every condition narrows the results down further
-        for no, term in enumerate([*wild, *(terms or ())]):
+        for no, term in enumerate(terms or (), start=no + 1):
             query = query.filter(self._term(session, no, term))
 
         query = rank_query(
@@ -1907,6 +2032,166 @@ class NNTPIndexer:
         # Number each segment by its part so a missing part leaves a gap
         return nzb.save(path, numbering=NZBSegmentNumber.Article)
 
+    def fetch_files(self, value=None, message_ids=None):
+        """
+        Returns what downloading a collection (by its id or GID), or some
+        of the articles indexed, needs: (files, known)
+
+        - files: [{'id', 'name', 'group', 'subject', 'poster', 'segments':
+          [(part, message_id)], 'size', 'crc32', 'partial'}], in the order
+          an NZB file lists them; size and crc32 are what the file was once
+          put together as (None until then), and partial is True when only
+          some of its articles are listed.  A part posted twice uses the
+          lowest Message-ID (as nzb() does).
+        - known: {message_id: SegmentNote} for the articles a download
+          learned about before
+        - message_ids: only these articles, under the files they belong
+          to (the ones that aren't indexed are left out)
+
+        Both are empty when there is no such collection.
+        """
+        session = self.session()
+        if session is None:
+            return [], {}
+
+        if message_ids is None:
+            collection = self.get(value)
+            if collection is None:
+                return [], {}
+            entries = self._files(session, collection.id)
+            wanted = None
+
+        else:
+            wanted = set(message_ids)
+            file_ids = set()
+            for ids in chunked(wanted):
+                file_ids.update(file_id for file_id, in session.query(
+                    Segment.file_id).filter(Segment.message_id.in_(ids)))
+
+            entries = []
+            for ids in chunked(file_ids):
+                entries.extend(session.query(CollectionFile)
+                               .filter(CollectionFile.id.in_(ids)))
+            entries.sort(key=lambda entry: (
+                entry.collection_id, entry.position is None,
+                entry.position or 0, gid_order(entry.subject)))
+
+        files, known = [], {}
+        for chunk in chunked(entries):
+            # The groups and segments of many files are read at once
+            ids = [entry.id for entry in chunk]
+            groups = dict(session.query(
+                FileGroup.file_id, func.min(FileGroup.name))
+                .filter(FileGroup.file_id.in_(ids))
+                .group_by(FileGroup.file_id))
+
+            rows = {}
+            for row in session.query(
+                    Segment.file_id, Segment.part, Segment.message_id,
+                    Segment.kind, Segment.crc32, Segment.text_crc32)\
+                    .filter(Segment.file_id.in_(ids))\
+                    .order_by(Segment.file_id, Segment.part,
+                              Segment.message_id):
+                rows.setdefault(row.file_id, []).append(row)
+
+            for entry in chunk:
+                segments, seen, partial = [], set(), False
+                for _, part, message_id, kind, crc32, text_crc32 in \
+                        rows.get(entry.id, ()):
+                    if part in seen:
+                        continue
+
+                    if wanted is not None and message_id not in wanted:
+                        partial = True
+                        continue
+                    seen.add(part)
+
+                    segments.append((part, message_id))
+                    if kind is not None or crc32 or text_crc32:
+                        known[message_id] = SegmentNote(
+                            kind, crc32, text_crc32)
+
+                if segments:
+                    files.append({
+                        'id': entry.id, 'name': entry.filename,
+                        'group': groups.get(entry.id),
+                        'subject': entry.subject, 'poster': entry.poster,
+                        'segments': segments, 'size': entry.file_size,
+                        'crc32': entry.crc32, 'partial': partial})
+
+        return files, known
+
+    @staticmethod
+    def note(session, files=None, segments=None):
+        """
+        Writes what was learned of files and articles (see note_fetched());
+        committed as it goes.  A value not known (None) leaves the one
+        noted before as it is, and a row that is gone (or was never
+        indexed, ie: an article only cached) is skipped.
+        """
+        files_table = CollectionFile.__table__
+        segments_table = Segment.__table__
+
+        def kept(table, name):
+            # The value given, or the one there already
+            return func.coalesce(bindparam('row_%s' % name), table.c[name])
+
+        for statement, rows in (
+                (update(files_table).where(
+                    files_table.c.id == bindparam('row_id')).values(
+                    file_size=kept(files_table, 'file_size'),
+                    crc32=kept(files_table, 'crc32')), [
+                    {'row_id': file_id, 'row_file_size': size,
+                     'row_crc32': crc32}
+                    for file_id, (size, crc32) in (files or {}).items()]),
+                (update(segments_table).where(
+                    segments_table.c.message_id ==
+                    bindparam('row_id')).values(
+                    kind=kept(segments_table, 'kind'),
+                    crc32=kept(segments_table, 'crc32'),
+                    text_crc32=kept(segments_table, 'text_crc32')), [
+                    {'row_id': message_id, 'row_kind': note.kind,
+                     'row_crc32': note.crc32,
+                     'row_text_crc32': note.text_crc32}
+                    for message_id, note in (segments or {}).items()])):
+            # One statement for many rows
+            for start in range(0, len(rows), NOTE_COMMIT_SIZE):
+                session.execute(statement, rows[start:start + NOTE_COMMIT_SIZE])
+                session.commit()
+
+    def note_fetched(self, files=None, segments=None):
+        """
+        Keeps what a download learned (see NNTPFetcher), so running it
+        again skips what is already there and right; returns False (with a
+        warning) if it couldn't be kept, which only means the next run
+        checks by fetching again
+
+        - files: {file id: (size, crc32)}
+        - segments: {message_id: SegmentNote}
+        """
+        session = None
+        try:
+            session = self.session()
+            if session is None:
+                return False
+
+            self.note(session, files, segments)
+
+        except (SQLAlchemyError, OSError) as e:
+            if session is not None:
+                try:
+                    session.rollback()
+
+                except (SQLAlchemyError, OSError):
+                    pass
+
+            logger.warning(
+                'Could not note what was downloaded in the index (%s); the '
+                'next run checks it again by fetching.' % e)
+            return False
+
+        return True
+
     def delete(self, value):
         """
         Removes a collection (by its id or GID) and its files
@@ -1974,8 +2259,6 @@ class NNTPIndexer:
         are kept.  Returns (files, collections, posts) removed.
         """
         from .NNTPArticleRanks import NNTPArticleRanks
-        from .objects.index.ArchiveGroup import ArchiveGroup
-        from .objects.index.ArchivedPost import ArchivedPost
         from .objects.index.NzbImport import NzbImport
 
         session = self.session()
@@ -1983,41 +2266,83 @@ class NNTPIndexer:
             # Nothing was ever indexed
             return 0, 0, 0
 
-        # The scanned files found in it
-        found = [file_id for file_id, in session.query(FileGroup.file_id)
-                 .join(CollectionFile, CollectionFile.id == FileGroup.file_id)
-                 .join(Collection,
-                       Collection.id == CollectionFile.collection_id)
-                 .filter(FileGroup.name == group)
-                 .filter(Collection.source == CollectionSource.Scan)]
+        # A chunk at a time (committed as it goes), so memory stays the same
+        # however big the group is.  Posts go first: a score is only let go
+        # of once neither a kept post nor an indexed article has it.
+        posts = 0
+        while True:
+            ids = [m for m, in session.query(ArchiveGroup.message_id)
+                   .filter(ArchiveGroup.name == group).limit(IN_LIST_SIZE)]
+            if not ids:
+                break
 
-        for ids in chunked(found):
+            session.query(ArchiveGroup)\
+                .filter(ArchiveGroup.name == group)\
+                .filter(ArchiveGroup.message_id.in_(ids))\
+                .delete(synchronize_session=False)
+
+            # The posts kept from it (and nowhere else)
+            others = {m for m, in session.query(ArchiveGroup.message_id)
+                      .filter(ArchiveGroup.message_id.in_(ids))}
+            lost = [m for m in ids if m not in others]
+            self.forget_posts(session, lost)
+
+            indexed = {m for m, in session.query(Segment.message_id)
+                       .filter(Segment.message_id.in_(lost))}
+            NNTPArticleRanks.forget(
+                session, [m for m in lost if m not in indexed])
+            posts += len(lost)
+            session.commit()
+
+        # The scanned files found in it
+        files = 0
+        collections = set()
+        while True:
+            ids = [file_id for file_id, in session.query(FileGroup.file_id)
+                   .join(CollectionFile, CollectionFile.id == FileGroup.file_id)
+                   .join(Collection,
+                         Collection.id == CollectionFile.collection_id)
+                   .filter(FileGroup.name == group)
+                   .filter(Collection.source == CollectionSource.Scan)
+                   .limit(IN_LIST_SIZE)]
+            if not ids:
+                break
+
             session.query(FileGroup)\
                 .filter(FileGroup.name == group)\
                 .filter(FileGroup.file_id.in_(ids))\
                 .delete(synchronize_session=False)
 
-        # The ones no other group has
-        kept = set()
-        for ids in chunked(found):
-            kept.update(file_id for file_id, in session.query(
-                FileGroup.file_id).filter(FileGroup.file_id.in_(ids)))
-        lost = [file_id for file_id in found if file_id not in kept]
+            # The ones no other group has
+            kept = {file_id for file_id, in session.query(FileGroup.file_id)
+                    .filter(FileGroup.file_id.in_(ids))}
+            lost = [file_id for file_id in ids if file_id not in kept]
+            if lost:
+                collections.update(c for c, in session.query(
+                    CollectionFile.collection_id)
+                    .filter(CollectionFile.id.in_(lost)))
 
-        collections = set()
-        gone = []
-        for ids in chunked(lost):
-            collections.update(c for c, in session.query(
-                CollectionFile.collection_id)
-                .filter(CollectionFile.id.in_(ids)))
-            gone.extend(m for m, in session.query(Segment.message_id)
-                        .filter(Segment.file_id.in_(ids)))
-            session.query(Segment)\
-                .filter(Segment.file_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(CollectionFile)\
-                .filter(CollectionFile.id.in_(ids))\
-                .delete(synchronize_session=False)
+                # Their articles, a chunk at a time too
+                gone = [m for m, in session.query(Segment.message_id)
+                        .filter(Segment.file_id.in_(lost))]
+                for chunk in chunked(gone):
+                    still = {m for m, in session.query(ArchivedPost.message_id)
+                             .filter(ArchivedPost.message_id.in_(chunk))}
+                    NNTPArticleRanks.forget(
+                        session, [m for m in chunk if m not in still])
+                    session.query(NzbImport)\
+                        .filter(NzbImport.message_id.in_(chunk))\
+                        .delete(synchronize_session=False)
+
+                session.query(Segment)\
+                    .filter(Segment.file_id.in_(lost))\
+                    .delete(synchronize_session=False)
+                session.query(CollectionFile)\
+                    .filter(CollectionFile.id.in_(lost))\
+                    .delete(synchronize_session=False)
+                files += len(lost)
+
+            session.commit()
 
         self._recount(session, (), collections)
 
@@ -2042,50 +2367,6 @@ class NNTPIndexer:
                 .filter(Collection.id.in_(ids))\
                 .delete(synchronize_session=False)
 
-        # The posts kept from it (and nowhere else)
-        posts = [m for m, in session.query(ArchiveGroup.message_id)
-                 .filter(ArchiveGroup.name == group)]
-        session.query(ArchiveGroup)\
-            .filter(ArchiveGroup.name == group)\
-            .delete(synchronize_session=False)
-
-        others = set()
-        for ids in chunked(posts):
-            others.update(m for m, in session.query(ArchiveGroup.message_id)
-                          .filter(ArchiveGroup.message_id.in_(ids)))
-        posts = [m for m in posts if m not in others]
-
-        for ids in chunked(posts):
-            session.query(ArchiveFile)\
-                .filter(ArchiveFile.message_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(PGPPost)\
-                .filter(PGPPost.message_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(PGPWait)\
-                .filter(PGPWait.message_id.in_(ids))\
-                .delete(synchronize_session=False)
-            session.query(ArchivedPost)\
-                .filter(ArchivedPost.message_id.in_(ids))\
-                .delete(synchronize_session=False)
-
-        # Their scores and tags (unless they are still known elsewhere),
-        # and the NZB files read from them
-        still = set()
-        for ids in chunked(gone):
-            still.update(m for m, in session.query(ArchivedPost.message_id)
-                         .filter(ArchivedPost.message_id.in_(ids)))
-        for ids in chunked(posts):
-            still.update(m for m, in session.query(Segment.message_id)
-                         .filter(Segment.message_id.in_(ids)))
-
-        NNTPArticleRanks.forget(
-            session, [m for m in [*gone, *posts] if m not in still])
-        for ids in chunked(gone):
-            session.query(NzbImport)\
-                .filter(NzbImport.message_id.in_(ids))\
-                .delete(synchronize_session=False)
-
         session.query(GroupClock)\
             .filter(GroupClock.name == group)\
             .delete(synchronize_session=False)
@@ -2093,7 +2374,7 @@ class NNTPIndexer:
 
         # Forget everything read before now; some of it no longer exists
         session.expunge_all()
-        return len(lost), len(emptied), len(posts)
+        return files, len(emptied), posts
 
     def import_nzb(self, path, name=None, merge=False):
         """

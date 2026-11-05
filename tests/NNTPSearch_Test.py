@@ -162,6 +162,24 @@ def test_keywords_can_hold_wildcards(indexer):
     assert names(indexer, ['%pchr?s']) == {'Sample.Holiday'}
 
 
+def test_a_keyword_can_give_choices(indexer):
+    """
+    'a|b' finds what has either; a - in front leaves out what has any of
+    them, a choice can hold wildcards, and %p carries on to the choices
+    after it
+    """
+    assert names(indexer, ['photos|trip']) == {'Holiday.Photos', 'Café.Trip'}
+    assert names(indexer, ['holiday', 'photos|sample']) == {
+        'Holiday.Photos', 'Sample.Holiday'}
+    assert names(indexer, ['-photos|trip']) == {'Sample.Holiday'}
+    assert names(indexer, ['pho?os|tr*p']) == {'Holiday.Photos', 'Café.Trip'}
+    assert names(indexer, ['%pchris|nobody']) == {'Sample.Holiday'}
+
+    # Empty choices are skipped, and \| is a | itself
+    assert names(indexer, ['trip|']) == {'Café.Trip'}
+    assert names(indexer, ['a\\|b']) == set()
+
+
 def test_collections_have_no_body_to_search(indexer):
     """
     Collections can't be searched by a post's text

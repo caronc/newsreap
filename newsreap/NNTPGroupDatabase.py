@@ -33,6 +33,9 @@ from .objects.group.ObjectBase import ObjectBase
 from .objects.group.Vsp import Vsp
 
 from .Database import Database
+
+# How many Message-IDs are looked up at a time (see forget())
+FORGET_CHUNK_SIZE = 500
 from .Utils import utcnow
 
 # Where we remember (per server) when a scan last reached the newest
@@ -82,10 +85,32 @@ class NNTPGroupDatabase(Database):
 
         return db
 
-    def purge(self, days):
+    def forget(self, message_ids):
+        """
+        Lets go of the cached headers of these articles (Message-IDs, with
+        or without their < and >) and returns how many there were.  The
+        ranges they came from stay marked as scanned, so they aren't
+        fetched again.
+        """
+        ids = [m.strip().strip('<>') for m in message_ids]
+        session = self.session()
+        removed = 0
+        for start in range(0, len(ids), FORGET_CHUNK_SIZE):
+            chunk = ids[start:start + FORGET_CHUNK_SIZE]
+
+            # Looked up by the Message-ID itself (so its index is used);
+            # both ways it may have been cached are asked for
+            removed += session.query(Article)\
+                .filter(Article.message_id.in_(
+                    chunk + ['<%s>' % m for m in chunk]))\
+                .delete(synchronize_session=False)
+        session.commit()
+        return removed
+
+    def purge(self, days, dry_run=False):
         """
         Removes the indexed article headers posted more than `days` days ago
-        and returns how many were removed.
+        and returns how many were removed (or would be, with `dry_run`).
 
         The collections they were indexed into keep everything an NZB file
         needs, so only the raw headers go.  The ranges they came from stay
@@ -96,11 +121,14 @@ class NNTPGroupDatabase(Database):
             return 0
 
         session = self.session()
-        removed = session.query(Article)\
+        query = session.query(Article)\
             .filter(Article.indexed.is_(True))\
             .filter(Article.posted_date < utcnow() - timedelta(
-                days=days))\
-            .delete(synchronize_session=False)
+                days=days))
+        if dry_run:
+            return query.count()
+
+        removed = query.delete(synchronize_session=False)
         session.commit()
         return removed
 

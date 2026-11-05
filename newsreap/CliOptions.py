@@ -29,6 +29,14 @@ from .NNTPSearchTerm import SEARCH_OPTIONS
 # Logging
 import logging
 from .Logging import NEWSREAP_CLI
+
+
+def confirmed(ctx, question):
+    """
+    Returns True once you answer yes to a question about removing
+    something (or gave -y); the answer is no unless you say otherwise
+    """
+    return bool(ctx.get('noprompt')) or click.confirm(question, default=False)
 logger = logging.getLogger(NEWSREAP_CLI)
 
 
@@ -161,7 +169,32 @@ def matching(command):
     return wrapper
 
 
-class DefaultGroup(click.Group):
+# The names every group of commands uses for the same things (as docker
+# does), and the older names that still lead to them (they aren't shown in
+# the help)
+VERB_ALIASES = {
+    'list': 'ls',
+    'remove': 'rm',
+    'del': 'rm',
+    'delete': 'rm',
+    'forget': 'rm',
+}
+
+
+class AliasedGroup(click.Group):
+    """
+    A group of commands that also answers to the older names of its
+    commands (see VERB_ALIASES); ie: 'nr alias ls' runs 'nr alias ls'
+    """
+
+    def get_command(self, ctx, name):
+        command = super().get_command(ctx, name)
+        if command is None and name in VERB_ALIASES:
+            command = super().get_command(ctx, VERB_ALIASES[name])
+        return command
+
+
+class DefaultGroup(AliasedGroup):
     """
     A group of commands that runs one of them (the default) when what
     follows isn't the name of another; ie: 'nr update a.b.test' runs
@@ -176,7 +209,7 @@ class DefaultGroup(click.Group):
 
     def parse_args(self, ctx, args):
         if args and self.default in self.commands and \
-                args[0] not in self.commands and \
+                self.get_command(ctx, args[0]) is None and \
                 args[0] not in ctx.help_option_names:
             args = [self.default, *args]
 

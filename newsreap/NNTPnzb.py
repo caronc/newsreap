@@ -12,6 +12,8 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from datetime import UTC
+
 from newsreap.SortedSet import sortedset
 from os.path import join
 from os.path import isfile
@@ -35,6 +37,16 @@ from xml.sax.saxutils import escape as sax_escape
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_LOGGER
+
+
+def utc_seconds(when):
+    """
+    Returns a date as seconds since 1970 (as NZB files keep them); a date
+    without a time zone is taken as UTC (as we keep them)
+    """
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return '%d' % when.timestamp()
 logger = logging.getLogger(NEWSREAP_LOGGER)
 
 # XML Parsing
@@ -349,7 +361,7 @@ class NNTPnzb(NNTPContent):
                 self.write('%s<file poster="%s" date="%s" subject="%s">%s' % (
                     indent,
                     self.escape_xml(segment.poster),
-                    segment.utc.strftime('%s'),
+                    utc_seconds(segment.utc),
                     self.escape_xml(segment.subject),
                     eol,
                 ))
@@ -944,9 +956,11 @@ class NNTPnzb(NNTPContent):
                 if _ext:
                     _filename = '{0}{1}'.format(_name, _ext)
 
-        # Initialize a NNTPSegmented File Object using the data we read
+        # Initialize a NNTPSegmented File Object using the data we read; the
+        # name comes from the subject, so it is only a name (it is set after,
+        # so a file of that name that happens to be here is never read in)
         _file = NNTPSegmentedPost(
-            _filename,
+            None,
             poster=_poster,
             utc=self.xml_root.attrib.get('date', '0'),
             subject=_subject,
@@ -954,6 +968,7 @@ class NNTPnzb(NNTPContent):
             work_dir=self.work_dir,
             sort_no=self.xml_itr_count,
         )
+        _file.filename = _filename
 
         # index tracker
         _last_index = 0
@@ -962,7 +977,18 @@ class NNTPnzb(NNTPContent):
         for segment in self.xml_root.xpath(
                 'ns:segments/ns:segment', namespaces=NZB_LXML_NAMESPACES):
 
-            _cur_index = int(segment.attrib.get('number', _last_index+1))
+            if not (segment.text or '').strip():
+                # A segment without a Message-ID can't be fetched
+                continue
+
+            try:
+                _cur_index = int(segment.attrib.get('number', _last_index + 1))
+
+            except (TypeError, ValueError):
+                # Not a number; it follows the one before
+                _cur_index = _last_index + 1
+            _last_index = _cur_index
+
             try:
                 _size = int(segment.attrib.get('bytes'))
                 if _size < 0:

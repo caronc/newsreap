@@ -20,6 +20,8 @@ import click
 import sys
 
 from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import ProgrammingError
 
 from os.path import abspath
 from os.path import dirname
@@ -34,6 +36,7 @@ except ImportError:
 
 from newsreap.objects.nntp.GroupAlias import GroupAlias
 from newsreap.objects.nntp.Common import get_groups
+from newsreap.objects.nntp.Common import missing_groups
 
 # Logging
 import logging
@@ -103,6 +106,21 @@ def alias_add(ctx, alias, groups):
         logger.error("An invalid alias identifier was specified.")
         exit(1)
 
+    # 'nr update <alias>' would run that step of update instead
+    root = click.get_current_context().find_root()
+    update = root.command.get_command(root, 'update')
+    if update is not None and _alias in update.list_commands(root):
+        logger.error("'%s' can't be an alias; 'nr update %s' is a command of "
+                     "its own." % (_alias, _alias))
+        exit(1)
+
+    # A name that matches nothing is most likely a typo; nothing is added
+    missing = missing_groups(session, groups)
+    if missing:
+        logger.error('No group or alias is called %s; nothing was added.' %
+                     ', '.join("'%s'" % name for name in missing))
+        exit(1)
+
     groups = get_groups(session, groups)
     if not groups:
         logger.error(
@@ -125,7 +143,7 @@ def alias_add(ctx, alias, groups):
         session.commit()
 
 
-@click.command(name='del')
+@click.command(name='rm')
 @click.pass_obj
 @click.argument('alias', nargs=1)
 @click.argument('groups', nargs=-1)
@@ -153,89 +171,60 @@ def alias_del(ctx, alias, groups):
         logger.error("An invalid alias identifier was specified.")
         exit(1)
 
-    if len(groups) == 0:
-        # No groups were specified; assume the user wants to eliminate
-        # the alias and it's association with everything
-        try:
-            session.query(GroupAlias)\
-                    .filter(GroupAlias.name == _alias)\
-                    .delete()
+    try:
+        # The groups the alias stands for ({name: id})
+        a_groups = dict(session.query(Group.name, Group.id).join(GroupAlias)
+                        .filter(GroupAlias.group_id == Group.id)
+                        .filter(GroupAlias.name == _alias).all())
 
-        except InvalidRequestError:
-            # Dataase isn't set up
-            logger.error("The database is not correctly configured.")
-            exit(1)
-
-        # Commit our changes
-        session.commit()
-
-        # We're done
-        return
-
-    # Get the groups impacted
-    a_groups = dict(session.query(Group.name, Group.id).join(GroupAlias)
-                    .filter(GroupAlias.group_id == Group.id)
-                    .filter(GroupAlias.name == _alias).all())
-
-    # Track list of groups to remove
-    remove_groups = list()
+    except (InvalidRequestError, OperationalError, ProgrammingError):
+        session.rollback()
+        logger.error("The database isn't set up yet; run 'nr db init' first.")
+        exit(1)
 
     if not a_groups:
-        # There is nothing to do
+        logger.error("There is no alias '%s'." % _alias)
+        exit(1)
+
+    if len(groups) == 0:
+        # No groups were specified; the alias goes in its entirety
+        session.query(GroupAlias)\
+            .filter(GroupAlias.name == _alias)\
+            .delete(synchronize_session=False)
+        session.commit()
         return
 
-    # If we reach here, we have to eliminate the alias from a specific set of
-    # groups
-    early_exit = False
-    for g in groups:
-
-        if early_exit:
-            break
-
-        _group = g.lower().strip()
-        if not _group:
+    # The groups (or the groups of the aliases) named, that this alias has
+    remove_groups = set()
+    failed = False
+    for name in groups:
+        found = get_groups(session, name) or {}
+        if not found:
+            failed = True
             continue
 
-        try:
-            _groups = session.query(Group.name)\
-                .filter(Group.name == _group).all()
-            if not _groups:
-                # No problem; let us treat it as an alias and try again
-                _groups = session.query(Group.name).join(GroupAlias)\
-                        .filter(GroupAlias.name == _group).all()
-                if not _groups:
-                    logger.warning("The group/alias '%s' was not found." % g)
-                    continue
+        for group in found:
+            if group in a_groups:
+                remove_groups.add(a_groups[group])
 
-        except InvalidRequestError:
-            # Dataase isn't set up
-            logger.error("The database is not correctly configured.")
-            exit(1)
-
-        for group in _groups:
-            if group[0] in a_groups and \
-               a_groups[group[0]] in remove_groups:
-                continue
-
-            # Add our group to our removal list
-            remove_groups.append(a_groups[group[0]])
-
-            if remove_groups == list(a_groups.values()):
-                # We can make an early exit if this ever equates to True
-                early_exit = True
-                break
+            else:
+                logger.error("'%s' isn't part of the alias '%s'." % (
+                    group, _alias))
+                failed = True
 
     if remove_groups:
-        # Remove the entries
+        # Only this alias lets go of them; any other alias keeps them
         session.query(GroupAlias)\
-                .filter(GroupAlias.group_id.in_(remove_groups))\
-                .delete(synchronize_session=False)
+            .filter(GroupAlias.name == _alias)\
+            .filter(GroupAlias.group_id.in_(remove_groups))\
+            .delete(synchronize_session=False)
         session.commit()
 
-    return
+    if failed:
+        exit(1)
 
 
-@click.command(name='list')
+@click.command(name='ls')
 @click.pass_obj
 def alias_list(ctx):
     """
@@ -247,12 +236,20 @@ def alias_list(ctx):
         logger.error("The database is not correctly configured.")
         exit(1)
 
-    last = None
-    for entry in session.query(Group.name, GroupAlias.name)\
+    try:
+        entries = session.query(Group.name, GroupAlias.name)\
             .join(GroupAlias)\
             .filter(Group.id == GroupAlias.group_id)\
             .order_by(GroupAlias.name)\
-            .order_by(Group.name).all():
+            .order_by(Group.name).all()
+
+    except (InvalidRequestError, OperationalError, ProgrammingError):
+        session.rollback()
+        logger.error("The database isn't set up yet; run 'nr db init' first.")
+        exit(1)
+
+    last = None
+    for entry in entries:
 
         if last != entry[1]:
             if last is not None:

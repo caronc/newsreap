@@ -507,6 +507,17 @@ def test_post_searches_narrow_down(archive):
     assert ids(archive, '%') == []
 
 
+def test_post_searches_can_give_choices(archive):
+    """
+    'a|b' finds the posts with either word; a - in front leaves out the
+    posts with any of them
+    """
+    assert ids(archive, 'trips|chat') == ['2@x', '1@x']
+    assert ids(archive, '-trips|photo') == ['1@x']
+    assert ids(archive, 'trip*|cha?') == ['2@x', '1@x']
+    assert ids(archive, '%pboss|ghost') == ['2@x']
+
+
 def test_post_searches_use_the_search_index(archive):
     """
     Searching posts (by words or poster) uses the database's search index

@@ -293,6 +293,11 @@ DEFAULT_CONFIG_FILE_PATHS = tuple(
 # The starting configuration written by create_config()
 CONFIG_TEMPLATE = join(NEWSREAP_ROOT, 'var', 'config.yaml')
 
+# The lines of the template 'nr --init' fills in (the template itself stays
+# a configuration that works as it is)
+TEMPLATE_BASE_DIR = "   # base_dir: '~/newsreap'\n"
+TEMPLATE_DOWNLOAD_DIR = "   # download_dir: '~/Downloads'\n"
+
 # The example filters file create_config() puts in the filters directory
 # (named so it isn't read)
 FILTERS_TEMPLATE = join(NEWSREAP_ROOT, 'var', 'filters.yaml.template')
@@ -518,6 +523,13 @@ DEFAULT_DOWNLOAD_VARIABLES = {
     'extract': True,
     # Remove what was downloaded once it is all put together and placed
     'cleanup': True,
+    # 'nr prune downloads' removes downloads that didn't finish once
+    # nothing has touched them for this many days; 0 keeps them until you
+    # remove them yourself
+    'prune_downloads': 0,
+    # 'nr prune work' removes files left in the work directory this many
+    # days or more; 0 keeps them
+    'prune_work': 1,
 }
 
 # Keyword used in configuration for downloading
@@ -578,15 +590,17 @@ def create_config(cfg_file=None):
         # The usual place; everything else goes where the system expects
         # it too
         base_dir = None
-        line = "   # base_dir: '~/newsreap'"
+        line = TEMPLATE_BASE_DIR
 
     else:
         # Somewhere of its own; keep everything together with it
         base_dir = config_dir
-        line = "   base_dir: '%s'" % shown(base_dir)
+        line = "   base_dir: '%s'\n" % shown(base_dir)
 
     with open(CONFIG_TEMPLATE) as fp:
-        content = fp.read().replace('__BASE_DIR__', line)
+        content = fp.read().replace(TEMPLATE_BASE_DIR, line, 1).replace(
+            TEMPLATE_DOWNLOAD_DIR,
+            "   download_dir: '%s'\n" % shown(user_download_dir()), 1)
 
     makedirs(config_dir, exist_ok=True)
 
@@ -1376,7 +1390,7 @@ class NNTPSettings(NNTPDatabase):
 
         # Apply our lookups
         content = self._mask_re.sub(
-            lambda x: self._mask_map[x.group()], content)
+            lambda x: self._mask_map[x.group().lower()], content)
 
         # We intentionally don't proces our extra matches yet until our
         # standard entries have been applied at least twice. The reason is
@@ -1389,13 +1403,15 @@ class NNTPSettings(NNTPDatabase):
         while _matches:
             # Apply our lookups
             content = self._mask_re.sub(
-                lambda x: self._mask_map[x.group()], content)
+                lambda x: self._mask_map[x.group().lower()], content)
 
             # If we get here, we still have left over keys that have
             # not been looked up
             if mask_map:
+                # The extra masks are found whatever their case too
+                extras = {key.lower(): value for key, value in mask_map.items()}
                 content = extra_mask_re.sub(
-                    lambda x: mask_map[x.group()], content)
+                    lambda x: extras[x.group().lower()], content)
 
             recursion += 1
             if recursion > 5:

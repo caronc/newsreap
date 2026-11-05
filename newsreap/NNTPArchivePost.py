@@ -43,6 +43,17 @@ TEXT_FILES = frozenset((
 MAX_TEXT_FILE = 65536
 
 
+def sent(raw):
+    """
+    Returns an article as the server sent it: every line it sent ended
+    with a line ending, but the last one's is taken off with the end of
+    the article
+    """
+    if raw and not raw.endswith(b'\n'):
+        return raw + b'\r\n'
+    return raw
+
+
 class NNTPArchivePost:
     """
     One article being archived.

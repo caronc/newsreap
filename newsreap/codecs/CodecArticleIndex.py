@@ -236,7 +236,8 @@ class CodecArticleIndex(CodecBase):
             logger.warning(
                 "Unparsable XOVER date '%s'" % (date),
             )
-            article_date = datetime.fromtimestamp(0)
+            # The start of 1970, as a naive UTC time like every other
+            article_date = datetime(1970, 1, 1)
 
         try:
             size = int(fields[6].strip())

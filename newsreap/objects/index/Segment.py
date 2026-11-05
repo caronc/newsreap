@@ -15,6 +15,7 @@
 from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
+from sqlalchemy import SmallInteger
 from sqlalchemy import String
 
 from .ObjectBase import ObjectBase
@@ -45,6 +46,15 @@ class Segment(ObjectBase):
 
     # Its size (in bytes)
     size = Column(Integer, nullable=False, default=0)
+
+    # Learned the first time it is downloaded (None until then), so a
+    # download run again knows what it already has:
+    # - kind: whether it carries a file or is only text (see ArchiveKind)
+    # - crc32: the crc32 of the article as the server sent it
+    # - text_crc32: the crc32 of the text file written of it (nr search -x)
+    kind = Column(SmallInteger)
+    crc32 = Column(String(8))
+    text_crc32 = Column(String(8))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

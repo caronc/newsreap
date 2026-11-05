@@ -111,8 +111,9 @@ def test_one_update_fetches_headers_content_and_nzb_files(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
@@ -215,8 +216,9 @@ def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
         config = config_for(server, tmp_path / 'config.yaml', nzb='yes')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
@@ -275,8 +277,9 @@ def test_the_update_steps_can_still_be_run_on_their_own(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         result = nr('update', '--help')
         assert result.exit_code == 0
@@ -330,8 +333,9 @@ def test_articles_can_be_shown_and_fetched(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
@@ -430,8 +434,9 @@ def test_groups_can_be_reset_and_worked_on_offline(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
@@ -453,7 +458,10 @@ def test_groups_can_be_reset_and_worked_on_offline(tmp_path):
         assert nr('update', GROUP, '--cached', '--days', '2').exit_code == 1
 
         # Start the group over; what the other group has too stays
-        result = nr('update', GROUP, '--reset', '--no-index')
+        result = nr('update', GROUP, '--reset', '--no-index', input='n\n')
+        assert result.exit_code == 1
+        assert 'Nothing was reset.' in result.output
+        result = nr('-y', 'update', GROUP, '--reset', '--no-index')
         assert result.exit_code == 0, result.output
         assert '%s: reset (2 file(s), 1 collection(s) and 0 post(s) ' \
             'removed)' % GROUP in result.output
@@ -491,8 +499,9 @@ def test_status_shows_everything_kept(tmp_path):
         config = config_for(server, tmp_path / 'config.yaml')
         runner = CliRunner()
 
-        def nr(*args):
-            return runner.invoke(cli, ['--config', config, *args], obj={})
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
 
         assert nr('db', 'init').exit_code == 0
         assert nr('update', 'groups').exit_code == 0
@@ -524,13 +533,115 @@ def test_status_shows_everything_kept(tmp_path):
         assert result.exit_code == 0, result.output
         output = result.output
         assert output.index('Collections:') < output.index('Posts:') < \
-            output.index('Cached headers:')
+            output.index('Articles:')
         assert '<talk@x>' in output
 
         # Only collections (the same as no switch at all)
         assert nr('search', '--collections', 'holiday').output == \
             nr('search', 'holiday').output
 
+        # A condition only posts have searches posts on its own
+        result = nr('search', '--ibody', '*photos*')
+        assert result.exit_code == 0, result.output
+        assert '<talk@x>' in result.output
+
+        # Asked for collections, it can't be used (and says so)
+        result = nr('search', '--collections', '--ibody', '*photos*')
+        assert result.exit_code == 1
+        assert "--ibody can't be used to search collections" in result.output
+
+        # --articles is what --raw is now called
+        assert nr('search', '--articles', '-g', GROUP).output == \
+            nr('search', '--raw', '-g', GROUP).output
+        assert 'Searching --articles needs a --group' in nr(
+            'search', '--articles').output
+
         # A condition one of them can't look at
         assert nr('search', '--collections', '--posts', '--ibody',
                   '*photos*').exit_code == 1
+
+
+def test_what_a_search_finds_can_be_listed_shown_or_removed(tmp_path):
+    """
+    A search can hand on just what it found (-q), say what each is as JSON,
+    or remove it (--delete; shown first and asked, unless -y is given)
+    """
+    import json
+
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000004 0000000001 y\n' % GROUP)
+
+    with FakeNNTPServer(group_list=str(group_list),
+                        join_group=False) as server:
+        for message_id, text in (('talk@x', 'Holiday photos are up'),
+                                 ('more@x', 'More holiday photos')):
+            path = tmp_path / ('%s.msg' % message_id)
+            path.write_bytes(article(text, Subject='Holiday talk'))
+            server.add_article(message_id, str(path), GROUP)
+
+        for no, (subject, poster, message_id) in enumerate(
+                [*release('Holiday', files=1, segments=2),
+                 ('Holiday talk', POSTER, 'talk@x'),
+                 ('Holiday talk', POSTER, 'more@x')], 1):
+            server.add_overview(
+                GROUP, no, subject, poster, POSTED + timedelta(minutes=no),
+                message_id, size=100)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('update', 'groups').exit_code == 0
+        assert nr('update', GROUP, '--content').exit_code == 0
+
+        # Only what each is called (to hand to another command)
+        result = nr('search', 'holiday', '-q')
+        assert result.exit_code == 0, result.output
+        collections = result.output.split()
+        assert collections and all(c.isdigit() for c in collections)
+        assert sorted(nr('search', '--posts', 'photos', '-q').output.split()) \
+            == ['more@x', 'talk@x']
+
+        # What each is, one JSON object per line
+        rows = [json.loads(line) for line in nr(
+            'search', '--articles', '-g', GROUP, '--json').output.split('\n')
+            if line]
+        assert {row['kind'] for row in rows} == {'article'}
+        assert {'talk@x', 'more@x'} <= {row['message_id'] for row in rows}
+
+        # A limit counts posts (not the lines that show them)
+        result = nr('search', '--posts', 'photos', '-l', '1', '--no-pager')
+        assert len([line for line in result.output.splitlines()
+                    if line.startswith('    <')]) == 1
+
+        # Asked first; nothing goes without a yes
+        result = nr('search', '--posts', 'more', '--delete', input='n\n')
+        assert 'Remove 1 post(s)?' in result.output
+        assert 'Nothing was removed.' in result.output
+        assert 'more@x' in nr('search', '--posts', 'photos', '-q').output
+
+        result = nr('search', '--posts', 'more', '--delete', input='y\n')
+        assert 'Removed 1 post(s).' in result.output
+        assert nr('search', '--posts', 'photos', '-q').output.split() == [
+            'talk@x']
+
+        # -y answers yes; collections and articles go the same way
+        result = nr('-y', 'search', 'holiday', '--delete')
+        assert result.exit_code == 0, result.output
+        assert 'Removed %d collection(s).' % len(collections) in \
+            result.output
+        assert nr('search', 'holiday', '-q').output.strip() == ''
+
+        result = nr('-y', 'search', '--articles', '-g', GROUP,
+                    '--message-id', 'talk@x', '--delete')
+        assert 'Removed 1 article(s).' in result.output
+        assert 'talk@x' not in nr(
+            'search', '--articles', '-g', GROUP, '-q').output
+        assert 'more@x' in nr(
+            'search', '--articles', '-g', GROUP, '-q').output

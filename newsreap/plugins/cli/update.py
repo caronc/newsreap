@@ -48,6 +48,7 @@ except ImportError:
 from newsreap.objects.nntp.Group import Group
 from newsreap.objects.nntp.GroupTrack import GroupTrack
 from newsreap.objects.nntp.Server import Server
+from newsreap.CliOptions import confirmed
 from newsreap.objects.nntp.Common import get_groups
 from newsreap.objects.nntp.Common import get_group_options
 
@@ -295,7 +296,7 @@ def prepare(ctx, groups, watched):
     groups = get_groups(session=session, lookup=groups, watched=watched)
     if not groups:
         logger.error(
-            "No groups were given; name them (see 'nr group list'), or use "
+            "No groups were given; name them (see 'nr group ls'), or use "
             "--watched for the watched ones.")
         exit(1)
 
@@ -524,6 +525,11 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
         exit(1)
 
     if reset:
+        if not confirmed(
+                ctx, 'Remove everything kept of %s (headers, collections and '
+                     'posts) and start over?' % ', '.join(sorted(groups))):
+            click.echo('Nothing was reset.')
+            exit(1)
         reset_groups(ctx, session, groups)
 
     # Track whether every step could be done
@@ -679,7 +685,7 @@ def update_index(ctx, groups, watched, settle):
     which file (and which collection of files) each one belongs to.  A
     collection can span many groups.  Only articles not indexed before are
     looked at.  'nr update search' already does this (unless --no-index
-    is given).  Use 'nr nzb list' to see the results and 'nr nzb save' to
+    is given).  Use 'nr nzb ls' to see the results and 'nr nzb save' to
     turn any of them into an NZB file.
 
     """

@@ -29,6 +29,7 @@ from newsreap.codecs.CodecBase import BIN_MASK
 from newsreap.codecs.CodecBase import E_ERROR
 from newsreap.codecs.CodecBase import E_CRC32
 from newsreap.codecs.CodecBase import CodecBase
+from newsreap.codecs.CodecBase import output_name
 
 # Logging
 import logging
@@ -62,8 +63,23 @@ YENC_RE = re.compile(
     re.IGNORECASE | re.ASCII,
 )
 
+# A yEnc keyword line (=ybegin, =ypart or =yend, in any case) and its
+# attributes, which posters write in any order; name= is always last and
+# runs to the end of the line
+YENC_LINE_RE = re.compile(
+    br'^\s*=y(?P<key>begin|part|end)2?(?P<rest>\s.*)?$',
+    re.IGNORECASE | re.ASCII | re.DOTALL)
+YENC_NAME_RE = re.compile(br'(^|\s)name=', re.IGNORECASE | re.ASCII)
+YENC_ATTRIBUTE_RE = re.compile(
+    br'(?P<name>[a-z0-9]+)=(?P<value>\S*)', re.IGNORECASE | re.ASCII)
+
+# The attributes we use (any other is left out)
+YENC_ATTRIBUTES = frozenset((
+    'part', 'total', 'line', 'size', 'begin', 'end', 'pcrc32', 'crc32'))
+
 # This is applied to the regular expression matches to convert
-# key matches into 1
+# key matches into 1 (YENC_RE is kept as it was; detect() reads lines with
+# YENC_LINE_RE)
 YENC_KEY_MAP = {
     'begin': 'begin', 'key_1': 'key',
     'end': 'end', 'line': 'line',
@@ -416,18 +432,33 @@ class CodecYenc(CodecBase):
         if isinstance(line, str):
             line = fsencode(line)
 
-        yenc_re = YENC_RE.match(line)
+        yenc_re = YENC_LINE_RE.match(line.rstrip(b'\r\n'))
         if not yenc_re:
             return None
 
-        # Merge Results; filenames are decoded the same way the operating
-        # system does so that any byte sequence can be represented
-        f_map = dict((YENC_KEY_MAP[k], fsdecode(v)) for k, v
-                     in yenc_re.groupdict().items() if v)
+        f_map = {'key': yenc_re.group('key').decode('ascii').lower()}
+        rest = yenc_re.group('rest') or b''
+        if f_map['key'] == 'begin':
+            found = YENC_NAME_RE.search(rest)
+            if found:
+                # Filenames are decoded the same way the operating system
+                # does so that any byte sequence can be represented; any
+                # quotes around it are taken off
+                f_map['name'] = basename(fsdecode(
+                    rest[found.end():]).strip().strip('\'"').strip())
+                rest = rest[:found.start()]
+                if not f_map['name']:
+                    # name= with nothing after it isn't yEnc
+                    return None
 
-        # Tidy filename (whitespace)
-        if 'name' in f_map:
-            f_map['name'] = basename(f_map['name']).strip()
+        for entry in YENC_ATTRIBUTE_RE.finditer(rest):
+            name = entry.group('name').decode('ascii').lower()
+            if name in YENC_ATTRIBUTES and name not in f_map:
+                f_map[name] = entry.group('value').decode('ascii')
+                if name not in ('pcrc32', 'crc32') and \
+                        not f_map[name].isdigit():
+                    # A number that isn't one; this isn't yEnc
+                    return None
 
         if relative:
             # detect() relative to what has been decoded
@@ -544,9 +575,9 @@ class CodecYenc(CodecBase):
                     # We're done
                     break
 
-                if _meta['key'] == 'end' and \
-                   len(set(('begin', 'part')) - set(self._meta)) == 2:
-                    # Why did we get an end before a begin or part?
+                if _meta['key'] in ('end', 'part') and \
+                        'begin' not in self._meta:
+                    # Why did we get an end or part before a begin?
                     # Just ignore it and keep going
                     continue
 
@@ -577,22 +608,20 @@ class CodecYenc(CodecBase):
                     # content starts now; thefore we create our binary
                     # instance now
 
-                    if 'name' not in _meta:
-                        # Why did we get a begin before a part
-                        # Just ignore it and keep going
-                        continue
-
                     # Save part no globally if present (for sorting)
                     self._part = _meta.get('part', 1)
 
                     # A new part; its crc32 starts again
                     self._crc = BIN_MASK
 
-                    # Create our binary instance
+                    # Create our binary instance (in our work directory,
+                    # whatever name the article gives; never a file of
+                    # the same name that is already there)
                     self.decoded = NNTPBinaryContent(
-                        filepath=_meta['name'],
+                        filepath=output_name(_meta.get('name')),
                         part=self._part,
                         work_dir=self.work_dir,
+                        unique=True,
                     )
 
                 elif _meta['key'] == 'part':

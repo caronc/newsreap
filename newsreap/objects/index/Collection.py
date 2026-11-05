@@ -12,6 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from sqlalchemy import BigInteger
 from sqlalchemy import Column
 from sqlalchemy import Integer
 from sqlalchemy import SmallInteger
@@ -110,7 +111,7 @@ class Collection(ObjectBase):
     segments = Column(Integer, nullable=False, default=0)
 
     # The size of everything we found (in bytes)
-    size = Column(Integer, nullable=False, default=0)
+    size = Column(BigInteger, nullable=False, default=0)
 
     # When its first and last article were posted
     first_posted = Column(DateTime, index=True)

@@ -15,6 +15,13 @@
 import re
 import sys
 import errno
+from time import monotonic
+
+from importlib.util import find_spec
+from importlib.util import module_from_spec
+
+from gevent import sleep as gevent_sleep
+
 from newsreap.SortedSet import sortedset
 from os import listdir
 from os import makedirs
@@ -420,8 +427,8 @@ def rm(path, *args, **kwargs):
     required.
 
     """
-    if not exists(path):
-        # Nothing more to do
+    if not exists(path) and not islink(path):
+        # Nothing more to do (a link pointing at nothing still goes)
         return True
 
     # We track our recursion level so we don't go in some unexitable loop
@@ -433,10 +440,6 @@ def rm(path, *args, **kwargs):
     elif recursion_count >= RM_RECURSION_LIMIT:
         # Recursive Limit reached
         return False
-
-    if not access(path, W_OK):
-        # Is the error an access error ?
-        chmod(path, S_IRWXU)
 
     if islink(path):
         # symlinks to directories are forbidden (taken from shutils.rmtree()
@@ -453,6 +456,11 @@ def rm(path, *args, **kwargs):
             logger.warning(
                 'Failed to remove link %s' % path)
             return False
+
+    if not access(path, W_OK):
+        # Is the error an access error?  (Never done to a link; that would
+        # change what it points at)
+        chmod(path, S_IRWXU)
 
     if isdir(path):
         names = []
@@ -483,7 +491,7 @@ def rm(path, *args, **kwargs):
                 except OSError:
                     # It's not empty, so recursively enter it
                     if not rm(
-                            fullname, __recursion_level=recursion_count + 1):
+                            fullname, __recursion_count=recursion_count + 1):
                         return False
             else:
                 # We're dealing with file/link
@@ -664,6 +672,64 @@ def load_pylib(module_name, filepath=None):
 
     # We failed if we get here
     return None
+
+
+def plain_subprocess():
+    """
+    Returns a copy of Python's own subprocess module, loaded on its own so
+    gevent's monkey patching never touches it
+    """
+    spec = find_spec('subprocess')
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# Programs (gpg, rar, par2, ...) are started with the subprocess.Popen Python
+# itself ships (see start_program()).  The one gevent swaps in forks in
+# Python, and the child can run our other greenlets for a moment before the
+# program starts: a connection in the middle of a command would send it
+# again on the socket the child shares with us, and its answer would end up
+# in the next article we read.
+Popen = plain_subprocess().Popen
+
+
+def start_program(command, **kwargs):
+    """
+    Starts a program and returns its Popen (see Popen); the keywords are
+    Popen's (ie: stdout=PIPE)
+
+    It is started with posix_spawn, so nothing of ours runs in the new
+    process before the program does (and it is safe with threads running);
+    Python only uses it for a program named by its full path and with
+    close_fds off (what we open is never handed on anyway: Python makes
+    every file it opens non-inheritable).
+    """
+    from shutil import which
+
+    command = [str(part) for part in command]
+    program = command[0] if dirname(command[0]) else which(command[0])
+    if not program:
+        raise FileNotFoundError(errno.ENOENT, 'No such program', command[0])
+
+    return Popen([abspath(program), *command[1:]], close_fds=False, **kwargs)
+
+
+def wait_program(process, timeout=None, step=0.05):
+    """
+    Waits for a program started with start_program() to end while our other
+    greenlets carry on; returns its return code, or None if it is still
+    running after `timeout` seconds.  It is checked on quickly at first,
+    then every `step` seconds.
+    """
+    until = None if timeout is None else monotonic() + timeout
+    pause = 0.001
+    while process.poll() is None:
+        if until is not None and monotonic() >= until:
+            return None
+        gevent_sleep(pause)
+        pause = min(step, pause * 2)
+    return process.returncode
 
 
 def utcnow():

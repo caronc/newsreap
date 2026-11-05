@@ -12,6 +12,8 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from os.path import basename
+
 from .NNTPContent import NNTPContent
 from .Mime import Mime
 from .Mime import MimeResponse
@@ -28,13 +30,19 @@ class NNTPEmptyContent(NNTPContent):
                  begin=None, end=None, total_size=None,
                  work_dir=None, *args, **kwargs):
         """ Intitialize NNTPEmptyContent
+
+        The filepath is only kept as its name; a place holder never reads
+        (or writes) a file, even one of that name that happens to exist.
         """
         super().__init__(
-            filepath=filepath,
+            filepath=None,
             part=part, total_parts=total_parts,
             begin=begin, end=end, total_size=total_size,
             work_dir=work_dir,
             sort_no=5000, *args, **kwargs)
+
+        if filepath and isinstance(filepath, str):
+            self.filename = basename(filepath)
 
     def getvalue(self):
         """

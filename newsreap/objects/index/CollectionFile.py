@@ -12,6 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from sqlalchemy import BigInteger
 from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
@@ -59,11 +60,17 @@ class CollectionFile(ObjectBase):
     # (each part number counted once) and their size in bytes
     segments_expected = Column(Integer, nullable=False, default=1)
     segments = Column(Integer, nullable=False, default=0)
-    size = Column(Integer, nullable=False, default=0)
+    size = Column(BigInteger, nullable=False, default=0)
 
     # When its first and last segment were posted
     first_posted = Column(DateTime)
     last_posted = Column(DateTime)
+
+    # The size and crc32 of the file once put together; learned the first
+    # time it is downloaded whole (None until then), so a download run
+    # again can tell the copy it has is right without fetching anything
+    file_size = Column(BigInteger)
+    crc32 = Column(String(8))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

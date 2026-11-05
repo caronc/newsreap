@@ -323,7 +323,7 @@ def show(ctx, message_ids, local, lines, max_size):
     if not message_ids:
         click.echo(
             "Give the Message-IDs of the articles to show; 'nr search "
-            "--posts' and 'nr search --raw' list them.")
+            "--posts' and 'nr search --articles' list them.")
         exit(1)
 
     settings = ctx['NNTPSettings']

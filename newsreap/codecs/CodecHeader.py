@@ -88,10 +88,12 @@ class CodecHeader(CodecBase):
             # this function
             return None
 
-        # A line starting with a tab continues the header before it (once
-        # there is one); so does one starting with spaces, unless it reads
-        # like a header of its own
-        header_re = None if line[:1] == b'\t' else HEADER_RE.match(line)
+        # A line starting with a space or a tab continues the header before
+        # it once there is one (RFC 5322), even when it holds a colon (ie:
+        # a folded 'Xref:' or 'Subject: Re: ...'); before the first header
+        # it is read as a header of its own
+        header_re = None if self.last_key and line[:1] in (b' ', b'\t') \
+            else HEADER_RE.match(line)
         folded = FOLDED_RE.match(line) \
             if self.last_key and not header_re else None
 

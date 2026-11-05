@@ -138,18 +138,36 @@ nr search holiday photos
 nr search holiday -- -2019
 
 # Every article header, one line each (as a newsreader lists them)
-nr search --raw -g a.b.test2
+nr search --articles -g a.b.test2
+
+# What small posts say (kept by 'nr update --content')
+nr search --posts coffee
+nr search --ibody '*coffee*'         # a body condition searches posts
 ```
 
 On a terminal the results are shown a screen at a time: the up and down
 arrows move a row, space and `b` move a page, `/` finds text and `q`
 quits.  Add `--no-pager` to write them all out (ie: into a file).
 
+What a search finds can be downloaded, handed to another command, or
+removed:
+```bash
+nr search holiday -d                         # download the files found
+nr search holiday -q | xargs nr get          # or download and extract
+nr search holiday -q | xargs nr nzb save     # or save their NZB files
+nr search --articles -g a.b.test2 --iposter '*bot*' --delete
+nr search holiday --json                     # one JSON object each
+```
+`--delete` shows what it found and asks first (`-y` answers yes).
+
 ### 5. Download What You Want
 The number on the left of each search result is its id:
 ```bash
 # Download it, repair and extract it, into ~/Downloads/<its name>
 nr get 42
+
+# Or download what a search finds as it was posted (see Downloading)
+nr search holiday -d
 
 # Or save it as an NZB file for another downloader
 nr nzb save 42 --output ~/Downloads
@@ -207,11 +225,57 @@ What happens:
 - If something can't be opened (a password that isn't known, or damage par2
   couldn't fix), the files are put together and left for you, and nothing
   is removed.
+- A file that isn't all there gets a `.ERRORS` file beside it (ie:
+  `movie.mkv.ERRORS`, as Pan does) listing each part that is missing or
+  damaged, where it goes in the file and its Message-ID.  Run the same
+  download again later: only those parts are asked for again (a server can
+  take a while to receive what was just posted), the download finishes in
+  the same folder, and the `.ERRORS` file goes once the file is whole.
 
 `--no-repair`, `--no-extract` and `--no-cleanup` turn the steps off for one
 run; the `downloads:` section of `config.yaml` sets them for good.  Each
 `nr get` uses its own connections, so running two at once can go over what
 your provider allows.
+
+### Downloading What a Search Finds
+`nr search` can download what it finds straight away, as it was posted.
+Nothing is repaired or extracted.  Each result gets a directory of its own
+in your download directory (`download_dir` in `config.yaml`, or
+`-o`/`--download-dir` for one run).  Give as many of these as you like:
+
+| Option | Short | What you get |
+|---|---|---|
+| `--download` | `-d` | The files the articles carry (rar, zip, mkv, ...), put back together; articles that are only text are left out |
+| `--download-text` | `-x` | A `.txt` file (in `text/`) for each article that is only text, with its subject, poster, date and groups on top; articles carrying a file are left out |
+| `--download-articles` | `-a` | Every article exactly as the server sent it, as an `.eml` file (in `articles/`) |
+| `--download-nzb` | `-z` | An NZB file of each result, beside its directory |
+
+```bash
+# The files, and an NZB file of each
+nr search holiday -d -z
+
+# Only the readable posts of a group (none of the binaries)
+nr search --articles -g alt.binaries.test -x
+
+# Download, then remove from NewsReap what was all saved
+nr search holiday -d --delete
+```
+
+- It shows what it found and its size, and asks first (`-y` answers yes).
+- Each article is fetched once, whatever you asked for.
+- **Running the same download again only fetches what is missing.**  The
+  first download notes each file's size and crc32 (and each article's) in
+  the index, so a file still there and right is skipped without asking
+  the server.  A file that changed, or was cut short, is fetched again.
+  Once an article is known to carry a file, `-x` doesn't fetch it again.
+- A file missing a part is still saved (with zeros where the part goes),
+  so you can repair it with par2 yourself, and a `.ERRORS` file beside it
+  says which parts are missing or damaged.  The command then says what
+  couldn't be saved and exits with 1, and `--delete` removes only what was
+  all saved.  Run it again later to try what is missing; the `.ERRORS`
+  file goes once the file is whole.
+- If the index can't be written to, you are told once and the downloads
+  carry on; the next run just checks by fetching again.
 
 A Message-ID downloads that one article as it is:
 ```bash
@@ -386,9 +450,11 @@ nr search --oldest-first
 nr search holiday photos
 
 # Collections are searched unless told otherwise; --posts (what
-# --content kept) and --raw (cached headers) can be added, each shown
-# under its own heading
+# --content kept) and --articles (every cached header) can be added, each
+# shown under its own heading.  A condition only posts have (--ibody)
+# searches posts on its own.
 nr search holiday --collections --posts
+nr search --ibody '*coffee*'
 
 # A keyword starting with - leaves out what has it (put -- before it)
 nr search holiday -- -2019
@@ -461,7 +527,7 @@ Keys are then picked up by `nr update <group> --content`; add `--force`
 once to read the posts you kept before turning it on.
 ```bash
 # The keys kept (and how many posts each is tied to)
-nr pgp list
+nr pgp ls
 
 # Everything about a key: by its key ID, fingerprint or part of a name
 nr pgp show 'someone@example.com'
@@ -529,6 +595,37 @@ cat << _EOF > /etc/cron.d/newsreap
 */20 * * * * someuser nr update --watched
 _EOF
 ```
+
+### Housekeeping
+Every group of commands uses the same words (as docker does): `ls` to
+list, `add` and `rm`, `show` for everything about one, and
+`import`/`export`:
+```bash
+nr alias ls
+nr filter rm spam
+nr pgp ls
+```
+(The older names, ie: `list`, `remove` and `forget`, still work.)
+
+`nr prune` clears out what is no longer needed, but only what you name.
+It shows what would go and asks first:
+```bash
+# Downloads that didn't finish (kept so they can carry on), untouched 14 days
+nr prune downloads --days 14
+
+# Files a stopped run left in the work directory
+nr prune work
+
+# Indexed headers posted over 90 days ago (their collections stay)
+nr prune headers --days 90 --dry-run
+
+# All three, as the configuration says
+nr prune all
+```
+Without `--days`, each one uses the `prune_downloads`, `prune_work` and
+`raw_retention` settings.  Out of the box, downloads and headers are kept
+until you ask, and work files go after a day.  Finished downloads are never
+touched.
 
 ## Developers
 Tests, linting and builds are all run through [tox](https://tox.wiki/):

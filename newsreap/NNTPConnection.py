@@ -112,9 +112,13 @@ NNTP_FETCH_BY_DATE_MAX_MISSES = 20
 
 # All responses are handled from usenet via the following:
 NNTP_RESPONSE_RE = re.compile(
-    r'^[^0-9]*(?P<code>[1-9][0-9]{2})[\s:]*(?P<desc>.*[^\s])\s*$',
+    r'^[^0-9]*(?P<code>[1-9][0-9]{2})(?:[\s:]+(?P<desc>.*[^\s]))?\s*$',
     re.MULTILINE | re.ASCII,
 )
+
+# The longest status line waited on for its line ending (anything longer is
+# garbage, and handled as it is)
+NNTP_STATUS_MAX_LENGTH = 2048
 
 # We use this check when send() is called so that we can prevent
 # personal content from being sent to log files
@@ -2103,6 +2107,12 @@ class NNTPConnection(SocketBase):
         elif isinstance(decoders, CodecBase):
             decoders = [decoders, ]
 
+        # How much is read before what has arrived is worked on
+        buffer_size = self.MAX_BUFFER_SIZE
+
+        # A compressed reply is one stream, however many reads it takes
+        dc_obj = None
+
         if len(decoders):
             # If at least 1 decoder is defined, we scan it for it's
             # max_bytes() value which tells us the maximum # of bytes we're
@@ -2115,13 +2125,11 @@ class NNTPConnection(SocketBase):
             # be less than 2048
             max_bytes = max([d.max_bytes() for d in decoders])
             if max_bytes > 0:
-                if max_bytes < NNTP_MIN_READ_BUFFER_SIZE:
-                    self.MAX_BUFFER_SIZE = NNTP_MIN_READ_BUFFER_SIZE
-                else:
-                    self.MAX_BUFFER_SIZE = min(
-                        [max_bytes, self.MAX_BUFFER_SIZE])
+                # Only for this reply; the next one reads as much as ever
+                buffer_size = max(NNTP_MIN_READ_BUFFER_SIZE, min(
+                    max_bytes, buffer_size))
 
-        logger.debug('Read Buffer set to %d bytes' % self.MAX_BUFFER_SIZE)
+        logger.debug('Read Buffer set to %d bytes' % buffer_size)
 
         #  We track the last codec activated using the codec_active
         #  variable.
@@ -2141,7 +2149,7 @@ class NNTPConnection(SocketBase):
 
             try:
                 data = self.read(
-                    max_bytes=self.MAX_BUFFER_SIZE - total_bytes,
+                    max_bytes=buffer_size - total_bytes,
                     timeout=max(idle_limit - (monotonic() - last_data), 0.01)
                     if idle_limit else timeout, retry_wait=None,
                 )
@@ -2227,15 +2235,20 @@ class NNTPConnection(SocketBase):
 
                 # Extract Header Response
                 data = self._buffer.readline()
+                if not data.endswith(b'\n') and self.connected and \
+                        len(data) < NNTP_STATUS_MAX_LENGTH:
+                    # Only part of the status line has arrived; wait for the
+                    # rest before reading it
+                    continue
 
                 # Only the first time do we remove the first entry
                 # because this is our header
                 match = NNTP_RESPONSE_RE.match(
                     data.decode(self.encoding).strip())
                 if match:
-                    # Generate Reponse code
+                    # Generate Reponse code (a code on its own is fine too)
                     self.last_resp_code = int(match.group('code'))
-                    self.last_resp_str = match.group('desc')
+                    self.last_resp_str = match.group('desc') or ''
 
                     # Adjust head ptr to end of line
                     head_ptr = self._buffer.tell()
@@ -2327,7 +2340,7 @@ class NNTPConnection(SocketBase):
 
             # We have multi-line code to store fill our buffer before
             # proceeding.
-            if can_read and total_bytes < self.MAX_BUFFER_SIZE:
+            if can_read and total_bytes < buffer_size:
                 # Keep storing content until we've either reached the end
                 # or filled our buffer
                 # logger.debug('_recv() Data pending on server...')
@@ -2393,8 +2406,11 @@ class NNTPConnection(SocketBase):
                     # Now we read what we can from the buffer
                     data = self._buffer.read()
 
-                # Check for end of line
-                eol_results = EOL_RE.search(data)
+                # Check for end of line (in a compressed reply a line ending
+                # is just more of the compressed data; only the end of data
+                # marker above counts there)
+                eol_results = None if self.payload_gzipped \
+                    else EOL_RE.search(data)
                 if eol_results:
                     # We can truncate here to trim the EOL off
                     self._buffer.truncate(
@@ -2437,45 +2453,21 @@ class NNTPConnection(SocketBase):
             tail_ptr = total_bytes
 
             if not self.payload_gzipped and \
-               total_bytes >= self.MAX_BUFFER_SIZE and not eol:
-                # We have a full buffer and there is most likely
-                # a lot more content to still download; we need to find
-                # the last new line
-
-                # Number of characters to look back (chunk):
-                chunk_size = self.READBACK_CHUNK_SIZE
-
-                # Current Matched offset (<0 means no match yet)
-                offset = -1
-
-                # Our reference pointer
-                ref_ptr = tail_ptr - head_ptr
-                while offset < 0:
-                    # Keep iterating backwards by chunk sizes
-                    # until we get a match
-
-                    # a few checks to make sure we don't look past
-                    # our head_ptr
-                    chunk_size = min(ref_ptr - head_ptr, chunk_size)
-                    ref_ptr -= (chunk_size + 1)
-
-                    if ref_ptr < head_ptr:
-                        # Nothing more to look back at; we reached
-                        # the head of our buffer. do nothing; just let
-                        # process all of the data we received.
-                        break
-
-                    chunk_ptr = self._buffer.seek(ref_ptr, SEEK_SET)
-                    offset = self._buffer.read(chunk_size).rfind(b'\n')
-                    if offset >= 0:
-                        # We found the new line; safe our offset and break
-                        tail_ptr = offset + chunk_ptr
-                        break
+               total_bytes >= buffer_size and not eol:
+                # We have a full buffer and there is most likely a lot more
+                # content to still download; only the lines that are whole
+                # are worked on now (up to and including the last line
+                # ending), and the rest waits for what comes next.  With no
+                # line ending at all, everything is worked on.
+                found = self._buffer.getvalue().rfind(
+                    b'\n', head_ptr, total_bytes)
+                if found >= 0:
+                    tail_ptr = found + 1
 
             if not self.payload_gzipped and not self.article_eod \
                     and (tail_ptr - head_ptr) > 0 \
-                    and total_bytes < self.MAX_BUFFER_SIZE \
-                    and tail_ptr < self.MAX_BUFFER_SIZE and self.can_read(1):
+                    and total_bytes < buffer_size \
+                    and tail_ptr < buffer_size and self.can_read(1):
                 # Astraweb is absolutely terrible for sending a little
                 # bit more data a few seconds later. This is a final
                 # call to try to handle these stalls just before the last
@@ -2489,7 +2481,8 @@ class NNTPConnection(SocketBase):
             if (tail_ptr - head_ptr) > 0:
                 if self.payload_gzipped is True:
 
-                    dc_obj = decompressobj()
+                    if dc_obj is None:
+                        dc_obj = decompressobj()
                     try:
                         self._data.write(self._unstuff(dc_obj.decompress(
                             self._buffer.read(tail_ptr - head_ptr),
@@ -2504,6 +2497,10 @@ class NNTPConnection(SocketBase):
                             '_recv() %d byte(s) ZLIB decompression failure.'
                             % (_bytes),
                         )
+
+                        # The rest of the reply is still on its way; a new
+                        # connection starts the next command clean
+                        self.close()
 
                         # Convert our response to that of an response Fetch
                         # Error
@@ -2520,8 +2517,13 @@ class NNTPConnection(SocketBase):
                 # processed from it
                 self._buffer = BytesIO(self._buffer.read())
 
-                # Correct Total Length
-                total_bytes = self._buffer.tell()
+                # Correct Total Length (what is left; a new buffer starts at
+                # its top, so its end is found first)
+                total_bytes = self._buffer.seek(0, SEEK_END)
+
+                # What is left starts at the top of the new buffer (the
+                # status line was only in the first one)
+                head_ptr = 0
 
             ##################################################################
             #                                                                #
@@ -2663,6 +2665,13 @@ class NNTPConnection(SocketBase):
                         # abort for peaking purposes; so we're done now.
                         self.close()
                         return response
+
+            if d_head >= self._data_len:
+                # Everything received so far has been handled; what comes
+                # next is all that is left to do (otherwise a reply bigger
+                # than our buffer is handled again from its start)
+                self._data.seek(0, SEEK_SET)
+                self._data.truncate(0)
 
         # Track lines processed
         self.line_count += len(self.lines)

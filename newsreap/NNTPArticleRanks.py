@@ -34,9 +34,11 @@ RANK_CHUNK_SIZE = 500
 
 def rank_key(message_id):
     """
-    Returns a Message-ID the way ranks are kept (without its < and >)
+    Returns a Message-ID the way ranks are kept (without its < and >, and
+    no longer than its column), the same way every time it is saved or
+    looked up
     """
-    return (message_id or '').strip().strip('<>')
+    return (message_id or '').strip().strip('<>')[:250]
 
 
 class NNTPArticleRanks:
@@ -90,7 +92,7 @@ class NNTPArticleRanks:
                 .filter(ArticleRank.message_id.in_(chunk))\
                 .delete(synchronize_session=False)
 
-            kept = [{'message_id': key[:250], 'score': rows[key][0],
+            kept = [{'message_id': key, 'score': rows[key][0],
                      'tags': rows[key][1]}
                     for key in chunk if rows[key][0] or rows[key][1]]
             if kept:

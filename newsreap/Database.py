@@ -55,6 +55,43 @@ MEMORY_DATABASE_ENGINE = 'sqlite:///:memory:'
 Session = sessionmaker(autoflush=True, expire_on_commit=False)
 
 
+def sqlite_file(engine):
+    """
+    Returns the file an SQLite database URL (or a plain path) names; None
+    for any other database, or one kept in memory
+    """
+    engine = (engine or '').strip()
+    if engine.startswith('sqlite:///'):
+        engine = engine[len('sqlite:///'):]
+
+    elif '://' in engine:
+        return None
+
+    return engine if engine and engine != ':memory:' else None
+
+
+def sqlite_optimize(path):
+    """
+    Compacts an SQLite database file (VACUUM) and brings what it knows of
+    its tables up to date (ANALYZE), so searches pick the best way to
+    look; returns its size (bytes) before and after
+    """
+    import sqlite3
+    from os.path import getsize
+
+    before = getsize(path)
+    connection = sqlite3.connect(path, timeout=30)
+    try:
+        connection.execute('VACUUM')
+        connection.execute('ANALYZE')
+        connection.commit()
+
+    finally:
+        connection.close()
+
+    return before, getsize(path)
+
+
 def sqlite_tuned(engine):
     """
     Sets up every connection of an SQLite engine for heavy use (call it
@@ -198,7 +235,14 @@ class Database:
             logger.debug('Preparing engine: %s' % self._engine_str)
             # Note: echo is always set to False, logging is handled by NewsReap
             #       and not by SQLAlchemy
-            self._engine = create_engine(engine, echo=False)
+            options = {}
+            if str(engine).split(':', 1)[0] == 'postgresql+psycopg2':
+                # Many rows changed at once (ie: what a download learned)
+                # go in batches, not a round trip each (psycopg 3, the
+                # usual driver, already sends them together)
+                options['executemany_mode'] = 'values_plus_batch'
+
+            self._engine = create_engine(engine, echo=False, **options)
             if self._engine.dialect.name == 'sqlite':
                 # What our searches need
                 sqlite_functions(self._engine)

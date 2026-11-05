@@ -202,7 +202,7 @@ def show_groups(settings, session, index):
     if not rows:
         click.echo(
             "  Nothing fetched yet; run 'nr update <group> --newest 100000' "
-            "(see 'nr group list' for the groups).")
+            "(see 'nr group ls' for the groups).")
         return rows
 
     click.echo(GROUP_LINE % (

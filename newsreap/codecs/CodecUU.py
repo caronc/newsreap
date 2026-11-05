@@ -26,6 +26,7 @@ from newsreap.NNTPAsciiContent import NNTPAsciiContent
 from newsreap.Utils import SEEK_SET
 from newsreap.Utils import SEEK_END
 from newsreap.codecs.CodecBase import CodecBase
+from newsreap.codecs.CodecBase import output_name
 
 # Logging
 import logging
@@ -43,7 +44,7 @@ EOM = '`'
 UUENCODE_RE = re.compile(
     # Begin Entry
     br'^\s*((?P<key_1>begin)\s+'
-    br'(?P<perm>[0-9]{3,4})?[\s\'"]*(?P<name>.+)[\'"]*|'
+    br'(?P<perm>[0-7]{3,4})\s+[\'"]*(?P<name>.+?)[\'"]*|'
 
     # End Entry(s)
     br'(?P<key_2>end)|'
@@ -122,8 +123,8 @@ class CodecUU(CodecBase):
 
         if mem_buf > UUENCODE_BLOCK_SIZE:
             logger.warning(
-                "mem_buf (%d) reduced to %d due to uuencode limitations" %
-                mem_buf, UUENCODE_BLOCK_SIZE,
+                "mem_buf (%d) reduced to %d due to uuencode limitations" % (
+                    mem_buf, UUENCODE_BLOCK_SIZE),
             )
             mem_buf = UUENCODE_BLOCK_SIZE
 
@@ -199,6 +200,9 @@ class CodecUU(CodecBase):
             in uuencode_re.groupdict().items() if v
         )
 
+        # BEGIN and END are the same keys
+        f_map['key'] = f_map['key'].lower()
+
         if relative:
             # detect() relative to what has been decoded
             if f_map['key'] in self._meta:
@@ -259,7 +263,8 @@ class CodecUU(CodecBase):
                     # we're done
                     break
 
-                if _meta['key'] == 'end' and 'begin' not in self._meta:
+                if _meta['key'] in ('end', EOM) and \
+                        'begin' not in self._meta:
                     # Why did we get an end before a begin?
                     # Just ignore it and keep going
                     continue
@@ -283,15 +288,13 @@ class CodecUU(CodecBase):
 
                 elif _meta['key'] == 'begin':
 
-                    if 'name' not in _meta:
-                        # Why did we get a begin before a part
-                        # Just ignore it and keep going
-                        continue
-
-                    # Create our binary instance
+                    # Create our binary instance (in our work directory,
+                    # whatever name the article gives; never a file of
+                    # the same name that is already there)
                     self.decoded = NNTPBinaryContent(
-                        filepath=_meta['name'],
+                        filepath=output_name(_meta.get('name')),
                         work_dir=self.work_dir,
+                        unique=True,
                     )
 
                     # Open our file for writing

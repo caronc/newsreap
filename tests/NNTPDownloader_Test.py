@@ -154,7 +154,7 @@ def test_files_are_put_together_and_placed(tmp_path, usenet):
 
     # Again: a directory of its own beside the first
     assert get.download(nzb) is True
-    assert get.folder == str(tmp_path / 'Downloads' / 'release (2)')
+    assert get.folder == str(tmp_path / 'Downloads' / 'release.2')
 
 
 def test_a_stopped_download_carries_on_where_it_left_off(tmp_path, usenet):
@@ -183,17 +183,28 @@ def test_a_stopped_download_carries_on_where_it_left_off(tmp_path, usenet):
     assert (get.fetched, get.failed, get.damaged) == (3, 1, 1)
     assert 'missing or damaged' in get.problem
 
-    # What could be put together is there to see, and nothing was removed
-    assert os.path.isfile(os.path.join(get.folder, 'notes.txt'))
+    # What could be put together is there to see (with what is wrong with
+    # it beside it), and nothing was removed
+    folder = get.folder
+    assert os.path.isfile(os.path.join(folder, 'notes.txt'))
+    with open(os.path.join(folder, 'notes.txt.ERRORS')) as fp:
+        errors = fp.read()
+    assert '<notes.txt.2@example.com>: it couldn\'t be fetched' in errors
+    assert '<notes.txt.3@example.com>: it is damaged' in errors
+    assert 'Part 1 ' not in errors
     assert os.path.isdir(get.staging)
 
+    # Again: only what is wrong is fetched, it is finished in the same
+    # folder, and the .ERRORS file goes
     before = len(server.commands())
     assert get.download(nzb) is True, get.problem
     again = {c.split('<', 1)[1].rstrip('>')
              for c in server.commands()[before:] if c.startswith('ARTICLE')}
     assert again == {'notes.txt.2@example.com', 'notes.txt.3@example.com'}
     assert get.resumed == 2
-    assert (tmp_path / 'Downloads' / 'release (2)' / 'notes.txt'
+    assert get.folder == folder
+    assert os.listdir(folder) == ['notes.txt']
+    assert (tmp_path / 'Downloads' / 'release' / 'notes.txt'
             ).read_bytes() == NOTES
 
 
@@ -221,7 +232,7 @@ def test_parts_cut_short_or_lost_are_fetched_again(tmp_path, usenet):
     assert get.download(nzb) is True
     assert len([c for c in server.commands()[before:]
                 if c.startswith('ARTICLE')]) == 1
-    assert (tmp_path / 'Downloads' / 'release (2)' / 'notes.txt'
+    assert (tmp_path / 'Downloads' / 'release' / 'notes.txt'
             ).read_bytes() == NOTES
 
 
@@ -453,3 +464,250 @@ def test_downloading_from_the_command_line(tmp_path):
         assert (tmp_path / 'out' / 'release' / 'notes.txt').read_bytes() == \
             NOTES
         assert os.listdir(str(tmp_path / 'cache' / 'downloads'))
+
+
+@pytest.mark.parametrize('name, tidied', [
+    ('  My   Holiday!! $$ (2019)  ', 'My.Holiday.2019'),
+    ('Ubuntu-16.04.1 [1/50] "x.rar"', 'Ubuntu-16.04.1.1.50.x.rar'),
+    ('a . . b', 'a.b'),
+    ('tab\there', 'tab.here'),
+    ('...hidden', 'hidden'),
+    ('../../etc/passwd', 'etc.passwd'),
+    ('!!!', 'download'),
+])
+def test_names_we_make_are_easy_to_use(name, tidied):
+    """
+    Names made for what is downloaded have nothing a shell treats
+    specially, a period for each run of whitespace, no runs of periods and
+    nothing hidden or outside the download directory
+    """
+    from newsreap.NNTPDownloader import tidy_name
+    assert tidy_name(name) == tidied
+
+
+def test_posted_files_keep_their_names(tmp_path, usenet):
+    """
+    The directory is named tidily, but the files keep the names they were
+    posted with (par2 looks for them by those names)
+    """
+    server, downloader = usenet
+    nzb = write_nzb(tmp_path / 'My Release!.nzb', [
+        post(server, tmp_path, 'my notes (1).txt', NOTES)])
+
+    get = downloader()
+    assert get.download(nzb) is True, get.problem
+    assert get.folder == str(tmp_path / 'Downloads' / 'My.Release')
+    assert os.listdir(get.folder) == ['my notes (1).txt']
+
+
+def odd_nzb(path, segments, subject='&quot;secret.txt&quot; yEnc (1/1)'):
+    """
+    Writes an NZB file of one file with the segments given (as XML)
+    """
+    path.write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">'
+        '<file poster="x" date="1" subject="%s"><groups><group>%s</group>'
+        '</groups><segments>%s</segments></file></nzb>' % (
+            subject, GROUP, segments))
+    return str(path)
+
+
+def test_a_file_an_nzb_names_is_never_read(tmp_path, monkeypatch):
+    """
+    The file name a subject gives is only a name: a file of that name in
+    the directory we run from is never read in as part of the download
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'secret.txt').write_text('my secret')
+    nzb = odd_nzb(tmp_path / 'x.nzb',
+                  '<segment bytes="10" number="1">a@b</segment>')
+
+    files, _, _ = NNTPDownloader.read(nzb)
+    assert [(f['name'], f['segments']) for f in files] == [
+        ('secret.txt', [(1, 'a@b')])]
+
+
+def test_odd_segments_dont_stop_an_nzb_being_read(tmp_path):
+    """
+    A segment number that isn't one follows the one before, and a segment
+    without a Message-ID is left out
+    """
+    nzb = odd_nzb(tmp_path / 'x.nzb', ''.join((
+        '<segment bytes="10" number="1">a@b</segment>',
+        '<segment bytes="10" number="x">c@d</segment>',
+        '<segment bytes="10" number="3"></segment>',
+        '<segment bytes="zz">e@f</segment>')))
+
+    files, _, _ = NNTPDownloader.read(nzb)
+    assert files[0]['segments'] == [(1, 'a@b'), (2, 'c@d'), (3, 'e@f')]
+
+
+def test_a_file_no_server_has_makes_the_download_fail(tmp_path, usenet):
+    """
+    A file none of whose articles can be had is missing from the
+    download, so it isn't done (and nothing is removed)
+    """
+    server, downloader = usenet
+    readme = post(server, tmp_path, 'readme.nfo', README)
+    server.on(r'^ARTICLE <readme.nfo.1@example.com>$',
+              Reply('430 No such article'))
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        post(server, tmp_path, 'notes.txt', NOTES, parts=2), readme])
+
+    get = downloader()
+    assert get.download(nzb) is False
+    assert 'missing' in get.problem
+    assert os.path.isdir(get.staging)
+
+    # Nothing of it came; what is wrong with it is still said
+    assert sorted(os.listdir(get.folder)) == [
+        'notes.txt', 'readme.nfo.ERRORS']
+    with open(os.path.join(get.folder, 'readme.nfo.ERRORS')) as fp:
+        assert '<readme.nfo.1@example.com>: no server has it' in fp.read()
+
+    # A server that has it now (ie: it reached it late) finishes it, in
+    # the same folder; the .ERRORS file goes
+    server._rules.clear()
+    assert get.download(nzb) is True, get.problem
+    assert sorted(os.listdir(get.folder)) == ['notes.txt', 'readme.nfo']
+
+
+def test_files_of_the_same_name_dont_overwrite_each_other(tmp_path, usenet):
+    """
+    Two files posted under the same name are both kept (the second one
+    gets ' (2)')
+    """
+    server, downloader = usenet
+    first = post(server, tmp_path, 'readme.nfo', README)
+    second_id = 'readme.nfo.again@example.com'
+    path = tmp_path / 'again.msg'
+    path.write_bytes(yenc_article('readme.nfo', NOTES[:300], 1, 1, 0, 300,
+                                  second_id))
+    server.add_article(second_id, str(path), GROUP)
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        first, ('readme.nfo', [(1, second_id)])])
+
+    get = downloader()
+    assert get.download(nzb) is True, get.problem
+    assert sorted(os.listdir(get.folder)) == ['readme (2).nfo', 'readme.nfo']
+    assert {(tmp_path / 'Downloads' / 'release' / name).read_bytes()
+            for name in ('readme.nfo', 'readme (2).nfo')} == {
+        README, NOTES[:300]}
+
+
+def staged(tmp_path, parts):
+    """
+    Returns a downloader with parts already fetched into its staging
+    directory, and its staging database session
+
+    - parts: [(message_id, number, begin, end, data)] each
+    """
+    from newsreap.NNTPGetDatabase import NNTPGetDatabase
+    from newsreap.objects.get.DownloadedSegment import DownloadedSegment
+
+    get = NNTPDownloader(None, str(tmp_path), str(tmp_path / 'out'))
+    get.staging = str(tmp_path / 'staging')
+    for folder in ('parts', 'files', 'tmp'):
+        os.makedirs(os.path.join(get.staging, folder))
+
+    db = NNTPGetDatabase(engine='sqlite:///%s' % (tmp_path / 'x.db'),
+                         reset=False)
+    session = db.session()
+    for message_id, number, begin, end, data in parts:
+        path = os.path.join(get.staging, 'parts', message_id)
+        with open(path, 'wb') as fp:
+            fp.write(data)
+        session.merge(DownloadedSegment(
+            message_id=message_id, filename='x.bin', number=number,
+            begin=begin, end=end, path=path, valid=True))
+    session.commit()
+    return get, db, session
+
+
+def test_parts_that_dont_say_where_they_go_follow_each_other(tmp_path):
+    """
+    Parts that don't say where they go (uuencoded ones) are put one after
+    another in part order; one missing leaves the rest unplaced, so the
+    file isn't complete
+    """
+    get, db, session = staged(tmp_path, [
+        ('b', 2, 0, 4, b'BBBB'), ('a', 1, 0, 4, b'AAAA')])
+    try:
+        found = get._assemble(session, [
+            {'name': 'x.bin', 'segments': [(1, 'a'), (2, 'b')]}])
+        path, complete = found['x.bin']
+        assert complete is True
+        with open(path, 'rb') as fp:
+            assert fp.read() == b'AAAABBBB'
+
+        found = get._assemble(session, [
+            {'name': 'x.bin', 'segments': [(1, 'a'), (2, 'b'), (3, 'c')]}])
+        assert found['x.bin'][1] is False
+
+    finally:
+        db.close()
+
+
+def test_a_part_placed_beyond_any_file_is_damaged(tmp_path):
+    """
+    A part claiming to sit beyond 1 TiB isn't written (no huge file is
+    made), and the file isn't complete
+    """
+    get, db, session = staged(tmp_path, [
+        ('a', 1, 0, 4, b'AAAA'), ('b', 2, 10 ** 13, 10 ** 13 + 4, b'BBBB')])
+    try:
+        path, complete = get._assemble(session, [
+            {'name': 'x.bin', 'segments': [(1, 'a'), (2, 'b')]}])['x.bin']
+        assert complete is False
+        assert os.path.getsize(path) == 4
+
+    finally:
+        db.close()
+
+
+def test_names_too_long_for_a_file_system_are_cut_down():
+    """
+    A name longer than a file system allows keeps its extension and as
+    much of the rest as fits (counted in bytes, never cutting a character
+    in half)
+    """
+    from newsreap.NNTPDownloader import safe_name
+    from newsreap.NNTPDownloader import tidy_name
+
+    for made in (safe_name('a' * 300 + '.part01.rar'),
+                 tidy_name('é' * 300 + '.mkv'),
+                 safe_name('x' * 400)):
+        assert len(made.encode('utf-8')) <= 230
+    assert safe_name('a' * 300 + '.part01.rar').endswith('.rar')
+    assert tidy_name('é' * 300 + '.mkv').endswith('é.mkv')
+
+
+def test_errors_files_that_cant_be_written_or_removed_only_warn(
+        tmp_path, caplog):
+    """
+    A .ERRORS file that can't be written (or removed) is warned about, and
+    nothing else is held up
+    """
+    import logging
+    from newsreap.Logging import NEWSREAP_ENGINE
+    from newsreap.NNTPDownloader import clear_errors
+    from newsreap.NNTPDownloader import write_errors
+
+    caplog.set_level(logging.WARNING, logger=NEWSREAP_ENGINE)
+    target = tmp_path / 'notes.txt'
+    (tmp_path / 'notes.txt.ERRORS').mkdir()
+
+    assert write_errors(str(target), ['Part 2 <a@b>: gone']) is False
+    clear_errors(str(target))
+    assert [r.getMessage().split()[:3] for r in caplog.records] == [
+        ['Could', 'not', 'write'], ['Could', 'not', 'remove']]
+    assert not (tmp_path / 'notes.txt.ERRORS.tmp').exists()
+
+    # And when all is well, it is written and then cleared
+    (tmp_path / 'notes.txt.ERRORS').rmdir()
+    assert write_errors(str(target), ['Part 2 <a@b>: gone']) is True
+    assert 'Part 2 <a@b>: gone' in (tmp_path / 'notes.txt.ERRORS').read_text()
+    clear_errors(str(target))
+    assert not (tmp_path / 'notes.txt.ERRORS').exists()
+    clear_errors(str(target))

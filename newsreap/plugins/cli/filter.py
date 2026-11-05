@@ -16,11 +16,11 @@
 #   nr filter purge --iposter '*@spam.example' -n   # see what would go
 #   nr filter purge --iposter '*@spam.example' --save
 #                                    # remove it, and keep dropping it later
-#   nr filter purge                  # apply every saved rule again
+#   nr filter purge --saved          # apply every saved rule again
 #   nr filter score --isubject '*.par2*' --score 10 --tag recovery --save
 #   nr filter rescore                # work scores and tags out again
-#   nr filter list
-#   nr filter remove <name>
+#   nr filter ls
+#   nr filter rm <name>
 #
 # Rules live in the filters directory (next to config.yaml): every .yaml
 # (or .yml) file in it is read, in the order of their names (00-spam.yaml
@@ -44,6 +44,7 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
+from newsreap.CliOptions import confirmed
 from newsreap.CliOptions import matching
 from newsreap.NNTPFilter import FILTERS_KEY
 from newsreap.NNTPFilter import NNTPFilter
@@ -349,12 +350,14 @@ def save_rule(ctx, filters, rule, save, dry_run):
 @click.option('--save', is_flag=True,
               help='Keep the rule (in saved.yaml of the filters '
                    'directory) so later scans drop the same things.')
+@click.option('--saved', is_flag=True,
+              help='Apply every saved rule again (instead of conditions).')
 @click.option('--nzb', is_flag=True,
               help='Include collections imported from NZB files.')
 @click.option('--show', type=click.IntRange(min=0), default=10,
               help='How many examples of what is removed to show.')
 @click.pass_obj
-def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
+def filter_purge(ctx, conditions, score, dry_run, save, saved, nzb, show):
     """
     Remove articles everywhere they are kept.
 
@@ -369,6 +372,7 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
         nr filter purge --isubject '*casino*' --isubject '!*review*'
         nr filter purge --ibody '*buy now*' --tagged '!trusted' --save
         nr filter purge --score '<-50' --dry-run
+        nr filter purge --saved --dry-run
 
     What matches is removed from the header caches, the index and the
     archive; try it with --dry-run first, then add --save to keep dropping
@@ -377,24 +381,39 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
     scored after the header rules have had their say; run this again to
     clear out what scores low.  Bodies are only known for
     archived posts (and file names for indexed and archived ones), so
-    those conditions only reach them.  Without conditions, every saved rule
-    (every file of the filters directory) is applied again, and scores and tags are worked out
-    again (from 0) too.
+    those conditions only reach them.  With --saved instead of conditions,
+    every saved rule (every file of the filters directory) is applied
+    again, and scores and tags are worked out again (from 0) too.
 
     """
     groups, name = conditions['groups'], conditions['name']
     filters = load_filters(ctx)
     rule = make_rule(ctx, FilterAction.Drop, conditions, score=score)
 
+    if rule is not None and saved:
+        logger.error('Give conditions or --saved, not both.')
+        exit(1)
+
     if rule is None:
         if save or name:
             logger.error('--save and --name need a condition to save.')
+            exit(1)
+
+        if not saved:
+            # Nothing is removed without saying what
+            click.echo(click.get_current_context().get_help())
             exit(1)
 
         if not filters.drops and not filters.scores:
             click.echo(
                 'There are no saved rules in %s.' % (
                     ctx['NNTPSettings'].filters_file()))
+            return
+
+        if not dry_run and not confirmed(
+                ctx, 'Remove everything your saved rules drop, everywhere it '
+                     'is kept (--dry-run shows what first)?'):
+            click.echo('Nothing was removed.')
             return
 
         # Every saved rule; scores and tags are worked out again too
@@ -411,6 +430,12 @@ def filter_purge(ctx, conditions, score, dry_run, save, nzb, show):
         exit(1)
 
     rule.name = filters.unique_name(rule.name)
+
+    if not dry_run and not confirmed(
+            ctx, 'Remove what matches, everywhere it is kept (--dry-run '
+                 'shows what first)?'):
+        click.echo('Nothing was removed.')
+        return
 
     # Only this rule; the scores and tags stored are what it sees
     purger = NNTPPurger(
@@ -505,7 +530,7 @@ def filter_rescore(ctx, groups, dry_run, nzb):
     run(ctx, purger, groups)
 
 
-@click.command(name='list')
+@click.command(name='ls')
 @click.pass_obj
 def filter_list(ctx):
     """
@@ -528,7 +553,7 @@ def filter_list(ctx):
         click.echo(filters.to_yaml(filters.rules_of(source)).rstrip())
 
 
-@click.command(name='remove')
+@click.command(name='rm')
 @click.argument('names', nargs=-1, required=True)
 @click.pass_obj
 def filter_remove(ctx, names):

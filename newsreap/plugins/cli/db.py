@@ -13,6 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 import click
+import sqlite3
 
 import sys
 from os import listdir
@@ -20,6 +21,7 @@ from os import unlink
 from os.path import abspath
 from os.path import dirname
 from os.path import join
+from os.path import isdir
 from os.path import isfile
 from sqlalchemy.exc import OperationalError
 try:
@@ -34,6 +36,10 @@ from newsreap.objects.nntp.Group import Group
 
 from newsreap.plugins.cli.status import index_session
 from newsreap.plugins.cli.status import show_groups
+from newsreap.CliOptions import confirmed
+from newsreap.Database import sqlite_file
+from newsreap.Database import sqlite_optimize
+from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 from newsreap.Utils import pushd
 from newsreap.Utils import bytes_to_strsize
 
@@ -93,7 +99,41 @@ def __db_prep(ctx):
 @click.command(name='optimize')
 @click.pass_obj
 def database_optimize(ctx):
-    pass
+    """
+    Compact the SQLite databases and freshen what they know of their tables.
+
+    The settings database, the index (when it is an SQLite file) and every
+    group's header cache are compacted (VACUUM), giving back the space of
+    what was removed, and analysed (ANALYZE) so searches stay quick.  Run
+    it when nothing else is using them; one that is busy is skipped.
+    """
+    settings = ctx['NNTPSettings']
+    paths = [sqlite_file(settings.nntp_database.get('engine')),
+             sqlite_file(settings.index_database())]
+
+    folder = join(settings.cache_dir, 'search')
+    if isdir(folder):
+        paths.extend(join(folder, name) for name in sorted(listdir(folder))
+                     if name.endswith(SQLITE_DATABASE_EXTENSION))
+
+    saved = 0
+    failed = False
+    for path in dict.fromkeys(p for p in paths if p and isfile(p)):
+        try:
+            before, after = sqlite_optimize(path)
+
+        except (sqlite3.Error, OSError) as e:
+            logger.warning('Skipped %s (%s).' % (path, e))
+            failed = True
+            continue
+
+        saved += max(0, before - after)
+        click.echo('%s: %s -> %s' % (
+            path, bytes_to_strsize(before), bytes_to_strsize(after)))
+
+    click.echo('%s given back.' % bytes_to_strsize(saved))
+    if failed:
+        exit(1)
 
 
 @click.command(name='init')
@@ -110,8 +150,20 @@ def database_init(ctx):
 @click.pass_obj
 def database_reset(ctx):
     """
-    Reset's the database based on the current configuration
+    Start the settings database and the header caches over.
+
+    Every server, group, alias and watched group is forgotten, along with
+    how far each group was fetched, and every cached header is removed.
+    The index (collections and kept posts) is left alone; 'nr update
+    groups' fills the groups in again.  You are asked first (-y answers
+    yes).
     """
+    if not confirmed(
+            ctx, 'Forget every group, alias and watched group, and remove '
+                 'every cached header?'):
+        click.echo('Nothing was removed.')
+        return
+
     logger.info('Resetting database ...')
     ctx['NNTPSettings'].open(reset=True)
     __db_prep(ctx)

@@ -17,7 +17,8 @@
 ##     anything else is done, as though it was never there
 ##  3. every score rule that matches adds its score and tags
 ## Keep and drop rules that compare the score or tags (ie: score: '<-50')
-## are only used by 'nr filter purge' (try it with --dry-run first).
+## are only used by 'nr filter purge --saved' (try it with --dry-run
+## first).
 ##
 ## A rule only checks what it names; anything left out isn't looked at.
 ## Case and accents don't matter unless case_sensitive: true is set.
@@ -27,7 +28,7 @@
 
 ## -- Every setting a rule can have -------------------------------------------
 #   - name: every-setting
-#     # What to call it ('nr filter list' and 'nr filter remove' use it).
+#     # What to call it ('nr filter ls' and 'nr filter rm' use it).
 #     # One is made up from what it matches when left out.
 #
 #     # What it does:
@@ -110,7 +111,7 @@
 #     poster: friend@example.com
 #     action: keep
 #
-#   # Clear out what scored badly ('nr filter purge' only)
+#   # Clear out what scored badly ('nr filter purge --saved' only)
 #   - name: low-score
 #     score: '<-50'
 #     not_tagged: recovery

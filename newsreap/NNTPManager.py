@@ -174,11 +174,13 @@ class Worker(Greenlet):
             # Mark ourselves busy
             self._work_tracker.mark_busy(self)
 
-            # If we reach here, we have a request to process
-            request.run(connection=self._connection)
+            # If we reach here, we have a request to process; we are free
+            # again afterwards, however it went
+            try:
+                request.run(connection=self._connection)
 
-            # Mark ourselves available again
-            self._work_tracker.mark_available(self)
+            finally:
+                self._work_tracker.mark_available(self)
 
         # Ensure our connection is closed before we exit
         self._connection.close()

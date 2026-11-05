@@ -47,6 +47,10 @@ from shutil import which
 from tempfile import TemporaryDirectory
 
 import gevent
+from gevent.fileobject import FileObject
+
+from newsreap.Utils import start_program
+from newsreap.Utils import wait_program
 
 from newsreap.objects.index.PGPPost import HIDDEN_KEY_ID
 
@@ -181,24 +185,26 @@ class NNTPGnuPG:
             code = None
             output = b''
             try:
-                process = subprocess.Popen(
+                process = start_program(
                     command, stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 logger.warning('gpg could not be run: %s' % e)
                 return -1, b'', []
 
+            # What it writes is read without holding up our other greenlets
+            reader = FileObject(process.stdout.fileno(), 'rb', close=False)
             try:
                 with gevent.Timeout(self.timeout):
-                    output = process.stdout.read(
+                    output = reader.read(
                         limit + 1 if limit else -1) or b''
                     if limit and len(output) > limit:
                         # Too much; we don't want the rest
                         process.kill()
 
                     else:
-                        code = process.wait()
+                        code = wait_program(process)
 
             except gevent.Timeout:
                 logger.warning(
@@ -208,8 +214,11 @@ class NNTPGnuPG:
                 code = 'timeout'
 
             finally:
+                reader.close()
                 process.stdout.close()
-                process.wait()
+                if wait_program(process, timeout=self.timeout) is None:
+                    process.kill()
+                    wait_program(process)
 
             status = []
             if isfile(status_file):
@@ -505,14 +514,19 @@ class NNTPGnuPG:
                 continue
 
             try:
-                subprocess.run(
+                process = start_program(
                     [agent, '--homedir', self.home, '--no-autostart',
                      'CLEAR_PASSPHRASE --mode=normal %s' % keygrip, '/bye'],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, timeout=self.timeout)
+                    stderr=subprocess.DEVNULL)
 
-            except (OSError, subprocess.SubprocessError):
-                pass
+            except (OSError, ValueError):
+                continue
+
+            if wait_program(process, timeout=self.timeout) is None:
+                # It never answered
+                process.kill()
+                wait_program(process)
 
     def __str__(self):
         return self.home

@@ -59,7 +59,7 @@ NEWSREAP_CLI_PLUGINS = {
 @click.option('--stage', '-S', default=False, is_flag=True,
               help='stage our content for posting')
 @click.option('--clean', '-C', default=False, is_flag=True,
-              help='stage our content for posting')
+              help='remove the workspace (what was prepared and staged)')
 @click.option('--upload', '-U', default=False, is_flag=True,
               help='upload our staged content to NNTP Server')
 @click.option('--verify', '-V', default=False, is_flag=True,
@@ -119,6 +119,12 @@ def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
             "Only one of --password, --generate-password and --no-password "
             "can be used.")
         exit(1)
+
+    if (password is not None or generate_password or no_password) and \
+            not prep:
+        # The archives were made already; their password can't change now
+        click.echo('Note: --password, --generate-password and --no-password '
+                   'only apply while preparing (--prep).', err=True)
 
     if password == '':
         # The same as --no-password

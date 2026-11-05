@@ -29,6 +29,7 @@ from gevent.event import Event
 
 from datetime import timedelta
 
+from newsreap.Utils import start_program
 from newsreap.Utils import utcnow
 
 # Logging
@@ -137,7 +138,7 @@ class SubProcess(Greenlet):
         self._done.clear()
 
         # Execute our Process
-        p1 = subprocess.Popen(
+        p1 = start_program(
             self._cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -95,9 +95,9 @@ class CodecGroups_Test(TestBase):
         # Populate the high and low watermarks
         assert ch.detect('alt.binaries.l2g 400 12 y') == {
             'group': 'alt.binaries.l2g',
-            'low': 400,
-            'high': 12,
-            'count': 388,
+            'low': 12,
+            'high': 400,
+            'count': 389,
             'flags': ['y', ],
         }
 
@@ -105,9 +105,9 @@ class CodecGroups_Test(TestBase):
         # No flag is acceptable
         assert ch.detect('alt.binaries.l2g 400 40') == {
             'group': 'alt.binaries.l2g',
-            'low': 400,
-            'high': 40,
-            'count': 360,
+            'low': 40,
+            'high': 400,
+            'count': 361,
             'flags': [],
         }
 
@@ -115,18 +115,18 @@ class CodecGroups_Test(TestBase):
         # Multiple supported flags
         assert ch.detect('alt.binaries.l2g 400 40 ym') == {
             'group': 'alt.binaries.l2g',
-            'low': 400,
-            'high': 40,
-            'count': 360,
+            'low': 40,
+            'high': 400,
+            'count': 361,
             'flags': ['y', 'm', ],
         }
 
         # Multiple unsupported flags are still kept too
         assert ch.detect('alt.binaries.l2g 400 40 ymabcd') == {
             'group': 'alt.binaries.l2g',
-            'low': 400,
-            'high': 40,
-            'count': 360,
+            'low': 40,
+            'high': 400,
+            'count': 361,
             'flags': ['y', 'm', 'a', 'b', 'c', 'd' ],
         }
 
@@ -162,21 +162,21 @@ class CodecGroups_Test(TestBase):
             'flags': ['y', ],
         }
 
-        # high is higher than low
+        # high (listed first) is 1 less than low: empty
         assert ch.detect('alt.binaries.l2g 499 500 y') == {
-            'group': 'alt.binaries.l2g',
-            'low': 499,
-            'high': 500,
-            'count': 0,
-            'flags': ['y', ],
-        }
-
-        # high is 1 less than low
-        assert ch.detect('alt.binaries.l2g 500 499 y') == {
             'group': 'alt.binaries.l2g',
             'low': 500,
             'high': 499,
             'count': 0,
+            'flags': ['y', ],
+        }
+
+        # high is above low: articles 499 and 500
+        assert ch.detect('alt.binaries.l2g 500 499 y') == {
+            'group': 'alt.binaries.l2g',
+            'low': 499,
+            'high': 500,
+            'count': 2,
             'flags': ['y', ],
         }
 

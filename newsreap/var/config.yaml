@@ -30,7 +30,7 @@ global:
    #
    # Set base_dir to keep everything in one directory instead (the caches
    # go in its cache/ directory), or move each kind on its own:
-__BASE_DIR__
+   # base_dir: '~/newsreap'
    # data_dir: '~/.local/share/newsreap'
    # cache_dir: '~/.cache/newsreap'
 
@@ -148,7 +148,7 @@ processing:
    # Usenet is big; the article headers cached for each group can be
    # removed once they are indexed and older than this many days.  The
    # collections keep everything needed to make their NZB files.  0 keeps
-   # every header (needed by 'nr search --raw').  Archive a group ('nr
+   # every header (needed by 'nr search --articles').  Archive a group ('nr
    # update archive') before its headers are removed.
    raw_retention: 0
 
@@ -203,8 +203,8 @@ processing:
 # carries on where it stopped.  Each of these can be changed for one run
 # on the command line too (ie: --no-cleanup).
 downloads:
-   # Where finished downloads go; your system's Downloads directory (ie:
-   # ~/Downloads) when not set
+   # Where finished downloads go ('nr get', and 'nr search --download');
+   # your system's Downloads directory (ie: ~/Downloads) when not set
    # download_dir: '~/Downloads'
 
    # Repair damaged files with their par2 files (only the recovery volumes
@@ -218,6 +218,16 @@ downloads:
    # Remove what was downloaded once it is all put together and placed
    # (it is always kept when something couldn't be opened)
    # cleanup: yes
+
+   # 'nr prune downloads' removes downloads that didn't finish (kept so
+   # they can carry on) once nothing has touched them for this many days.
+   # 0 keeps them until you remove them yourself.  Finished downloads are
+   # never touched.
+   # prune_downloads: 0
+
+   # 'nr prune work' removes files left in the work directory (ie: by a
+   # run that was stopped) this many days or more; 0 keeps them
+   # prune_work: 1
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server

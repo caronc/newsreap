@@ -26,10 +26,10 @@ logger = logging.getLogger(NEWSREAP_CODEC)
 NNTP_LIST_ACTIVE_RESPONSE_RE = re.compile(
     # Group
     br'\s*(?P<group>[^\s]+)\s+' + \
-    # High-Water Mark
-    br'[0]*(?P<low>([1-9]+[0-9]*|0))\s+' + \
+    # High-Water Mark (RFC 3977: the group, its high mark, then its low)
+    br'[0]*(?P<high>([1-9]+[0-9]*|0))\s+' + \
     # Low-Water Mark
-    br'[0]*(?P<high>([1-9]+[0-9]*|0))\s*' + \
+    br'[0]*(?P<low>([1-9]+[0-9]*|0))\s*' + \
     # Flags (may or may not exist)
     br'(?P<flags>[^\s]+)?\s*$', re.ASCII
 )
@@ -91,14 +91,11 @@ class CodecGroups(CodecBase):
             # can't be a group line
             return None
 
-        # Detect empty (based on the 3 possibilities)
-        # * high is >= low
-        # * low - high == 1
-        # * low - high == 0 (this check isn't needed if we check >=)
-        if high >= low or (low - high) == 1:
-            count = 0
-        else:
-            count = low-high
+        # How many articles there can be (the marks count both ends); an
+        # empty group has a low mark above its high one, or both at 0
+        # (article numbers start at 1)
+        first = max(low, 1)
+        count = high - first + 1 if high >= first else 0
 
         try:
             # We intentionally do not strip unsupported flags
@@ -127,11 +124,10 @@ class CodecGroups(CodecBase):
         """ Decode the group content
         """
 
-        # We need to parse the content until we either reach
-        # the end of the file or get to an 'end' tag
-        # We do not need to use the decode_loop() simply because this
-        # function will never be called concurrently with other threads.
-        while True:
+        # We need to parse the content until we either reach the end of
+        # the file or get to an 'end' tag; other connections get a turn now
+        # and then (a full listing is tens of thousands of lines)
+        while self.decode_loop():
             # Read in our data
             data = stream.readline()
             if not data:

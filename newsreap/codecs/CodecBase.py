@@ -25,6 +25,15 @@ from gevent import sleep
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_CODEC
+
+
+def output_name(name, default='file'):
+    """
+    Returns the name an article gives a file it holds, safe to write
+    under: no folders (from either kind of slash) and never '.' or '..'
+    """
+    name = str(name or '').replace('\\', '/').rsplit('/', 1)[-1].strip()
+    return default if name in ('', '.', '..') else name
 logger = logging.getLogger(NEWSREAP_CODEC)
 
 # Adapted from python-yenc but following suite to make everything behave the

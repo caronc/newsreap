@@ -1152,3 +1152,28 @@ class Utils_Test(TestBase):
 
         # Restore our permissions
         chmod(join(work_dir, 'test01.py'), 0o600)
+
+
+def test_removing_leaves_what_links_point_at_alone(tmp_path):
+    """
+    rm() removes a link without touching what it points at (not even its
+    permissions), and removes a link that points at nothing
+    """
+    import os
+    from newsreap.Utils import rm
+
+    target = tmp_path / 'target.txt'
+    target.write_text('keep me')
+    os.chmod(str(target), 0o400)
+    link = tmp_path / 'link'
+    link.symlink_to(target)
+
+    assert rm(str(link)) is True
+    assert not os.path.lexists(str(link))
+    assert target.read_text() == 'keep me'
+    assert oct(target.stat().st_mode & 0o777) == oct(0o400)
+
+    dangling = tmp_path / 'dangling'
+    dangling.symlink_to(tmp_path / 'nothing')
+    assert rm(str(dangling)) is True
+    assert not os.path.lexists(str(dangling))
