@@ -17,7 +17,6 @@ gevent.monkey.patch_all()
 
 import logging
 import stat
-import subprocess
 import time
 from datetime import timedelta
 from os import stat as os_stat
@@ -45,6 +44,7 @@ from tests.NNTPArchiver_Test import article
 from tests.NNTPArchiver_Test import index_engine  # noqa: F401
 from tests.NNTPKeyring_Test import ties
 from tests.conftest import config_for
+from tests.conftest import run_program
 
 pytestmark = pytest.mark.skipif(
     not which('gpg'), reason='gpg is not installed')
@@ -73,9 +73,7 @@ def stop_agent(home):
     """
     Stops the gpg-agent gpg started for a home folder
     """
-    subprocess.run(
-        ['gpgconf', '--homedir', str(home), '--kill', 'gpg-agent'],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run_program(['gpgconf', '--homedir', str(home), '--kill', 'gpg-agent'])
 
 
 @pytest.fixture
@@ -559,14 +557,14 @@ def test_hidden_posts_for_someone_else_are_given_up_on(
     home.mkdir(mode=0o700)
     other = ['gpg', '--homedir', str(home), '--batch', '--quiet',
              '--pinentry-mode', 'loopback']
-    subprocess.run(
+    run_program(
         [*other, '--passphrase', '', '--quick-gen-key',
          'Other <other@newsreap.example>', 'default', 'default', 'never'],
-        check=True, stderr=subprocess.DEVNULL)
-    message = subprocess.run(
+        check=True)
+    message = run_program(
         [*other, '--armor', '--trust-model', 'always', '--encrypt',
          '--hidden-recipient', 'other@newsreap.example'],
-        input=b'Not for the reader.', check=True, capture_output=True).stdout
+        input=b'Not for the reader.', check=True).stdout
     stop_agent(home)
 
     # Without our passphrase, gpg can't tell; it waits like any other

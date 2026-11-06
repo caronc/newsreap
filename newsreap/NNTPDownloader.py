@@ -23,8 +23,13 @@ Downloads what an NZB file lists and puts it back together:
    under a temporary name, renamed once it is whole and only then noted
    (see DownloadedSegment), so a part cut short is fetched again, and so
    is one whose crc32 doesn't match what was posted.
-3. Each file is put together from its parts.  A part no server has is left
-   as zeros, for par2 to fill in.
+3. Each file is put together from its parts, as best it can be: a part no
+   server has (or that couldn't be read) is left as zeros, for par2 to fill
+   in, and a damaged one is used as it came.  A file that isn't all there
+   gets a .ERRORS file beside it saying what is wrong (see NNTPErrorsFile);
+   a file without one is whole.  A part that couldn't be had is only asked
+   for again by a later run when that can help (see NNTPRetry): a server
+   was added, or the post is new.  The .ERRORS file remembers that.
 4. par2 checks the files; when something is damaged, just enough of the
    recovery volumes are fetched to repair it.
 5. Archives (rar, 7z, zip) are extracted, trying the password given, then
@@ -32,6 +37,13 @@ Downloads what an NZB file lists and puts it back together:
 6. What came out (and any other files, ie: an .nfo) goes in a directory of
    its own under the download directory, keeping its layout.
 7. The staging directory is removed (unless cleanup is off).
+
+Nothing shows up in the download directory until every server (and every
+retry) was tried.  An unfinished file has its .ERRORS file written before
+it is moved in, and a whole one loses its .ERRORS file only after, so a
+stop at any moment never leaves an unfinished file looking whole.  Ctrl-C
+stops asking for more, takes the articles already on their way, notes
+them and stops (see NNTPArchiver._fetch()); running it again carries on.
 
 When something can't be opened (a password we don't have, or damage par2
 couldn't fix), the files put together are placed for you to look at
@@ -76,6 +88,13 @@ from .NNTPArchiver import NNTPArchiver
 from .Utils import utcnow
 from .NNTPBinaryContent import NNTPBinaryContent
 from .NNTPGetDatabase import NNTPGetDatabase
+from .NNTPErrorsFile import ERRORS_EXTENSION
+from .NNTPErrorsFile import NNTPErrorsFile
+from .NNTPErrorsFile import PART_DAMAGED
+from .NNTPErrorsFile import PART_MISSING
+from .NNTPErrorsFile import PART_NOT_A_FILE
+from .NNTPRetry import DEFAULT_RETRY_WINDOW
+from .NNTPRetry import NNTPRetry
 from .NNTPnzb import NNTPnzb
 from .codecs.Codec7Zip import Codec7Zip
 from .codecs.CodecPar import CodecPar
@@ -102,10 +121,6 @@ STAGING_LOCK = '.lock'
 # Where a staging directory notes the folder (and the files) a download that
 # didn't work out was placed in, so running it again finishes it there
 STAGING_PLACED = 'placed'
-
-# What is added to the name of a file that couldn't all be put together, for
-# the file that says what is wrong with it (as Pan does)
-ERRORS_EXTENSION = '.ERRORS'
 
 # The biggest file a part can say it belongs to (1 TiB); a part placed
 # beyond it is damaged
@@ -190,57 +205,53 @@ def place_file(source, target):
         replace(source, target)
 
     except OSError:
-        copyfile(source, target + '.tmp')
-        replace(target + '.tmp', target)
+        try:
+            copyfile(source, target + '.tmp')
+            replace(target + '.tmp', target)
+
+        except BaseException:
+            # A copy cut short (ie: the drive is full, or Ctrl-C) isn't
+            # left behind
+            NNTPErrorsFile.discard(target + '.tmp')
+            raise
+
         remove(source)
 
 
-def write_errors(path, lines):
+def write_errors(path, lines, parts=None, heading=None):
     """
     Writes what is wrong with a file into the file beside it (its name with
-    .ERRORS added); returns True if it could be.  Not being able to is only
-    warned about.
+    .ERRORS added; see NNTPErrorsFile); returns True if it could be.  Not
+    being able to is only warned about.
+
+    - parts: the articles that couldn't be had, as NNTPErrorsFile keeps them
     """
-    target = path + ERRORS_EXTENSION
-    text = (
-        '%s could not all be put together (%s UTC).\n'
-        'What is missing or damaged is left as zeros.  Running the same '
-        'download again\nasks for it again (a server can take a while to '
-        'receive what was just posted);\nthis file goes once it is all '
-        'there.\n\n%s\n' % (
-            basename(path), utcnow().strftime('%Y-%m-%d %H:%M'),
-            '\n'.join(lines)))
-    try:
-        with open(target + '.tmp', 'w', encoding='utf-8') as fp:
-            fp.write(text)
-        replace(target + '.tmp', target)
-
-    except OSError as e:
-        logger.warning('Could not write %s (%s).' % (target, e))
-        try:
-            remove(target + '.tmp')
-
-        except OSError:
-            pass
-        return False
-
-    return True
+    return NNTPErrorsFile(path).save(lines, parts or {}, heading=heading)
 
 
 def clear_errors(path):
     """
     Removes the .ERRORS file of a file that is now whole (if there is one);
-    not being able to is only warned about
+    returns True if it is gone (not being able to is only warned about)
     """
-    target = path + ERRORS_EXTENSION
+    return NNTPErrorsFile(path).remove()
+
+
+def sweep(folder):
+    """
+    Removes what a stopped run may have left part written in a folder (the
+    .ERRORS files it was writing); anything else of ours written under a
+    temporary name is written over when it is written again
+    """
     try:
-        remove(target)
+        names = listdir(folder)
 
-    except FileNotFoundError:
-        pass
+    except OSError:
+        return
 
-    except OSError as e:
-        logger.warning('Could not remove %s (%s).' % (target, e))
+    for name in names:
+        if name.endswith(ERRORS_EXTENSION + '.tmp'):
+            NNTPErrorsFile.discard(join(folder, name))
 
 
 def tidy_name(name, default='download'):
@@ -297,7 +308,8 @@ class NNTPDownloader:
     """
 
     def __init__(self, manager, staging_dir, download_dir, password=None,
-                 repair=True, extract=True, cleanup=True, hooks=None):
+                 repair=True, extract=True, cleanup=True, hooks=None,
+                 retry_window=DEFAULT_RETRY_WINDOW, retry_missing=False):
         """
         Prepares a downloader
 
@@ -313,6 +325,10 @@ class NNTPDownloader:
         - cleanup: remove the staging directory once everything worked
         - hooks: hooks to call around each step (modules, files or
           functions)
+        - retry_window: how many minutes after it was posted a part no
+          server had is asked for again (see NNTPRetry)
+        - retry_missing: ask again for every part that couldn't be had,
+          whatever was noted
         """
         self.manager = manager
         self.staging_dir = staging_dir
@@ -326,6 +342,12 @@ class NNTPDownloader:
         if hooks:
             self.hooks.add(hooks)
 
+        # When a part that couldn't be had is asked for again
+        servers = getattr(manager, 'servers', None)
+        self.retry = NNTPRetry(
+            servers() if callable(servers) else (), window=retry_window,
+            always=retry_missing)
+
         # What our last download() did
         self.reset()
 
@@ -338,12 +360,15 @@ class NNTPDownloader:
         self.folder = None
 
         # Segments: fetched now, had already (from a run before), no server
-        # has them, damaged, and couldn't be fetched (asked again next time)
+        # has them, damaged, couldn't be fetched (asked again next time), and
+        # not asked for again (no server had them, and asking again won't
+        # help; see NNTPRetry)
         self.fetched = 0
         self.resumed = 0
         self.missing = 0
         self.damaged = 0
         self.failed = 0
+        self.held = 0
 
         # True once par2 repaired something
         self.repaired = False
@@ -361,6 +386,14 @@ class NNTPDownloader:
         # write_errors()
         self.errors = {}
         self.lost = []
+
+        # What is remembered of the parts no server had (or only had
+        # damaged), so they are only asked for again when that can help:
+        # {message_id: entry} (see NNTPErrorsFile.parts), read from the
+        # .ERRORS files of a run before and kept up to date; and the ones
+        # of each file ({its path, or its name when it is lost: {...}})
+        self.memory = {}
+        self.parts_of = {}
 
         # Why it didn't all work (empty when it did)
         self.problem = ''
@@ -401,6 +434,13 @@ class NNTPDownloader:
             engine='sqlite:///%s' % join(self.staging, STAGING_DATABASE),
             reset=False)
         try:
+            self._recall()
+            for folder in (STAGING_PARTS, STAGING_FILES):
+                # Left by a run that was stopped
+                for entry in listdir(join(self.staging, folder)):
+                    if entry.endswith('.tmp'):
+                        NNTPErrorsFile.discard(join(self.staging, folder, entry))
+
             done = self._run(db.session(), name, files, passwords)
             db.close()
 
@@ -419,8 +459,9 @@ class NNTPDownloader:
         """
         Returns what an NZB file lists: (files, passwords, title)
 
-        - files: [{'name': ..., 'group': ..., 'segments': [(number,
-          message_id), ...]}] (segments in their order)
+        - files: [{'name': ..., 'group': ..., 'posted': ..., 'segments':
+          [(number, message_id), ...]}] (segments in their order; posted is
+          None when the NZB file doesn't say)
         - passwords: the passwords its meta data gives (in order)
         """
         nzb = NNTPnzb(nzb_file)
@@ -433,6 +474,7 @@ class NNTPDownloader:
                 'name': safe_name(
                     found.group('name') if found else post.filename, ''),
                 'group': groups[0] if groups else None,
+                'posted': NNTPRetry.posted(post.utc),
                 'segments': sorted(
                     (article.no, article.id.strip().strip('<>'))
                     for article in post.articles),
@@ -444,6 +486,18 @@ class NNTPDownloader:
             passwords = [passwords]
 
         return files, [p for p in passwords if p], nzb.title()
+
+    def _recall(self):
+        """
+        Reads back what the .ERRORS files placed by the run before remember
+        of the parts no server had (see memory); one that can't be read
+        only means its parts are asked for again
+        """
+        folder, before = self._placed_before()
+        for entry in before:
+            if entry.endswith(ERRORS_EXTENSION):
+                self.memory.update(NNTPErrorsFile(join(
+                    folder, entry[:-len(ERRORS_EXTENSION)])).load().parts)
 
     def _lock(self):
         """
@@ -494,6 +548,9 @@ class NNTPDownloader:
         assembled = self._assemble(session, data)
         if not assembled:
             self.problem = 'none of its files could be fetched'
+            if self.lost:
+                # What is wrong with each of them is still said
+                self.folder = self._place(name, [])
             return False
 
         whole = self._step(
@@ -565,6 +622,7 @@ class NNTPDownloader:
         Fetches the segments of the files given that we don't have yet;
         returns how many were fetched now
         """
+        now = utcnow()
         noted = {row.message_id: row for row in
                  session.query(DownloadedSegment)}
 
@@ -572,6 +630,7 @@ class NNTPDownloader:
         # group its file was posted to)
         wanted = {}
         for f in files:
+            posted = NNTPRetry.posted(f.get('posted'))
             for number, message_id in f['segments']:
                 row = noted.get(message_id)
                 if row is not None and row.valid and row.path and \
@@ -580,69 +639,120 @@ class NNTPDownloader:
                     self.resumed += 1
                     continue
 
-                # One no server had is asked for again too (a post can take
-                # a while to reach every server)
+                if self._state(message_id, row, now) != 'ask':
+                    # No server had it (or only damaged), and asking again
+                    # won't help yet; what we have of it is used
+                    self.held += 1
+                    continue
 
                 wanted.setdefault(f['group'], []).append(
-                    (message_id, (f['name'], number)))
+                    (message_id, (f['name'], number, posted)))
 
-        parts = join(self.staging, STAGING_PARTS)
-        work_dir = join(self.staging, STAGING_WORK)
-        fetched = 0
-        for group, entries in wanted.items():
-            for (message_id, (filename, number)), (article, status) in \
-                    NNTPArchiver._fetch(
-                        self.manager, entries, work_dir, group,
-                        self.manager.window(), decoders=None):
-                row = noted.get(message_id) or DownloadedSegment(
-                    message_id=message_id, filename=filename, number=number)
+        before = self.fetched
+        try:
+            for group, entries in wanted.items():
+                self._fetch_group(session, noted, group, entries, now)
 
-                if article is None:
-                    if status == 'missing':
-                        # No server has it; par2 may be able to fill it in
-                        row.missing = True
-                        self.missing += 1
-                        session.merge(row)
-
-                    else:
-                        # Asked for again next time
-                        self.failed += 1
-                    continue
-
-                part = next((c for c in article.decoded
-                             if isinstance(c, NNTPBinaryContent)), None)
-                if part is None:
-                    # Not a part of a file at all; it is damaged as far as
-                    # we are concerned
-                    self.damaged += 1
-                    continue
-
-                # Written under a temporary name, and only renamed (and
-                # noted) once it is whole
-                path = join(parts, '%s.part' % sha1(
-                    message_id.encode('utf-8')).hexdigest()[:20])
-                with open(path + '.tmp', 'wb') as fp:
-                    fp.write(part.getvalue() or b'')
-                replace(path + '.tmp', path)
-
-                row.filename = safe_name(part.filename, filename)[:256]
-                row.begin = part.begin()
-                row.end = part.end()
-                row.path = path
-                row.valid = part.is_valid()
-                row.missing = False
-                session.merge(row)
-
-                fetched += 1
-                if not row.valid:
-                    self.damaged += 1
-
-                if fetched % COMMIT_EVERY == 0:
-                    session.commit()
+        except KeyboardInterrupt:
+            # Stopped; what came is kept for the next run
+            session.commit()
+            raise
 
         session.commit()
-        self.fetched += fetched
-        return fetched
+        return self.fetched - before
+
+    def _fetch_group(self, session, noted, group, entries, now):
+        """
+        Fetches the segments wanted of one group (see _fetch()); each one
+        fetched is counted in fetched
+        """
+        parts = join(self.staging, STAGING_PARTS)
+        work_dir = join(self.staging, STAGING_WORK)
+        for (message_id, (filename, number, posted)), (article, status) \
+                in NNTPArchiver._fetch(
+                    self.manager, entries, work_dir, group,
+                    self.manager.window(), decoders=None):
+            row = noted.get(message_id) or DownloadedSegment(
+                message_id=message_id, filename=filename, number=number)
+
+            if article is None:
+                if status == 'missing':
+                    # No server has it; par2 may be able to fill it in
+                    row.missing = True
+                    self._tried(message_id, number, PART_MISSING, posted, now)
+                    self.missing += 1
+                    session.merge(row)
+
+                else:
+                    # Asked for again next time
+                    self.failed += 1
+                continue
+
+            part = next((c for c in article.decoded
+                         if isinstance(c, NNTPBinaryContent)), None)
+            if part is None:
+                # Not a part of a file at all; it is damaged as far as we
+                # are concerned (any part of it we had is kept)
+                self._tried(message_id, number, PART_NOT_A_FILE, posted, now)
+                self.damaged += 1
+                continue
+
+            # Written under a temporary name, and only renamed (and noted)
+            # once it is whole
+            path = join(parts, '%s.part' % sha1(
+                message_id.encode('utf-8')).hexdigest()[:20])
+            with open(path + '.tmp', 'wb') as fp:
+                fp.write(part.getvalue() or b'')
+            replace(path + '.tmp', path)
+
+            row.filename = safe_name(part.filename, filename)[:256]
+            row.begin = part.begin()
+            row.end = part.end()
+            row.path = path
+            row.valid = part.is_valid()
+            row.missing = False
+            if row.valid:
+                self.memory.pop(message_id, None)
+            else:
+                self._tried(message_id, number, PART_DAMAGED, posted, now)
+            session.merge(row)
+
+            self.fetched += 1
+            if not row.valid:
+                self.damaged += 1
+
+            if self.fetched % COMMIT_EVERY == 0:
+                session.commit()
+
+    def _tried(self, message_id, number, state, posted, now):
+        """
+        Remembers of a segment that it couldn't be had (whole) from the
+        servers we have now (see NNTPRetry and memory)
+
+        - state: how it went (see NNTPErrorsFile.PART_STATES)
+        - posted: when it was posted (when it was first asked for is used
+          when that isn't known)
+        """
+        before = self.memory.get(message_id) or {}
+        now = now.replace(microsecond=0)
+        self.memory[message_id] = {
+            'part': number, 'state': state, 'tried_at': now,
+            'tried_by': list(self.retry.hashes),
+            'posted': before.get('posted') or posted or now}
+
+    def _state(self, message_id, row=None, now=None):
+        """
+        Returns what to do about a segment (see NNTPRetry.state()): 'ask'
+        when nothing is remembered of it, or when the damaged copy of it we
+        had is gone (ie: the staging directory was removed)
+        """
+        entry = self.memory.get(message_id)
+        have = row is not None and row.path and isfile(row.path)
+        if entry is None or (row is not None and row.path and not have) or (
+                entry['state'] == PART_DAMAGED and not have):
+            return 'ask'
+        return self.retry.state(
+            entry['tried_by'], entry['tried_at'], entry['posted'], now)
 
     def _assemble(self, session, files):
         """
@@ -662,10 +772,18 @@ class NNTPDownloader:
             have = [rows[m] for m in ids if m in rows and rows[m].path and
                     isfile(rows[m].path)]
             problems = self._problems(f, rows)
+            order = {m: no for no, m in enumerate(ids)}
+
+            # What is remembered of its parts we don't have whole
+            whole = {row.message_id for row in have if row.valid}
+            remembered = {m: self.memory[m] for m in ids
+                          if m in self.memory and m not in whole}
             if not have:
                 # Nothing of it to put together; still said what is wrong
                 if problems:
-                    self.lost.append((safe_name(f['name'], 'file'), problems))
+                    lost = safe_name(f['name'], 'file')
+                    self.lost.append((lost, problems))
+                    self.parts_of[lost] = remembered
                 continue
 
             # The name its articles give (they know best), else the NZB's;
@@ -683,14 +801,26 @@ class NNTPDownloader:
                 no += 1
 
             # Where each part goes: where it says, or (parts that don't say,
-            # ie: uuencoded ones) one after another in part order, which a
-            # missing part leaves unknown
-            if len(have) > 1 and not any(row.begin for row in have):
-                offset, placed = 0, []
-                for row in sorted(have, key=lambda row: row.number):
-                    placed.append((offset, row))
-                    offset += max(0, row.end - row.begin)
-                laid_out = len(have) == len(ids)
+            # ie: uuencoded ones) by their place in the file.  Every part but
+            # the last is posted the same size, so that size tells where each
+            # goes even when one is missing; parts of other sizes are put one
+            # after another, which a missing part leaves unknown.
+            if len(ids) > 1 and not any(row.begin for row in have):
+                sizes = {max(0, row.end - row.begin) for row in have
+                         if order[row.message_id] < len(ids) - 1}
+                if len(sizes) == 1 and min(sizes):
+                    step = sizes.pop()
+                    placed = [(order[row.message_id] * step, row)
+                              for row in have]
+                    laid_out = True
+
+                else:
+                    offset, placed = 0, []
+                    for row in sorted(have, key=lambda row: order[
+                            row.message_id]):
+                        placed.append((offset, row))
+                        offset += max(0, row.end - row.begin)
+                    laid_out = len(have) == len(ids)
 
             else:
                 placed = [(row.begin, row) for row in have]
@@ -712,13 +842,27 @@ class NNTPDownloader:
 
             # Its crc32 is worked out while it is written; only parts that
             # follow on from each other make the whole file's
-            checksum, written, size = 0, 0, 0
+            checksum, written, size, unread = 0, 0, 0, []
             with open(path + '.tmp', 'wb') as fp:
                 for at, row in sorted(fits, key=lambda entry: entry[0]):
-                    # A part no server has is left as zeros
+                    # A part no server has is left as zeros, and so is one
+                    # we can't read back
+                    try:
+                        with open(row.path, 'rb') as part:
+                            data = part.read()
+
+                    except OSError as e:
+                        logger.warning('Could not read %s (%s).' % (
+                            row.path, e))
+                        unread.append(row)
+                        problems.append(
+                            "Part %d <%s>: it couldn't be read back (%s); it "
+                            'is fetched again next time' % (
+                                row.number, row.message_id, e.strerror or e))
+                        checksum = None
+                        continue
+
                     fp.seek(at)
-                    with open(row.path, 'rb') as part:
-                        data = part.read()
                     fp.write(data)
                     size = max(size, at + max(0, row.end - row.begin))
 
@@ -732,8 +876,15 @@ class NNTPDownloader:
                 fp.truncate(size)
 
             replace(path + '.tmp', path)
-            complete = laid_out and len(have) == len(ids) and all(
-                row.valid for row in have)
+            complete = laid_out and len(have) == len(ids) and not unread \
+                and all(row.valid for row in have)
+            for row in unread:
+                # Fetched again next time
+                row.path = ''
+                row.valid = False
+                session.merge(row)
+            if unread:
+                session.commit()
 
             # Two NZB entries can share a name too
             key, no = f['name'], 2
@@ -746,43 +897,64 @@ class NNTPDownloader:
 
             if complete:
                 self.errors.pop(path, None)
+                self.parts_of.pop(path, None)
             else:
                 self.errors[path] = problems or [
                     'Some of it is missing or damaged.']
+                self.parts_of[path] = remembered
 
         return assembled
 
-    @staticmethod
-    def _problems(f, rows):
+    def _problems(self, f, rows):
         """
         Returns what is wrong with each part of a file (a line each; none
         when they all came whole)
 
         - rows: {message_id: DownloadedSegment} of the parts we have noted
         """
+        now = utcnow()
         lines = []
         for number, message_id in f['segments']:
             row = rows.get(message_id)
-            if row is not None and row.path and isfile(row.path):
-                if row.valid:
-                    continue
-                reason = "it is damaged (its crc32 doesn't match what was " \
-                    'posted)'
-
-            elif row is not None and row.missing:
-                reason = 'no server has it (yet)'
-
-            else:
-                reason = "it couldn't be fetched (it is asked for again " \
-                    'next time)'
+            if row is not None and row.valid and row.path and \
+                    isfile(row.path):
+                continue
 
             where = ''
+            reason = self._why(message_id, row, now)
             if row is not None and row.end > row.begin:
                 where = ' (bytes %d-%d)' % (row.begin, row.end - 1)
             lines.append('Part %d%s <%s>: %s' % (
                 number, where, message_id, reason))
 
         return lines
+
+    def _why(self, message_id, row=None, now=None):
+        """
+        Returns why a segment we don't have whole isn't, and whether it is
+        asked for again
+        """
+        entry = self.memory.get(message_id) or {}
+        again = ' (asked for again only once you add a server)' if \
+            self._state(message_id, row, now) == 'settled' else \
+            ' (asked for again next time)'
+
+        if row is not None and row.path and isfile(row.path):
+            return "it is damaged (its crc32 doesn't match what was " \
+                'posted)' + again
+
+        if entry.get('state') == PART_MISSING or (
+                row is not None and row.missing):
+            return 'no server has it' + again
+
+        if entry.get('state') == PART_NOT_A_FILE:
+            return 'it holds no part of a file' + again
+
+        if entry.get('state') == PART_DAMAGED:
+            return "it is damaged (its crc32 doesn't match what was " \
+                'posted)' + again
+
+        return "it couldn't be fetched (it is asked for again next time)"
 
     def _verify(self, session, assembled, volumes):
         """
@@ -932,56 +1104,85 @@ class NNTPDownloader:
         files given; returns that directory.
 
         A download that didn't work out before is placed where it was then
-        (what was placed then is taken away first), so finishing it leaves
-        one folder.  A file that isn't all there gets a .ERRORS file beside
-        it saying why (see write_errors()); one that now is loses its own.
+        (what was placed then and isn't now is taken away), so finishing it
+        leaves one folder.  A file that isn't all there gets a .ERRORS file
+        beside it saying why (see NNTPErrorsFile), written before the file
+        is moved in; one that now is whole loses its own after.  A file
+        whose .ERRORS file can't be written stays in the staging directory
+        (it would look whole without one).
         """
         folder, before = self._placed_before()
         if folder is None:
             folder = self._unique(join(self.download_dir, name), tidy=True)
             makedirs(folder)
 
-        else:
-            # What we put there last time makes way
-            for entry in before:
-                for path in (join(folder, entry),
-                             join(folder, entry) + ERRORS_EXTENSION):
-                    try:
-                        remove(path)
+        sweep(folder)
 
-                    except FileNotFoundError:
-                        pass
-
-                    except OSError as e:
-                        logger.warning('Could not remove %s (%s).' % (
-                            path, e))
-
-        if extracted:
-            self._move_into(extracted, folder)
+        # The names placed now; what we put there last time and isn't makes
+        # way (a file before its .ERRORS file, so it never looks whole)
+        again = {basename(path) for path, _ in files if isfile(path)}
+        again.update(entry for entry, _ in self.lost)
+        for entry in sorted(before, key=lambda entry: (
+                entry.endswith(ERRORS_EXTENSION), entry)):
+            base = entry[:-len(ERRORS_EXTENSION)] if entry.endswith(
+                ERRORS_EXTENSION) else entry
+            if base not in again:
+                NNTPErrorsFile.discard(join(folder, entry))
 
         placed = []
+        try:
+            if extracted:
+                self._move_into(extracted, folder)
+            self._place_files(folder, before, files, placed)
+
+        finally:
+            # Noted even when it was stopped part way (or a file couldn't be
+            # placed), along with what is still there of last time, so a
+            # run again places it in the same folder over the same names
+            placed.extend(entry for entry in before if entry not in placed
+                          and exists(join(folder, entry)))
+            self._note_placed(folder, placed)
+
+        return folder
+
+    def _place_files(self, folder, before, files, placed):
+        """
+        Places the files given (and says what is wrong with the ones lost)
+        in a folder (see _place()); the names placed are added to placed
+        """
         for path, _ in files:
             if not isfile(path):
                 continue
 
-            target = self._unique(join(folder, basename(path)))
-            move(path, target)
-            placed.append(basename(target))
-            if path in self.errors:
-                if write_errors(target, self.errors[path]):
-                    placed.append(basename(target) + ERRORS_EXTENSION)
+            target = join(folder, basename(path))
+            if basename(path) not in before:
+                target = self._unique(target)
 
-            else:
-                clear_errors(target)
+            if path in self.errors:
+                if not write_errors(target, self.errors[path],
+                                    self.parts_of.get(path)):
+                    logger.warning(
+                        '%s stays in %s (its .ERRORS file could not be '
+                        'written).' % (basename(path), self.staging))
+                    continue
+
+                place_file(path, target)
+                placed.extend((basename(target),
+                               basename(target) + ERRORS_EXTENSION))
+                continue
+
+            place_file(path, target)
+            placed.append(basename(target))
+            if not clear_errors(target):
+                placed.append(basename(target) + ERRORS_EXTENSION)
 
         for entry, lines in self.lost:
-            # Nothing of it came; only what is wrong with it is said
+            # Nothing of it came; only what is wrong with it is said (and
+            # anything of it placed before goes)
             target = join(folder, entry)
-            if write_errors(target, lines):
+            if write_errors(target, lines, self.parts_of.get(entry)):
                 placed.append(entry + ERRORS_EXTENSION)
-
-        self._note_placed(folder, placed)
-        return folder
+                NNTPErrorsFile.discard(target)
 
     def _placed_before(self):
         """
@@ -1095,6 +1296,9 @@ class NNTPDownloader:
             text += ', %d damaged' % self.damaged
         if self.failed:
             text += ', %d failed (asked for again next time)' % self.failed
+        if self.held:
+            text += ', %d not asked for again (no server had them)' % \
+                self.held
         if self.repaired:
             text += ', repaired'
         return text

@@ -16,7 +16,6 @@ import gevent.monkey
 gevent.monkey.patch_all()
 
 import os
-import subprocess
 import sys
 from datetime import datetime
 from datetime import timedelta
@@ -34,6 +33,7 @@ from newsreap.objects.group.ScannedRange import ScannedRange
 
 from tests.FakeNNTPServer import FakeNNTPServer
 from tests.conftest import config_for
+from tests.conftest import run_program
 
 GROUP = 'alt.binaries.test'
 
@@ -301,9 +301,10 @@ def test_killed_writes_leave_a_working_database(tmp_path):
         'add(5001)\n'
         'os._exit(9)\n')
 
-    result = subprocess.run(
+    result = run_program(
         [sys.executable, '-c', script, db_file],
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        env={**os.environ, 'PYTHONPATH': os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))})
     assert result.returncode == 9
 
     db = NNTPGroupDatabase.from_file(db_file)

@@ -195,7 +195,7 @@ class NNTPIndexDatabase(Database):
         """
         Opens the index database (creating its tables if they don't exist
         yet):
-        - engine: a database URL (ie: postgresql://..., mysql+pymysql://...)
+        - engine: a database URL (ie: postgresql+psycopg://..., mysql+pymysql://...)
           or the path of an SQLite file
         """
         url = make_url(engine) if '://' in engine else None

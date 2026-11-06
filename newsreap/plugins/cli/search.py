@@ -482,6 +482,11 @@ def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
               metavar='DIR',
               help='Where downloads go (the download_dir setting when not '
                    'given).')
+@click.option('--retry-missing', is_flag=True,
+              help='Ask again for articles no server had, even ones that '
+                   "can't have arrived since (they are otherwise only asked "
+                   'for again while the post is new, or once you add a '
+                   'server).')
 @click.option('--pager/--no-pager', default=True,
               help='Show the results a screen at a time on a terminal (the '
                    'default; PAGER picks the pager, less otherwise), or '
@@ -504,8 +509,8 @@ def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
 @click.pass_obj
 def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
            oldest, quiet, as_json, delete, get_files, get_text,
-           get_articles, get_nzb, download_dir, pager, collections, posts,
-           raw, keys, rank, terms):
+           get_articles, get_nzb, download_dir, retry_missing, pager,
+           collections, posts, raw, keys, rank, terms):
     """
     Search everything indexed (across every group).
 
@@ -616,10 +621,11 @@ def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
     # What to download (if anything)
     wanted = {'files': get_files, 'text': get_text,
               'articles': get_articles, 'nzb': get_nzb}
-    if download_dir and not any(wanted.values()):
-        logger.error('--download-dir needs one of --download, '
-                     '--download-text, --download-articles or '
-                     '--download-nzb.')
+    if (download_dir or retry_missing) and not any(wanted.values()):
+        logger.error('%s needs one of --download, --download-text, '
+                     '--download-articles or --download-nzb.' % (
+                         '--download-dir' if download_dir
+                         else '--retry-missing'))
         exit(1)
 
     if any(wanted.values()) and as_json:
@@ -688,7 +694,7 @@ def search(ctx, keywords, groups, ignore_case, complete, forming, limit,
         if any(wanted.values()):
             exit(1 if download(
                 ctx, everything(), wanted, download_dir, delete, quiet,
-                ' '.join(keywords)) else 0)
+                ' '.join(keywords), retry_missing=retry_missing) else 0)
 
         if delete:
             remove(ctx, everything(), names, pager)
@@ -751,12 +757,15 @@ def counted(entries):
                             for kind, found in kinds.items())
 
 
-def download(ctx, found, wanted, download_dir, delete, quiet, title):
+def download(ctx, found, wanted, download_dir, delete, quiet, title,
+             retry_missing=False):
     """
     Downloads what a search found (see the --download options): it is
     shown first, and the user is asked (unless -y was given).  With
     delete, what was all saved is removed afterwards.  Returns how many
     couldn't all be saved.
+
+    - retry_missing: ask again for articles no server had (see NNTPRetry)
     """
     found = [entry for entry in found]
     entries = [entry for entry in found if entry.key is not None]
@@ -814,7 +823,8 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title):
         ctx['NNTPManager'], settings.staging_dir(), folder,
         files=wanted['files'], text=wanted['text'],
         articles=wanted['articles'], archiver=archiver,
-        keep=archiving)
+        keep=archiving, retry_window=settings.retry_window(),
+        retry_missing=retry_missing)
 
     # What was all saved (and so may be removed), and what wasn't
     saved = []
@@ -892,6 +902,11 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title):
                 else:
                     saved.append(entry)
 
+    except KeyboardInterrupt:
+        # What came is kept; nothing is removed
+        click.echo('Stopped; run it again to carry on.', err=True)
+        sys.exit(130)
+
     finally:
         indexer.close()
         if archiver is not None:
@@ -905,7 +920,8 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title):
 
     if failed:
         logger.error('%d of them could not all be saved; running this again '
-                     'tries what is missing.' % failed)
+                     'asks for what may have arrived since (--retry-missing '
+                     'asks for all of it).' % failed)
 
     return failed
 
@@ -915,16 +931,18 @@ def keep(ctx, fetcher, indexer, name, files, known, texts=None):
     Fetches what is wanted of the files given and keeps what was learned
     in the index; returns True when it was all saved
     """
-    done = fetcher.fetch(name, files, known, texts=texts)
-    if (fetcher.learned_files or fetcher.learned_segments) and not \
-            indexer.note_fetched(fetcher.learned_files,
-                                 fetcher.learned_segments) and \
-            not ctx.get('unnoted'):
-        # Said once; the downloads themselves are fine
-        ctx['unnoted'] = True
-        click.echo("Note: what was downloaded couldn't be noted in the "
-                   'index, so running this again checks it by fetching it '
-                   'again.', err=True)
+    try:
+        done = fetcher.fetch(name, files, known, texts=texts)
+
+    finally:
+        # Kept even when it was stopped
+        if fetcher.learned_segments and not indexer.note_fetched(
+                fetcher.learned_segments) and not ctx.get('unnoted'):
+            # Said once; the downloads themselves are fine
+            ctx['unnoted'] = True
+            click.echo("Note: what was downloaded couldn't be noted in the "
+                       'index, so running this again may fetch some '
+                       'articles to find out what they hold.', err=True)
 
     click.echo('%s: %s' % (name, fetcher))
     if not done:

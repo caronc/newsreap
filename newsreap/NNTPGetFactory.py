@@ -17,7 +17,6 @@ from collections import deque
 from tqdm import tqdm
 
 from os import getcwd
-import sys
 from os.path import isfile
 from os.path import join
 from os.path import abspath
@@ -38,7 +37,6 @@ from .NNTPGetDatabase import NNTPGetDatabase
 from .NNTPConnection import NNTPConnection
 from .NNTPHeader import NNTPHeader
 from .NNTPManager import NNTPManager
-from .Utils import bytes_to_strsize
 from .Utils import mkdir
 from .Utils import rm
 from .decorators import hook

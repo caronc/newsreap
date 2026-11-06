@@ -18,7 +18,6 @@ gevent.monkey.patch_all()
 import os
 import shutil
 import struct
-import subprocess
 import zipfile
 
 import pytest
@@ -28,6 +27,7 @@ from newsreap.SortedSet import sortedset
 from newsreap.codecs.Codec7Zip import DEFAULT_PATH as SEVEN_ZIP
 from newsreap.codecs.CodecZip import CodecZip
 from newsreap.codecs.CodecZip import ZIP_FILE_RE
+from tests.conftest import run_program
 
 # The zip tool (to make password protected ZIP files)
 ZIP_TOOL = shutil.which('zip')
@@ -235,7 +235,7 @@ def test_password_protected_zip_files_are_extracted(tmp_path, source):
     refused without it (or with the wrong one)
     """
     path = tmp_path / 'locked.zip'
-    subprocess.run(
+    run_program(
         [ZIP_TOOL, '-q', '-j', '-P', 'secret', str(path),
          str(source / 'info.nfo')], check=True)
 
@@ -261,10 +261,9 @@ def test_aes_zip_files_are_handed_to_7zip(tmp_path, source):
     with 7-Zip
     """
     path = tmp_path / 'aes.zip'
-    subprocess.run(
+    run_program(
         [SEVEN_ZIP, 'a', '-tzip', '-mem=AES256', '-psecret', '-y',
-         str(path), str(source / 'info.nfo')],
-        check=True, stdout=subprocess.DEVNULL)
+         str(path), str(source / 'info.nfo')], check=True)
 
     decoded = CodecZip(work_dir=str(tmp_path)).decode(
         str(path), password='secret')

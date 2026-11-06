@@ -95,14 +95,6 @@ EOD_LINE_RE = re.compile(br'\n\.\r?\n$', re.ASCII)
 # response code (211) can also start a multi-line response (LISTGROUP)
 SINGLE_LINE_COMMAND_RE = re.compile(r'^\s*GROUP\s', re.IGNORECASE | re.ASCII)
 
-# Splitting doesn't work well with the parenthesis
-# the below fixes this
-EOLS_RE = re.compile(br'[\r]?\n', re.ASCII)
-
-# When data compression in in play, the following delimiter is used
-# to deliminate the chunks of compressed data
-GZIP_EOL_RE = re.compile(br'\.([\r]?\n)$', re.ASCII)
-
 # How many consecutive misses in a row do we allow while trying to retrieve
 # historic messages (based on time) do we allow before assuming that we've
 # exceeded the the maximum retention area. This is used in the seek_by_date()
@@ -149,10 +141,6 @@ POSTING_OK_RE = re.compile(
 NNTP_PORT = 119
 NNTP_SSL_PORT = 563
 
-# The number of seconds to grant the remote NNTP Server to
-# respond to a request in before aborting the connection
-NNTP_RESPONSE_TIMEOUT = 30.0
-
 # The number of seconds to give the remote NNTP Server to
 # send it's welcome message before aborting the connection
 NNTP_WELCOME_MESSAGE_TIMEOUT = 15.0
@@ -162,14 +150,6 @@ NNTP_WELCOME_MESSAGE_TIMEOUT = 15.0
 # read at least 1 line (a line defined by having '\n' at the end of
 # it. The smaller this value, the faster content previews can occur
 NNTP_MIN_READ_BUFFER_SIZE = 1024
-
-# Defines the number of lines to scan into a message
-# to try and find the =ybegin entry (identifing a YENC message)
-SCAN_FROM_HEAD = 40
-
-# scans from the bottom to the top looking for the ending
-# of a yenc message
-SCAN_FROM_TAIL = 10
 
 # The number of XOVER Server retries to make in the event the
 # query fails
@@ -2869,13 +2849,6 @@ class NNTPConnection(SocketBase):
 
             except (SocketException, SignalCaughtException):
                 pass
-
-    def _hard_reset(self, wait=True):
-        """
-        Drop the connection and re-establish it
-        """
-        self.close()
-        self.connect()
 
     def __del__(self):
         """

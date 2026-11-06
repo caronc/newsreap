@@ -41,9 +41,6 @@ import logging
 from .Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
-# Default Binding Address
-DEFAULT_BIND_ADDR = '0.0.0.0'
-
 # How long connect() keeps trying (seconds) when it isn't given a timeout;
 # a server that is down is given up on after this (and retried, if at all,
 # by whoever asked)

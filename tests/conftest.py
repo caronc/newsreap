@@ -24,6 +24,30 @@ from tests.FakeNNTPServer import CERT_FILE
 from tests.FakeNNTPServer import FakeNNTPServer
 
 
+def run_program(command, input=None, check=False, env=None):
+    """
+    Runs a program (as subprocess.run() does, its output captured) without
+    forking our process: a fork copies the test servers' connections into
+    a child that can write to them (see newsreap.Utils.start_program())
+
+    - input: bytes for it to read
+    - check: raise CalledProcessError if it fails
+    - env: its environment (ours when not given)
+    """
+    from newsreap.Utils import plain_subprocess
+    from newsreap.Utils import start_program
+
+    run = plain_subprocess()
+    process = start_program(
+        command, stdin=run.PIPE if input is not None else run.DEVNULL,
+        stdout=run.PIPE, stderr=run.PIPE, env=env)
+    stdout, stderr = process.communicate(input)
+    if check and process.returncode:
+        raise run.CalledProcessError(
+            process.returncode, command, stdout, stderr)
+    return run.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def connect_to(server, **kwargs):
     """
     Returns an NNTPConnection pointed at a FakeNNTPServer.

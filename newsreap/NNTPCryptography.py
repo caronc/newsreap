@@ -38,9 +38,6 @@ import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
-# OpenSSL will only write 16K at a time
-SSL_WRITE_BLOCKSIZE = 16384
-
 # The default (private) keyfile we'll create if you don't specify one.
 # The default public keyfile (unless otherwise specified) is always
 # the same name as the private key but with the .pub extension added to the

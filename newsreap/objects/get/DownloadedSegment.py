@@ -50,7 +50,7 @@ class DownloadedSegment(ObjectBase):
     # True when its crc32 matched what was posted
     valid = Column(Boolean, nullable=False, default=False)
 
-    # True when no server has it (it isn't asked for again)
+    # True when no server has it
     missing = Column(Boolean, nullable=False, default=False)
 
     def __init__(self, *args, **kwargs):

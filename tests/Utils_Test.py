@@ -1177,3 +1177,17 @@ def test_removing_leaves_what_links_point_at_alone(tmp_path):
     dangling.symlink_to(tmp_path / 'nothing')
     assert rm(str(dangling)) is True
     assert not os.path.lexists(str(dangling))
+
+
+def test_programs_are_never_started_in_a_way_that_forks():
+    """
+    start_program() refuses options only a fork can give (ie: cwd), which
+    would otherwise copy our process (and its connections)
+    """
+    import pytest
+    from newsreap.Utils import start_program
+
+    for option in ({'cwd': '/'}, {'preexec_fn': print},
+                   {'close_fds': True}):
+        with pytest.raises(ValueError, match='would fork'):
+            start_program(['true'], **option)

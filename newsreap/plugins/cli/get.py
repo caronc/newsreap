@@ -32,7 +32,6 @@ from os.path import expanduser
 from os.path import isdir
 from os.path import dirname
 from os.path import basename
-from os.path import splitext
 from os.path import isfile
 from os.path import join
 
@@ -45,9 +44,7 @@ except ImportError:
 
 from newsreap.NNTPDownloader import NNTPDownloader
 from newsreap.NNTPIndexer import NNTPIndexer
-from newsreap.NNTPnzb import NNTPnzb
 from newsreap.Utils import parse_bool
-from newsreap.Mime import Mime
 from newsreap.NNTPGetFactory import NNTPGetFactory
 
 # initialize our logger
@@ -85,9 +82,14 @@ NEWSREAP_CLI_PLUGINS = 'get'
 @click.option('--no-cleanup', 'cleanup', flag_value=False, default=None,
               help='Keep what was downloaded (the staging directory) once '
                    'it is all put together.')
+@click.option('--retry-missing', is_flag=True,
+              help='Ask again for parts no server had, even ones that '
+                   "can't have arrived since (they are otherwise only asked "
+                   'for again while the post is new, or once you add a '
+                   'server).')
 @click.argument('sources', nargs=-1)
 def get(ctx, group, workdir, headers, inspect, sources, hooks, output,
-        password, repair, extract, cleanup):
+        password, repair, extract, cleanup, retry_missing):
     """
     Download what NZB files (or indexed collections) hold.
 
@@ -99,7 +101,12 @@ def get(ctx, group, workdir, headers, inspect, sources, hooks, output,
 
     \b
     Running it again carries on where it stopped: what was already
-    fetched is kept, and anything cut short or damaged is fetched again.
+    fetched is kept, and anything cut short is fetched again (Ctrl-C
+    keeps what is on its way, then stops).  A part no
+    server had (or only had damaged) is asked for again while the post is
+    new, or once you add a server (--retry-missing asks regardless).  A
+    file that isn't all there is still put together, with a .ERRORS file
+    beside it saying what is wrong.
     If something can't be opened (a password that isn't known, or damage
     par2 couldn't fix), the files put together are placed for you to look
     at and nothing is removed.
@@ -122,7 +129,7 @@ def get(ctx, group, workdir, headers, inspect, sources, hooks, output,
         nzbs = [s for s in sources if isfile(s) or s.strip().isdigit()]
         sources = [s for s in sources if s not in nzbs]
         failed = download(ctx, nzbs, hooks, output, password, repair,
-                          extract, cleanup)
+                          extract, cleanup, retry_missing)
         if not sources:
             exit(1 if failed else 0)
 
@@ -184,7 +191,7 @@ def get(ctx, group, workdir, headers, inspect, sources, hooks, output,
 
 
 def download(ctx, sources, hooks, output, password, repair, extract,
-             cleanup):
+             cleanup, retry_missing=False):
     """
     Downloads NZB files (or indexed collections, by their id) with an
     NNTPDownloader; returns how many didn't work out
@@ -202,7 +209,8 @@ def download(ctx, sources, hooks, output, password, repair, extract,
         abspath(expanduser(output)) if output else settings.download_dir(),
         password=password, repair=chosen(repair, 'repair'),
         extract=chosen(extract, 'extract'),
-        cleanup=chosen(cleanup, 'cleanup'), hooks=hooks)
+        cleanup=chosen(cleanup, 'cleanup'), hooks=hooks,
+        retry_window=settings.retry_window(), retry_missing=retry_missing)
 
     failed = 0
     for source in sources:
@@ -214,7 +222,14 @@ def download(ctx, sources, hooks, output, password, repair, extract,
                 failed += 1
                 continue
 
-        done = downloader.download(nzb_file, name=name)
+        try:
+            done = downloader.download(nzb_file, name=name)
+
+        except KeyboardInterrupt:
+            # What came is kept in the staging directory
+            click.echo('Stopped; run it again to carry on.', err=True)
+            sys.exit(130)
+
         click.echo('%s: %s' % (name or basename(source), downloader))
         if done:
             click.echo('Saved in %s' % downloader.folder)

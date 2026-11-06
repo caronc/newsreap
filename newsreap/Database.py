@@ -235,14 +235,7 @@ class Database:
             logger.debug('Preparing engine: %s' % self._engine_str)
             # Note: echo is always set to False, logging is handled by NewsReap
             #       and not by SQLAlchemy
-            options = {}
-            if str(engine).split(':', 1)[0] == 'postgresql+psycopg2':
-                # Many rows changed at once (ie: what a download learned)
-                # go in batches, not a round trip each (psycopg 3, the
-                # usual driver, already sends them together)
-                options['executemany_mode'] = 'values_plus_batch'
-
-            self._engine = create_engine(engine, echo=False, **options)
+            self._engine = create_engine(engine, echo=False)
             if self._engine.dialect.name == 'sqlite':
                 # What our searches need
                 sqlite_functions(self._engine)

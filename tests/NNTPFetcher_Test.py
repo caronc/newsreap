@@ -16,7 +16,6 @@ import gevent.monkey
 gevent.monkey.patch_all()
 
 import os
-from zlib import crc32
 
 import pytest
 from click.testing import CliRunner
@@ -82,8 +81,9 @@ def indexed(tmp_path):
 def test_found_files_are_downloaded_as_posted(tmp_path, indexed):
     """
     -d puts the files together (nothing more) in a directory named after
-    what was found; running it again fetches nothing, and a file that
-    changed since is fetched again
+    what was found; running it again fetches nothing (a file without a
+    .ERRORS file is whole), and a file that is gone, or whose .ERRORS file
+    can't be read, is fetched again
     """
     server, nr = indexed
     out = tmp_path / 'out' / 'release'
@@ -97,7 +97,7 @@ def test_found_files_are_downloaded_as_posted(tmp_path, indexed):
     assert sorted(os.listdir(str(out))) == ['notes.txt', 'readme.nfo']
     assert 'Saved in %s' % out in result.output
 
-    # Again: everything is there and right, so nothing is fetched
+    # Again: everything is there, so nothing is fetched
     before = len(server.commands())
     result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
     assert result.exit_code == 0, result.output
@@ -105,15 +105,21 @@ def test_found_files_are_downloaded_as_posted(tmp_path, indexed):
                 if c.startswith('ARTICLE')]
     assert '2 already there' in result.output
 
-    # A file changed since is fetched again (only its articles)
-    (out / 'notes.txt').write_bytes(b'not the notes')
-    before = len(server.commands())
-    result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
-    assert result.exit_code == 0, result.output
-    assert {c.split('<', 1)[1].rstrip('>') for c in server.commands()[before:]
-            if c.startswith('ARTICLE')} == {
-        'notes.txt.%d@example.com' % no for no in (1, 2, 3)}
-    assert (out / 'notes.txt').read_bytes() == NOTES
+    # A file that is gone, or whose .ERRORS file can't be read, is fetched
+    # again (only its articles); the .ERRORS file goes once it is whole
+    for spoil in (lambda: (out / 'notes.txt').unlink(),
+                  lambda: (out / 'notes.txt.ERRORS').write_text('{ broken')):
+        spoil()
+        before = len(server.commands())
+        result = nr('-y', 'search', 'release', '-d', '-o',
+                    str(tmp_path / 'out'))
+        assert result.exit_code == 0, result.output
+        assert {c.split('<', 1)[1].rstrip('>')
+                for c in server.commands()[before:]
+                if c.startswith('ARTICLE')} == {
+            'notes.txt.%d@example.com' % no for no in (1, 2, 3)}
+        assert (out / 'notes.txt').read_bytes() == NOTES
+        assert sorted(os.listdir(str(out))) == ['notes.txt', 'readme.nfo']
 
 
 def test_text_and_articles_are_saved_and_each_fetched_once(
@@ -149,9 +155,9 @@ def test_text_and_articles_are_saved_and_each_fetched_once(
     assert not [c for c in server.commands()[before:]
                 if c.startswith('ARTICLE')]
 
-    # A text file that changed is written again from the archive (the
+    # A text file that is gone is written again from the archive (the
     # text article was kept there when it was fetched); nothing is fetched
-    (out / 'text' / ('%s.txt' % CHATTER_ID)).write_text('changed')
+    (out / 'text' / ('%s.txt' % CHATTER_ID)).unlink()
     before = len(server.commands())
     assert nr('-y', 'search', 'release', '-x', '-o',
               str(tmp_path / 'Downloads')).exit_code == 0
@@ -191,8 +197,9 @@ def test_nothing_is_removed_until_it_is_all_saved(tmp_path, indexed):
     """
     An article no server has makes the download fail (exit 1) and keeps
     the collection (--delete removes nothing); what arrived is placed.
-    Once it is there, the next run fetches only it, and --delete removes
-    the collection.
+    It is an old post, so running it again doesn't ask for it again (its
+    .ERRORS file remembers); --retry-missing does, and once it is all
+    there --delete removes the collection.
     """
     server, nr = indexed
     out = tmp_path / 'out' / 'release'
@@ -206,13 +213,28 @@ def test_nothing_is_removed_until_it_is_all_saved(tmp_path, indexed):
     assert 'Removed' not in result.output
     assert (out / 'notes.txt').stat().st_size == len(NOTES)
     assert (out / 'notes.txt').read_bytes() != NOTES
-    assert '<notes.txt.2@example.com>: no server has it' in (
-        out / 'notes.txt.ERRORS').read_text()
+    assert '<notes.txt.2@example.com>: no server has it (asked for again ' \
+        'only once you add a server)' in (
+            out / 'notes.txt.ERRORS').read_text()
     assert nr('search', 'release', '-q').output.strip()
 
+    # Asking again can't help, so it isn't asked for; even with the staging
+    # directory gone (and the parts that came with it, fetched again), the
+    # .ERRORS file remembers
+    for staging in (tmp_path / 'cache' / 'downloads').iterdir():
+        NNTPFetcher.remove_staging(str(staging))
     before = len(server.commands())
     result = nr('-y', 'search', 'release', '-d', '--delete', '-o',
                 str(tmp_path / 'out'))
+    assert result.exit_code == 1, result.output
+    assert '1 not asked for again' in result.output
+    assert 'ARTICLE <notes.txt.2@example.com>' not in server.commands()[
+        before:]
+    assert (out / 'notes.txt.ERRORS').exists()
+
+    before = len(server.commands())
+    result = nr('-y', 'search', 'release', '-d', '--delete', '-o',
+                str(tmp_path / 'out'), '--retry-missing')
     assert result.exit_code == 0, result.output
     assert [c for c in server.commands()[before:]
             if c.startswith('ARTICLE')] == [
@@ -221,6 +243,39 @@ def test_nothing_is_removed_until_it_is_all_saved(tmp_path, indexed):
     assert not (out / 'notes.txt.ERRORS').exists()
     assert 'Removed 1 collection(s).' in result.output
     assert nr('search', 'release', '-q').output.strip() == ''
+
+
+def test_a_damaged_part_is_fetched_again_once_staging_is_gone(
+        tmp_path, indexed):
+    """
+    A part that came damaged is kept in the staging directory; once that
+    is removed, the part is asked for again (rather than left as zeros)
+    """
+    from tests.NNTPDownloader_Test import yenc_article
+
+    server, nr = indexed
+    out = tmp_path / 'out' / 'release'
+    step = -(-len(NOTES) // 3)
+    damaged = tmp_path / 'damaged.msg'
+    damaged.write_bytes(yenc_article(
+        'notes.txt', NOTES[2 * step:], 3, 3, 2 * step, len(NOTES),
+        'notes.txt.3@example.com', damaged=True))
+    server.on(r'^ARTICLE <notes.txt.3@example.com>$', lambda s, m: Reply(
+        '220 0 <notes.txt.3@example.com>', body=damaged.read_bytes()),
+        once=True)
+
+    result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
+    assert result.exit_code == 1, result.output
+    assert (out / 'notes.txt.ERRORS').exists()
+
+    for staging in (tmp_path / 'cache' / 'downloads').iterdir():
+        NNTPFetcher.remove_staging(str(staging))
+    before = len(server.commands())
+    result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
+    assert 'ARTICLE <notes.txt.3@example.com>' in server.commands()[before:]
+    assert result.exit_code == 0, result.output
+    assert (out / 'notes.txt').read_bytes() == NOTES
+    assert not (out / 'notes.txt.ERRORS').exists()
 
 
 def test_an_nzb_file_is_saved_and_only_replaced_when_it_changes(
@@ -262,7 +317,8 @@ def test_a_download_carries_on_when_the_index_cant_be_written(
         tmp_path, indexed, monkeypatch):
     """
     Not being able to note what was learned only warns; the download
-    still works, and the next run checks by fetching again
+    still works, and the next run fetches the text article again to find
+    out what it holds (the files are there, so they aren't)
     """
     from sqlalchemy.orm import Session
     from sqlalchemy.sql.dml import Update
@@ -283,19 +339,19 @@ def test_a_download_carries_on_when_the_index_cant_be_written(
     assert (tmp_path / 'out' / 'release' / 'notes.txt').read_bytes() == NOTES
     assert "couldn't be noted in the index" in result.output
 
-    # Nothing was noted, so it is all checked again by fetching
+    # Nothing was noted, so the text article is fetched again
     monkeypatch.undo()
     before = len(server.commands())
     assert nr('-y', 'search', 'release', '-d', '-o',
               str(tmp_path / 'out')).exit_code == 0
-    assert len([c for c in server.commands()[before:]
-                if c.startswith('ARTICLE')]) == 5
+    assert [c for c in server.commands()[before:]
+            if c.startswith('ARTICLE')] == ['ARTICLE <%s>' % CHATTER_ID]
 
 
 def test_what_a_download_learns_is_kept_in_the_index(tmp_path, indexed):
     """
-    The size and crc32 of each file put together, and each article's
-    crc32 and kind, are kept with the index
+    Whether each article carries a file or is only text is kept with the
+    index
     """
     server, nr = indexed
     assert nr('-y', 'search', 'release', '-d', '-o',
@@ -303,13 +359,10 @@ def test_what_a_download_learns_is_kept_in_the_index(tmp_path, indexed):
 
     indexer = NNTPIndexer(str(tmp_path / 'index.db'))
     try:
-        files, known = indexer.fetch_files(1)
-        notes = next(f for f in files if f['name'] == 'notes.txt')
-        assert (notes['size'], notes['crc32']) == (
-            len(NOTES), '%08x' % crc32(NOTES))
+        _, known = indexer.fetch_files(1)
         assert known[CHATTER_ID].kind == 0
         assert known['notes.txt.1@example.com'].kind == 1
-        assert all(len(note.crc32) == 8 for note in known.values())
+        assert len(known) == 5
 
     finally:
         indexer.close()
@@ -432,11 +485,10 @@ def test_what_is_learned_of_articles_not_indexed_is_skipped(
     indexer = NNTPIndexer(str(tmp_path / 'index.db'))
     try:
         assert indexer.note_fetched(segments={
-            CHATTER_ID: SegmentNote(0, 'abcd1234', None),
-            'not.indexed@example.com': SegmentNote(1, '00000000', None)},
-            files={999999: (1, '00000000')}) is True
+            CHATTER_ID: SegmentNote(0),
+            'not.indexed@example.com': SegmentNote(1)}) is True
         _, known = indexer.fetch_files(1)
-        assert known[CHATTER_ID] == SegmentNote(0, 'abcd1234', None)
+        assert known == {CHATTER_ID: SegmentNote(0)}
 
     finally:
         indexer.close()
@@ -446,8 +498,8 @@ def test_what_the_archive_knows_saves_fetching(tmp_path):
     """
     After 'nr update --content' kept the small articles, -x fetches
     nothing: the text is written from the archive, and the articles it
-    knows carry files are left alone; each article's kind and crc32 are
-    noted with the index too
+    knows carry files are left alone; each article's kind is noted with
+    the index too
     """
     from datetime import datetime
     from newsreap.cli import cli
@@ -495,7 +547,6 @@ def test_what_the_archive_knows_saves_fetching(tmp_path):
                 known.update(indexer.fetch_files(collection.id)[1])
             assert known[CHATTER_ID].kind == 0
             assert known[segments[0][1]].kind == 1
-            assert all(len(note.crc32) == 8 for note in known.values())
 
         finally:
             indexer.close()
@@ -503,8 +554,7 @@ def test_what_the_archive_knows_saves_fetching(tmp_path):
 
 def test_some_of_a_files_articles_are_marked_partial(tmp_path, indexed):
     """
-    Asking for only some of a file's articles marks it partial, so what is
-    put together of them is never noted as the whole file's size and crc32
+    Asking for only some of a file's articles marks it partial
     """
     indexer = NNTPIndexer(str(tmp_path / 'index.db'))
     try:
@@ -520,23 +570,50 @@ def test_some_of_a_files_articles_are_marked_partial(tmp_path, indexed):
         indexer.close()
 
 
-def test_a_copy_already_there_isnt_replaced_by_an_unfinished_one(
-        tmp_path, indexed):
+def test_a_copy_already_there_is_left_alone(tmp_path, indexed):
     """
-    When a file can't all be had, a copy already in place (that couldn't
-    be checked) is kept, and what came goes beside it as .partial
+    A file already in place without a .ERRORS file beside it is whole, so
+    nothing is fetched for it and it is left as it is
     """
     server, nr = indexed
     out = tmp_path / 'out' / 'release'
     out.mkdir(parents=True)
     (out / 'notes.txt').write_bytes(b'my own copy')
-    server.on(r'^ARTICLE <notes.txt.2@example.com>$',
-              Reply('430 No such article'), once=True)
 
     result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.output
     assert (out / 'notes.txt').read_bytes() == b'my own copy'
-    assert (out / 'notes.txt.partial').stat().st_size == len(NOTES)
+    assert not [c for c in server.commands() if 'notes.txt' in c]
+    assert sorted(os.listdir(str(out))) == ['notes.txt', 'readme.nfo']
+
+
+def test_text_no_server_has_is_listed_in_text_errors(tmp_path, indexed):
+    """
+    -x: an article no server has is listed in text.ERRORS; it is an old
+    post, so the next run doesn't ask for it again; once it comes
+    (--retry-missing), text.ERRORS goes
+    """
+    server, nr = indexed
+    out = tmp_path / 'out' / 'release'
+    server.on(r'^ARTICLE <%s>$' % CHATTER_ID, Reply('430 No such article'),
+              once=True)
+
+    result = nr('-y', 'search', 'release', '-x', '-o', str(tmp_path / 'out'))
+    assert result.exit_code == 1, result.output
+    assert '<%s>: no server has it (asked for again only once you add a ' \
+        'server)' % CHATTER_ID in (out / 'text.ERRORS').read_text()
+
+    before = len(server.commands())
+    result = nr('-y', 'search', 'release', '-x', '-o', str(tmp_path / 'out'))
+    assert result.exit_code == 1, result.output
+    assert not [c for c in server.commands()[before:]
+                if c.startswith('ARTICLE')]
+    assert (out / 'text.ERRORS').exists()
+
+    result = nr('-y', 'search', 'release', '-x', '-o', str(tmp_path / 'out'),
+                '--retry-missing')
+    assert result.exit_code == 0, result.output
+    assert sorted(os.listdir(str(out))) == ['text']
 
 
 def test_message_ids_never_share_a_file_name():

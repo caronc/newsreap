@@ -229,6 +229,12 @@ downloads:
    # run that was stopped) this many days or more; 0 keeps them
    # prune_work: 1
 
+   # An article no server had is asked for again by a later run only when
+   # that can help: while the post is this many minutes old or less (a new
+   # post takes a while to reach every server), or once you add a server.
+   # --retry-missing asks again regardless.
+   # retry_window: 60
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -264,13 +270,16 @@ posting:
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Database Configuration
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-# Where indexed groups and articles are kept.  This is an SQLAlchemy URL so
-# most databases are supported; a larger database server (PostgreSQL,
-# MySQL) is faster than SQLite for big groups.
+# Where indexed groups and articles are kept: SQLite (the default),
+# PostgreSQL or MySQL 8 or newer, given as a database URL.  A database
+# server is faster than SQLite for big groups; it needs its driver
+# installed:
+#   pip install "newsreap[postgresql]"   (postgresql+psycopg://...)
+#   pip install "newsreap[mysql]"        (mysql+pymysql://...)
 database:
    engine: 'sqlite:///%{data_dir}/newsreap.db'
-#   engine: 'postgresql+psycopg2://user:pass@localhost/newsreap'
-#   engine: 'mysql+mysqldb://user:pass@hostname/newsreap'
+#   engine: 'postgresql+psycopg://user:pass@localhost/newsreap'
+#   engine: 'mysql+pymysql://user:pass@hostname/newsreap'
 
    # Where the collections found are indexed (and searched).  By default
    # it is an SQLite file in the data directory; give it a database of its
@@ -280,5 +289,5 @@ database:
    #  - MySQL needs version 8 or newer (for its ngram full text search)
    # Posts and downloads always keep their own small SQLite file, so they
    # can pick up where they left off.
-#   index_engine: 'postgresql+psycopg2://user:pass@localhost/newsreap_index'
+#   index_engine: 'postgresql+psycopg://user:pass@localhost/newsreap_index'
 #   index_engine: 'mysql+pymysql://user:pass@hostname/newsreap_index'

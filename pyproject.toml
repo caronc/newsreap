@@ -38,7 +38,7 @@ dependencies = [
     "pytz",
     "sortedcontainers",
     "PyYAML",
-    "SQLAlchemy>=1.4",
+    "SQLAlchemy>=2.0",
     "gevent>=1.5",
     "python-dateutil",
     "cryptography",
@@ -61,7 +61,7 @@ keywords = [
 
 # Keep the index (see index_engine in config.yaml) on a database server
 postgresql = [
-    "psycopg2-binary",
+    "psycopg[binary]",
 ]
 mysql = [
     "pymysql",

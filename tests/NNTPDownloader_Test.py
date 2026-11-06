@@ -18,7 +18,6 @@ gevent.monkey.patch_all()
 import fcntl
 import io
 import os
-import subprocess
 import zipfile
 from shutil import which
 from zlib import crc32
@@ -28,12 +27,14 @@ from click.testing import CliRunner
 
 from newsreap.NNTPDownloader import NNTPDownloader
 from newsreap.NNTPManager import NNTPManager
+from newsreap.NNTPRetry import NNTPRetry
 from newsreap.NNTPSettings import NNTPSettings
 from newsreap.codecs.CodecYenc import yenc_encode
 
 from tests.FakeNNTPServer import FakeNNTPServer
 from tests.FakeNNTPServer import Reply
 from tests.conftest import config_for
+from tests.conftest import run_program
 
 GROUP = 'alt.binaries.test'
 
@@ -82,18 +83,20 @@ def post(server, tmp_path, name, data, parts=1):
     return name, segments
 
 
-def write_nzb(path, files, meta=()):
+def write_nzb(path, files, meta=(), date=1577836800):
     """
     Writes an NZB file listing the files given (see post()); returns its
     path
+
+    - date: when they were posted (seconds since 1970; in 2020 by default)
     """
     head = ''.join('  <meta type="%s">%s</meta>\n' % entry for entry in meta)
     body = ''.join(
-        ' <file poster="me@example.com" date="1577836800" '
+        ' <file poster="me@example.com" date="%d" '
         'subject="&quot;%s&quot; yEnc (1/%d)">\n'
         '  <groups><group>%s</group></groups>\n  <segments>\n%s'
         '  </segments>\n </file>\n' % (
-            name, len(segments), GROUP, ''.join(
+            date, name, len(segments), GROUP, ''.join(
                 '   <segment bytes="100" number="%d">%s</segment>\n' % entry
                 for entry in segments))
         for name, segments in files)
@@ -108,7 +111,15 @@ def asked(server):
     """
     Returns the articles asked of the server so far (each once)
     """
-    return {c.split('<', 1)[1].rstrip('>') for c in server.commands()
+    return asked_since(server, 0)
+
+
+def asked_since(server, start):
+    """
+    Returns the articles asked of the server since its `start`th command
+    (each once)
+    """
+    return {c.split('<', 1)[1].rstrip('>') for c in server.commands()[start:]
             if c.startswith('ARTICLE <')}
 
 
@@ -160,8 +171,8 @@ def test_files_are_put_together_and_placed(tmp_path, usenet):
 def test_a_stopped_download_carries_on_where_it_left_off(tmp_path, usenet):
     """
     Running it again only fetches what it doesn't have yet: a part that
-    failed, was damaged, or was cut short (never written whole) is fetched
-    again; the rest is kept
+    failed is fetched again; the rest is kept.  A part that came damaged
+    (of an old post) is only asked for again once a server is added.
     """
     server, downloader = usenet
     name, segments = post(server, tmp_path, 'notes.txt', NOTES, parts=4)
@@ -194,14 +205,27 @@ def test_a_stopped_download_carries_on_where_it_left_off(tmp_path, usenet):
     assert 'Part 1 ' not in errors
     assert os.path.isdir(get.staging)
 
-    # Again: only what is wrong is fetched, it is finished in the same
-    # folder, and the .ERRORS file goes
+    # Again: only the part that failed is fetched; the damaged one would
+    # come the same from the same servers
+    before = len(server.commands())
+    assert get.download(nzb) is False
+    assert asked_since(server, before) == {'notes.txt.2@example.com'}
+    assert (get.resumed, get.held) == (2, 1)
+    with open(os.path.join(folder, 'notes.txt.ERRORS')) as fp:
+        errors = fp.read()
+    assert 'Part 2 ' not in errors
+    assert '<notes.txt.3@example.com>: it is damaged (its crc32 doesn\'t ' \
+        'match what was posted) (asked for again only once you add a ' \
+        'server)' in errors
+
+    # A server added since might have it whole: it is asked for, it is
+    # finished in the same folder, and the .ERRORS file goes
+    get.retry = NNTPRetry([*(tuple(h.rsplit(':', 1)) for h in get.retry.hosts),
+                           ('News.New.Example', 563)])
     before = len(server.commands())
     assert get.download(nzb) is True, get.problem
-    again = {c.split('<', 1)[1].rstrip('>')
-             for c in server.commands()[before:] if c.startswith('ARTICLE')}
-    assert again == {'notes.txt.2@example.com', 'notes.txt.3@example.com'}
-    assert get.resumed == 2
+    assert asked_since(server, before) == {'notes.txt.3@example.com'}
+    assert get.resumed == 3
     assert get.folder == folder
     assert os.listdir(folder) == ['notes.txt']
     assert (tmp_path / 'Downloads' / 'release' / 'notes.txt'
@@ -319,10 +343,9 @@ def seven_zipped(tmp_path, password):
     source.mkdir(exist_ok=True)
     (source / 'secret.txt').write_bytes(b'hidden away')
     target = tmp_path / 'made.7z'
-    subprocess.run(
+    run_program(
         [which('7z'), 'a', '-p%s' % password, '-mhe=on', str(target),
-         str(source / 'secret.txt')], check=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+         str(source / 'secret.txt')], check=True)
     return target.read_bytes()
 
 
@@ -363,10 +386,9 @@ def test_damaged_files_are_repaired_with_just_enough_recovery_volumes(
     source = tmp_path / 'made'
     source.mkdir()
     (source / 'notes.txt').write_bytes(NOTES)
-    subprocess.run(
+    run_program(
         [which('par2'), 'create', '-r30', '-n3', '-s1024', '-q',
-         str(source / 'notes.par2'), str(source / 'notes.txt')],
-        check=True, stdout=subprocess.DEVNULL)
+         str(source / 'notes.par2'), str(source / 'notes.txt')], check=True)
 
     files = [post(server, tmp_path, 'notes.txt', NOTES, parts=4)]
     volumes = []
@@ -566,11 +588,55 @@ def test_a_file_no_server_has_makes_the_download_fail(tmp_path, usenet):
     with open(os.path.join(get.folder, 'readme.nfo.ERRORS')) as fp:
         assert '<readme.nfo.1@example.com>: no server has it' in fp.read()
 
-    # A server that has it now (ie: it reached it late) finishes it, in
-    # the same folder; the .ERRORS file goes
+    # It is an old post: asking our servers again can't help, so they
+    # aren't asked
     server._rules.clear()
+    before = len(server.commands())
+    assert get.download(nzb) is False
+    assert asked_since(server, before) == set()
+    with open(os.path.join(get.folder, 'readme.nfo.ERRORS')) as fp:
+        assert 'only once you add a server' in fp.read()
+
+    # Asked to anyway (and a server has it now), it is finished in the
+    # same folder; the .ERRORS file goes
+    get = downloader(retry_missing=True)
     assert get.download(nzb) is True, get.problem
+    assert asked_since(server, before) == {'readme.nfo.1@example.com'}
     assert sorted(os.listdir(get.folder)) == ['notes.txt', 'readme.nfo']
+
+
+def test_new_posts_are_asked_for_again_for_a_while(
+        tmp_path, usenet, monkeypatch):
+    """
+    A part of a new post no server had yet is asked for again by the next
+    run (a post takes a while to reach every server), but not straight
+    after the last time
+    """
+    import time
+
+    server, downloader = usenet
+    readme = post(server, tmp_path, 'readme.nfo', README)
+    server.on(r'^ARTICLE <readme.nfo.1@example.com>$',
+              Reply('430 No such article'), once=True)
+    nzb = write_nzb(tmp_path / 'release.nzb', [readme], date=int(time.time()))
+
+    get = downloader()
+    assert get.download(nzb) is False
+    with open(os.path.join(get.folder, 'readme.nfo.ERRORS')) as fp:
+        assert 'no server has it (asked for again next time)' in fp.read()
+
+    # Moments later: not yet
+    before = len(server.commands())
+    assert get.download(nzb) is False
+    assert asked_since(server, before) == set() and get.held == 1
+
+    # A while later: it arrived
+    monkeypatch.setattr('newsreap.NNTPRetry.RETRY_GAP',
+                        __import__('datetime').timedelta(0))
+    assert get.download(nzb) is True, get.problem
+    assert asked_since(server, before) == {'readme.nfo.1@example.com'}
+    assert (tmp_path / 'Downloads' / 'release' / 'readme.nfo').read_bytes() \
+        == README
 
 
 def test_files_of_the_same_name_dont_overwrite_each_other(tmp_path, usenet):
@@ -649,6 +715,61 @@ def test_parts_that_dont_say_where_they_go_follow_each_other(tmp_path):
         db.close()
 
 
+def test_parts_that_dont_say_where_they_go_keep_their_place(tmp_path):
+    """
+    With a part of them missing, the rest still go where they belong: every
+    part but the last is posted the same size, so part 3 goes after the
+    space part 2 leaves (as zeros)
+    """
+    get, db, session = staged(tmp_path, [
+        ('a', 1, 0, 4, b'AAAA'), ('c', 3, 0, 2, b'CC')])
+    try:
+        path, complete = get._assemble(session, [
+            {'name': 'x.bin', 'segments': [(1, 'a'), (2, 'b'), (3, 'c')]}
+        ])['x.bin']
+        assert complete is False
+        with open(path, 'rb') as fp:
+            assert fp.read() == b'AAAA\0\0\0\0CC'
+        assert not any("don't say where" in line
+                       for line in get.errors[path])
+
+    finally:
+        db.close()
+
+
+def test_a_part_that_cant_be_read_back_is_left_out(tmp_path, caplog):
+    """
+    A part whose file can't be read is warned about and left as zeros (the
+    rest is still put together), and is fetched again next time
+    """
+    import logging
+    from newsreap.Logging import NEWSREAP_ENGINE
+    from newsreap.objects.get.DownloadedSegment import DownloadedSegment
+
+    caplog.set_level(logging.WARNING, logger=NEWSREAP_ENGINE)
+    get, db, session = staged(tmp_path, [
+        ('a', 1, 0, 4, b'AAAA'), ('b', 2, 4, 8, b'BBBB')])
+    try:
+        unreadable = os.path.join(get.staging, 'parts', 'a')
+        os.chmod(unreadable, 0)
+        if os.access(unreadable, os.R_OK):
+            pytest.skip('files can always be read here (ie: as root)')
+
+        path, complete = get._assemble(session, [
+            {'name': 'x.bin', 'segments': [(1, 'a'), (2, 'b')]}])['x.bin']
+        assert complete is False
+        with open(path, 'rb') as fp:
+            assert fp.read() == b'\0\0\0\0BBBB'
+        assert any("<a>: it couldn't be read back" in line
+                   for line in get.errors[path])
+        assert any('Could not read' in r.getMessage()
+                   for r in caplog.records)
+        assert session.get(DownloadedSegment, 'a').path == ''
+
+    finally:
+        db.close()
+
+
 def test_a_part_placed_beyond_any_file_is_damaged(tmp_path):
     """
     A part claiming to sit beyond 1 TiB isn't written (no huge file is
@@ -711,3 +832,210 @@ def test_errors_files_that_cant_be_written_or_removed_only_warn(
     clear_errors(str(target))
     assert not (tmp_path / 'notes.txt.ERRORS').exists()
     clear_errors(str(target))
+
+
+def test_an_unfinished_file_never_looks_whole(tmp_path, usenet, monkeypatch):
+    """
+    An unfinished file has its .ERRORS file written before it is moved
+    in; a whole one is moved in before its .ERRORS file goes, so a stop at
+    any moment never leaves an unfinished file without one
+    """
+    import newsreap.NNTPDownloader as module
+
+    server, downloader = usenet
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        post(server, tmp_path, 'notes.txt', NOTES, parts=3)])
+    server.on(r'^ARTICLE <notes.txt.2@example.com>$',
+              Reply('430 No such article'), once=True)
+
+    seen = []
+    place_file, clear_errors = module.place_file, module.clear_errors
+
+    def placing(source, target):
+        seen.append(('placed', os.path.exists(target + '.ERRORS')))
+        return place_file(source, target)
+
+    def clearing(path):
+        seen.append(('cleared', os.path.exists(path)))
+        return clear_errors(path)
+
+    monkeypatch.setattr(module, 'place_file', placing)
+    monkeypatch.setattr(module, 'clear_errors', clearing)
+
+    get = downloader()
+    assert get.download(nzb) is False
+    assert seen == [('placed', True)]
+
+    seen.clear()
+    get = downloader(retry_missing=True)
+    assert get.download(nzb) is True, get.problem
+    assert seen == [('placed', True), ('cleared', True)]
+    assert os.listdir(get.folder) == ['notes.txt']
+
+
+def test_an_unfinished_file_stays_in_staging_without_its_errors_file(
+        tmp_path, usenet, monkeypatch):
+    """
+    When its .ERRORS file can't be written, an unfinished file isn't
+    placed (it would look whole); it stays in the staging directory
+    """
+    from newsreap.NNTPErrorsFile import NNTPErrorsFile
+
+    server, downloader = usenet
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        post(server, tmp_path, 'notes.txt', NOTES, parts=3),
+        post(server, tmp_path, 'readme.nfo', README)])
+    server.on(r'^ARTICLE <notes.txt.2@example.com>$',
+              Reply('430 No such article'), once=True)
+    monkeypatch.setattr(NNTPErrorsFile, 'save', lambda self, *a, **k: False)
+
+    get = downloader()
+    assert get.download(nzb) is False
+    assert os.listdir(get.folder) == ['readme.nfo']
+    assert os.path.isfile(os.path.join(get.staging, 'files', 'notes.txt'))
+
+
+def test_an_errors_file_that_cant_be_read_means_asking_again(
+        tmp_path, usenet):
+    """
+    A .ERRORS file that can't be read back remembers nothing, so what no
+    server had is asked for again
+    """
+    server, downloader = usenet
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        post(server, tmp_path, 'notes.txt', NOTES, parts=3)])
+    server.on(r'^ARTICLE <notes.txt.2@example.com>$',
+              Reply('430 No such article'), once=True)
+
+    get = downloader()
+    assert get.download(nzb) is False
+    errors = os.path.join(get.folder, 'notes.txt.ERRORS')
+    with open(errors, 'a') as fp:
+        fp.write('\n  : [ broken\n')
+
+    before = len(server.commands())
+    assert get.download(nzb) is True, get.problem
+    assert asked_since(server, before) == {'notes.txt.2@example.com'}
+    assert os.listdir(get.folder) == ['notes.txt']
+
+
+def test_ctrl_c_keeps_what_is_on_its_way_and_stops(
+        tmp_path, usenet, monkeypatch):
+    """
+    Ctrl-C stops asking for more; the articles already asked for are
+    still kept, nothing is placed, and running it again carries on
+    """
+    from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+
+    server, downloader = usenet
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        post(server, tmp_path, 'notes.txt', NOTES, parts=8)])
+
+    wait = NNTPConnectionRequest.wait
+    calls = []
+
+    def pressed(self, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return wait(self, *args, **kwargs)
+
+    monkeypatch.setattr(NNTPConnectionRequest, 'wait', pressed)
+    get = downloader()
+    with pytest.raises(KeyboardInterrupt):
+        get.download(nzb)
+
+    # Everything asked for was kept (none of it is asked for again)
+    first = asked(server)
+    assert 1 < len(first) < 8 and get.fetched == len(first)
+    assert not os.path.exists(str(tmp_path / 'Downloads'))
+
+    monkeypatch.undo()
+    before = len(server.commands())
+    get = downloader()
+    assert get.download(nzb) is True, get.problem
+    assert asked_since(server, before) == {
+        'notes.txt.%d@example.com' % no for no in range(1, 9)} - first
+    assert (tmp_path / 'Downloads' / 'release' / 'notes.txt').read_bytes() \
+        == NOTES
+
+
+def test_ctrl_c_on_the_command_line_says_it_stopped(tmp_path, monkeypatch):
+    """
+    nr get stopped with Ctrl-C says so and exits with 130
+    """
+    from newsreap.cli import cli
+
+    def stopped(self, *args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(NNTPDownloader, 'download', stopped)
+    with FakeNNTPServer(join_group=False) as server:
+        nzb = write_nzb(tmp_path / 'release.nzb', [
+            post(server, tmp_path, 'notes.txt', NOTES)])
+        config = config_for(server, tmp_path / 'config.yaml')
+        result = CliRunner().invoke(cli, ['--config', config, 'get', nzb],
+                                    obj={})
+        assert result.exit_code == 130
+        assert 'Stopped; run it again to carry on.' in result.output
+
+
+def test_a_stop_while_placing_finishes_in_the_same_folder(
+        tmp_path, usenet, monkeypatch):
+    """
+    Stopped while its files are being placed, running it again finishes
+    in the same folder (no second folder, no '(2)' copies)
+    """
+    import newsreap.NNTPDownloader as module
+
+    server, downloader = usenet
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        post(server, tmp_path, 'notes.txt', NOTES, parts=2),
+        post(server, tmp_path, 'readme.nfo', README)])
+
+    place_file = module.place_file
+    calls = []
+
+    def pressed(source, target):
+        calls.append(target)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return place_file(source, target)
+
+    monkeypatch.setattr(module, 'place_file', pressed)
+    with pytest.raises(KeyboardInterrupt):
+        downloader().download(nzb)
+
+    monkeypatch.undo()
+    get = downloader()
+    assert get.download(nzb) is True, get.problem
+    assert os.listdir(str(tmp_path / 'Downloads')) == ['release']
+    assert sorted(os.listdir(get.folder)) == ['notes.txt', 'readme.nfo']
+
+
+def test_a_copy_cut_short_leaves_nothing_behind(tmp_path, monkeypatch):
+    """
+    A file copied from another drive that can't be finished (ie: the drive
+    is full) leaves no part written copy in the download directory
+    """
+    import newsreap.NNTPDownloader as module
+
+    source, target = tmp_path / 'from.bin', tmp_path / 'to.bin'
+    source.write_bytes(b'data')
+
+    def other_drive(a, b):
+        if a == str(source):
+            raise OSError(18, 'Invalid cross-device link')
+        return os.replace(a, b)
+
+    def full(a, b):
+        with open(b, 'wb') as fp:
+            fp.write(b'da')
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(module, 'replace', other_drive)
+    monkeypatch.setattr(module, 'copyfile', full)
+    with pytest.raises(OSError):
+        module.place_file(str(source), str(target))
+
+    assert sorted(os.listdir(str(tmp_path))) == ['from.bin']

@@ -47,14 +47,10 @@ class Segment(ObjectBase):
     # Its size (in bytes)
     size = Column(Integer, nullable=False, default=0)
 
-    # Learned the first time it is downloaded (None until then), so a
-    # download run again knows what it already has:
-    # - kind: whether it carries a file or is only text (see ArchiveKind)
-    # - crc32: the crc32 of the article as the server sent it
-    # - text_crc32: the crc32 of the text file written of it (nr search -x)
+    # Whether it carries a file or is only text (see ArchiveKind); learned
+    # the first time it is fetched (None until then), so asking only for
+    # text never fetches it again just to find out
     kind = Column(SmallInteger)
-    crc32 = Column(String(8))
-    text_crc32 = Column(String(8))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

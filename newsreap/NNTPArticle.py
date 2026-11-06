@@ -55,9 +55,6 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 DEFAULT_NNTP_SUBJECT = 'unknown.file'
 DEFAULT_NNTP_POSTER = 'newsreaper <news@reap.er>'
 
-# Used when parsing groups from a header
-GROUP_DELIMITER_RE = re.compile('[ \t,]+', re.ASCII)
-
 # A regular expression that can be used to check if a string is a valid
 # Message-ID
 MESSAGE_ID_RE = re.compile(r'^\s*<?\s*(?P<id>[a-z0-9@!.$-]+)\s*>?\s*$',

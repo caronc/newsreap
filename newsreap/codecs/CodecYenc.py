@@ -26,8 +26,6 @@ from newsreap.Utils import SEEK_SET
 from newsreap.Utils import SEEK_END
 
 from newsreap.codecs.CodecBase import BIN_MASK
-from newsreap.codecs.CodecBase import E_ERROR
-from newsreap.codecs.CodecBase import E_CRC32
 from newsreap.codecs.CodecBase import CodecBase
 from newsreap.codecs.CodecBase import output_name
 
@@ -76,19 +74,6 @@ YENC_ATTRIBUTE_RE = re.compile(
 # The attributes we use (any other is left out)
 YENC_ATTRIBUTES = frozenset((
     'part', 'total', 'line', 'size', 'begin', 'end', 'pcrc32', 'crc32'))
-
-# This is applied to the regular expression matches to convert
-# key matches into 1 (YENC_RE is kept as it was; detect() reads lines with
-# YENC_LINE_RE)
-YENC_KEY_MAP = {
-    'begin': 'begin', 'key_1': 'key',
-    'end': 'end', 'line': 'line',
-    'part_1': 'part', 'part_2': 'part', 'part_3': 'part',
-    'size_1': 'size', 'size_2': 'size', 'size_3': 'size',
-    'name_1': 'name', 'total': 'total',
-    'pcrc32_1': 'pcrc32', 'pcrc32_2': 'pcrc32',
-    'crc32_1': 'crc32', 'crc32_2': 'crc32',
-}
 
 # The default amount of memory to work with within the yEnc buffer
 # The larger this value, the faster the decoding process however

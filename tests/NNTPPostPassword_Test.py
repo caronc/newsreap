@@ -18,7 +18,6 @@ gevent.monkey.patch_all()
 import json
 import os
 import shutil
-import subprocess
 import stat
 import string
 
@@ -32,6 +31,7 @@ from newsreap.NNTPPostFactory import make_password
 from newsreap.NNTPnzb import NNTPnzb
 from tests.FakeNNTPServer import FakeNNTPServer
 from tests.conftest import config_for
+from tests.conftest import run_program
 
 
 class Offline:
@@ -277,9 +277,8 @@ def test_archives_need_the_password(tmp_path):
     archive = os.path.join(pf.prep_path, archives[0])
 
     def opens(*args):
-        return subprocess.run(
-            ['unrar', 't', '-y', *args, archive],
-            capture_output=True).returncode == 0
+        return run_program(
+            ['unrar', 't', '-y', *args, archive]).returncode == 0
 
     assert opens('-p%s' % password) is True
     assert opens('-pwrong') is False

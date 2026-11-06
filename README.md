@@ -217,7 +217,7 @@ What happens:
   `~/.cache/newsreap/downloads/`), so several downloads never get in each
   other's way.
 - Stopped part way?  Run it again: what was fetched is kept, and only what
-  is missing, damaged or was cut short is fetched again.
+  is missing or was cut short is fetched again.
 - Damaged files are repaired with their par2 files, fetching only the
   recovery volumes the repair needs.
 - Archives (rar, 7z, zip) are extracted, keeping the directories they hold;
@@ -225,12 +225,37 @@ What happens:
 - If something can't be opened (a password that isn't known, or damage par2
   couldn't fix), the files are put together and left for you, and nothing
   is removed.
-- A file that isn't all there gets a `.ERRORS` file beside it (ie:
-  `movie.mkv.ERRORS`, as Pan does) listing each part that is missing or
-  damaged, where it goes in the file and its Message-ID.  Run the same
-  download again later: only those parts are asked for again (a server can
-  take a while to receive what was just posted), the download finishes in
-  the same folder, and the `.ERRORS` file goes once the file is whole.
+- A file that isn't all there is still put together as best it can be
+  (zeros where a part is missing, a damaged part as it came), so par2 can
+  still repair it.  A `.ERRORS` file beside it (ie: `movie.mkv.ERRORS`, as
+  Pan does) lists each part that is missing or damaged, where it goes in
+  the file and its Message-ID.  The download finishes in the same folder
+  when run again, and the `.ERRORS` file goes once the file is whole.
+- **A file without a `.ERRORS` file beside it is whole.**  Everything is
+  put together in the staging directory, and nothing shows up in your
+  download directory until every server (and every retry) was tried.  An
+  unfinished file gets its `.ERRORS` file before it is moved in, so even a
+  stop at the worst moment never leaves one looking whole.
+- **Ctrl-C** stops asking for more, keeps the articles already on their way
+  (for up to 10 seconds) and stops; nothing half made is placed.  Run it
+  again to carry on.  Pressing Ctrl-C a second time stops at once (still
+  safely).
+
+**When a missing part is asked for again.**  Asking the same servers again
+can only help in two cases, so a later run only asks then:
+- **The post is new.**  A post takes a while to reach every server
+  (usually minutes), so a part is asked for again while the post is up to
+  an hour old (`retry_window` in the `downloads:` section, in minutes).
+- **You added a server** since it was last asked for.  The `.ERRORS` file
+  remembers a short hash of each server that was asked (only its host and
+  port count, so swapping your main server and a backup changes nothing,
+  and removing one doesn't make anything worth asking for again).
+
+Otherwise nothing is asked for again, however often you run it (and the
+`.ERRORS` file says so).  `--retry-missing` asks for all of it regardless
+(ie: your provider's retention changed).  The `.ERRORS` file is YAML, so you
+can read it too; if it is changed so it can't be read back, its file is
+downloaded again.
 
 `--no-repair`, `--no-extract` and `--no-cleanup` turn the steps off for one
 run; the `downloads:` section of `config.yaml` sets them for good.  Each
@@ -263,19 +288,24 @@ nr search holiday -d --delete
 
 - It shows what it found and its size, and asks first (`-y` answers yes).
 - Each article is fetched once, whatever you asked for.
-- **Running the same download again only fetches what is missing.**  The
-  first download notes each file's size and crc32 (and each article's) in
-  the index, so a file still there and right is skipped without asking
-  the server.  A file that changed, or was cut short, is fetched again.
-  Once an article is known to carry a file, `-x` doesn't fetch it again.
+- **Running the same download again only fetches what is missing.**  A
+  file that is there without a `.ERRORS` file beside it is whole, so it is
+  skipped without asking the server (and so is a text file or an article
+  that is there).  Delete a file to have it fetched again.  Once an article
+  is known to carry a file, `-x` doesn't fetch it again.
 - A file missing a part is still saved (with zeros where the part goes),
   so you can repair it with par2 yourself, and a `.ERRORS` file beside it
   says which parts are missing or damaged.  The command then says what
   couldn't be saved and exits with 1, and `--delete` removes only what was
-  all saved.  Run it again later to try what is missing; the `.ERRORS`
-  file goes once the file is whole.
+  all saved.  Run it again later to try what is missing (asked for again
+  only when that can help, as `nr get` does; `--retry-missing` asks
+  regardless); the `.ERRORS` file goes once the file is whole.  The text
+  and articles that couldn't be had are listed the same way, in
+  `text.ERRORS` and `articles.ERRORS`.
+- Ctrl-C stops as `nr get` does; run it again to carry on.
 - If the index can't be written to, you are told once and the downloads
-  carry on; the next run just checks by fetching again.
+  carry on; the next run may fetch a few articles again to find out
+  whether they carry a file.
 
 A Message-ID downloads that one article as it is:
 ```bash

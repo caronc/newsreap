@@ -66,12 +66,6 @@ class CollectionFile(ObjectBase):
     first_posted = Column(DateTime)
     last_posted = Column(DateTime)
 
-    # The size and crc32 of the file once put together; learned the first
-    # time it is downloaded whole (None until then), so a download run
-    # again can tell the copy it has is right without fetching anything
-    file_size = Column(BigInteger)
-    crc32 = Column(String(8))
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

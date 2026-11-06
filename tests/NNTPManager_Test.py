@@ -155,3 +155,32 @@ class NNTPManager_Test(TestBase):
         assert len(mgr.hooks.call('socket_read')) == 0
         assert len(mgr.hooks.call('socket_write')) == 1
         mgr.close()
+
+
+def test_a_request_says_how_long_it_took(tmp_path):
+    """
+    A request is timed from when a connection takes it up until it is
+    done; the time stays put once it is done
+    """
+    from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+    from tests.conftest import config_for
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings = NNTPSettings(cfg_file=config_for(
+            server, tmp_path / 'config.yaml'))
+        manager = NNTPManager(settings)
+        try:
+            request = NNTPConnectionRequest(
+                actions=[('stat', ('<nothing@example.com>', ), {})])
+            assert request.elapsed() == 0.0
+
+            manager.put(request)
+            request.wait()
+            took = request.elapsed()
+            assert took > 0.0
+            gevent.sleep(0.01)
+            assert request.elapsed() == took
+
+        finally:
+            manager.close()
+            settings.close()

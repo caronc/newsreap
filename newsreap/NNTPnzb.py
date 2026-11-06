@@ -140,13 +140,6 @@ NZB_XML_DTD_MAP = {
 NZB_XML_DTD_FILE = join(
     dirname(__file__), 'var', 'nzb-%s.dtd' % NZB_DTD_VERSION)
 
-# http://stackoverflow.com/questions/7007427/does-a-valid-xml\
-#       -file-require-an-xml-declaration
-# If XML_STANDALONE is set to True, then no DTD is provided and the
-# standalone="yes" flag is specified instead. Otherwise standalone is set to
-# "no"
-NZB_XML_STANDALONE = True
-
 # Defined globally for namespace lookups with lxml calls
 NZB_LXML_NAMESPACES = {'ns': NZB_XML_NAMESPACE}
 

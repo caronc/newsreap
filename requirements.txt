@@ -8,7 +8,7 @@ click >= 5.1
 pytz
 sortedcontainers
 PyYAML
-SQLAlchemy >= 1.4
+SQLAlchemy >= 2.0
 gevent >= 1.5
 python-dateutil
 cryptography

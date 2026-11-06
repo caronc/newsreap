@@ -75,54 +75,20 @@
 #   database:
 #     engine: sqlite:////absolute/path/to/mydatabase.db
 
-# Possible database engines taken from:
-#      - http://docs.sqlalchemy.org/en/rel_1_0/core/engines.html
+# The databases supported (see database: in config.yaml):
 #
-#
-#   ** PostgreSQL:
-#       Default
-#           postgresql://user:pass@localhost/mydatabase
-#
-#       Psycopg2
-#           postgresql+psycopg2://user:pass@localhost/mydatabase
-#
-#       pg8000
-#           postgresql+pg8000://user:pass@localhost/mydatabase
-#
-#   ** MySQL:
-#       Default
-#           mysql://user:pass@localhost/mydatabase
-#
-#       MySQL-Python
-#           mysql+mysqldb://user:pass@localhost/mydatabase
-#
-#       MySQL-connector-python
-#           mysql+mysqlconnector://user:pass@localhost/mydatabase
-#
-#       OurSQL
-#           mysql+oursql://user:pass@localhost/mydatabase
-#
-#   ** Oracle:
-#           oracle://user:pass@127.0.0.1:1521/sidname
-#      (or):
-#           oracle+cx_oracle://user:pass@tnsname
-#
-#   ** Microsoft SQL Server:
-#        PyODBC
-#           mssql+pyodbc://user:pass@mydsn
-#
-#        PymsSQL
-#           mssql+pymssql://user:pass@hostname:port/dbname
-#
-#   ** SQLite:
+#   ** SQLite (the default):
 #        Unix/Mac - 4 initial slashes in total
 #           sqlite:////absolute/path/to/mydatabase.db
 #
 #        Windows
-#           sqlite:///C:\\path\\to\\mydatabase.db
-#
-#        Windows alternative using raw string
 #           sqlite:///C:\path\to\mydatabase.db
+#
+#   ** PostgreSQL (pip install "newsreap[postgresql]"):
+#           postgresql+psycopg://user:pass@localhost/mydatabase
+#
+#   ** MySQL 8 or newer (pip install "newsreap[mysql]"):
+#           mysql+pymysql://user:pass@localhost/mydatabase
 #
 #
 #   A ramdisk/tmpfs can greatly speed up newsprocessing; You'll want to set it
@@ -189,9 +155,6 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 
 # NNTP End Of Line
 NNTP_EOL = '\r\n'
-
-# NNTP End Of Data
-NNTP_EOD = '.\r\n'
 
 # Root path
 if os_name == 'nt':
@@ -322,12 +285,6 @@ SQLITE_DATABASE_EXTENSION = '.db'
 
 # Characters not allowed in the filename of a group's cached database
 GROUP_FILENAME_RE = re.compile(r'[^a-z0-9.+_-]', re.ASCII)
-
-# SQLite Database Details
-SQLITE_DATABASE_ENGINE = 'sqlite:///%s%s' % (
-    join(DEFAULT_BASE_DIR, 'newsreap.db'),
-    SQLITE_DATABASE_EXTENSION,
-)
 
 # Default block size to read and write to and from memory for
 # disk i/o
@@ -530,6 +487,10 @@ DEFAULT_DOWNLOAD_VARIABLES = {
     # 'nr prune work' removes files left in the work directory this many
     # days or more; 0 keeps them
     'prune_work': 1,
+    # An article no server had is asked for again by a later run while it
+    # is this many minutes old or less (a new post takes a while to reach
+    # every server), or once a server is added; see NNTPRetry
+    'retry_window': 60,
 }
 
 # Keyword used in configuration for downloading
@@ -1157,6 +1118,21 @@ class NNTPSettings(NNTPDatabase):
             return abspath(expanduser(self.apply_mask(path.strip())))
 
         return user_download_dir()
+
+    def retry_window(self):
+        """
+        Returns how many minutes after it was posted an article no server
+        had is asked for again (the retry_window setting; see NNTPRetry)
+        """
+        value = self.nntp_downloads.get('retry_window')
+        try:
+            return max(0.0, float(value))
+
+        except (TypeError, ValueError, OverflowError):
+            logger.warning(
+                'retry_window (%s) is not a number of minutes; using %d.' % (
+                    value, DEFAULT_DOWNLOAD_VARIABLES['retry_window']))
+            return DEFAULT_DOWNLOAD_VARIABLES['retry_window']
 
     def staging_dir(self):
         """

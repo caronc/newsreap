@@ -176,10 +176,12 @@ class Worker(Greenlet):
 
             # If we reach here, we have a request to process; we are free
             # again afterwards, however it went
+            request.timer_start()
             try:
                 request.run(connection=self._connection)
 
             finally:
+                request.timer_stop()
                 self._work_tracker.mark_available(self)
 
         # Ensure our connection is closed before we exit
@@ -262,6 +264,14 @@ class NNTPManager:
 
         self.hooks.add(hooks)
 
+    def servers(self):
+        """
+        Returns the servers articles are asked of: our main server first,
+        then the backups (each a dict with its host and port, as the
+        configuration has it)
+        """
+        return list(self._settings.nntp_servers)
+
     def window(self):
         """
         Returns how many requests are worth keeping queued at once: two for
@@ -323,32 +333,6 @@ class NNTPManager:
             return True
 
         return False
-
-    def get_connection(self):
-        """
-        Grabs a connection from the thread pool and returns it by reference.
-        It is NOT safe to us this function if you have concurrent thread going
-        on at the same time.
-
-        The function attempts to find a connection that has already been
-        established first.  If it fails to then it just returns the
-        first connection in the queue.
-
-        """
-
-        if len(self._pool):
-            # Find the first connected connection
-            connection = next(
-                (c for c in self._pool if c.connected is True), None)
-
-            if connection:
-                return connection
-
-            # Return the first entry if nothing is already connected
-            return self._pool[0]
-
-        # Otherwise there is nothing to return
-        return None
 
     def close(self):
         """

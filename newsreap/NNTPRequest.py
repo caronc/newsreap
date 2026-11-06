@@ -15,7 +15,7 @@
 import gevent.monkey
 gevent.monkey.patch_all()
 
-from datetime import datetime
+from time import monotonic
 
 from gevent.event import Event
 
@@ -39,9 +39,9 @@ class NNTPRequest(Event):
         # Contains a list of objects returned by request made
         self.response = []
 
-        # A Simple timer
+        # When it was started and how long it took (seconds); see
+        # timer_start() and timer_stop()
         self._time_start = None
-        self._time_finish = None
         self._time_elapsed = None
 
         # For iterating over decoded items
@@ -50,41 +50,35 @@ class NNTPRequest(Event):
 
     def timer_start(self):
         """
-        Starts internal timer useful for tracking how long the request
-        took to perform.
+        Starts timing the request (NNTPManager does as a connection takes it
+        up)
         """
-        self._time_start = datetime.now()
+        self._time_start = monotonic()
+        self._time_elapsed = None
 
 
     def timer_stop(self):
         """
-        Stops the timer and populates the elapsed time.
+        Stops timing the request (once it is done); returns how long it
+        took in seconds
         """
-        self._time_finish = datetime.now()
-
-        # Calculate Processing Time
-        time_elapsed = self._time_finish - self._time_start
-        self._time_elapsed = (time_elapsed.days * 86400) + time_elapsed.seconds \
-                     + (time_elapsed.microseconds/1e6)
-
-        return self._time_elapsed
+        if self._time_start is not None:
+            self._time_elapsed = monotonic() - self._time_start
+        return self.elapsed()
 
 
     def elapsed(self):
         """
-        Dynamically Calculates the elapsed time if it hasn't been calculated
-        yet otherwise it just returns the current elapsed period
+        Returns how long the request took in seconds (so far, while it is
+        still running; 0.0 if it hasn't started)
         """
-        if self._time_elapsed:
-            return self.elapsed
+        if self._time_elapsed is not None:
+            return self._time_elapsed
 
-        if not self._time_start:
-            return 0
+        if self._time_start is None:
+            return 0.0
 
-        # Calculate Processing Time
-        time_elapsed = datetime.now() - self._time_start
-        return (time_elapsed.days * 86400) + time_elapsed.seconds \
-                     + (time_elapsed.microseconds/1e6)
+        return monotonic() - self._time_start
 
 
     def abort(self):

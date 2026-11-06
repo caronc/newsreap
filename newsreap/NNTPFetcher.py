@@ -33,21 +33,24 @@ fetched that is already known:
   (see NNTPArchiver.keep_fetched()), so it can be searched and is never
   fetched again for its text
 
-What is learned on the way is kept in `learned_files` and
-`learned_segments` (see NNTPIndexer.note_fetched()):
-- the size and crc32 of each file put together whole (only when all of
-  its articles were given)
-- the crc32 of each article, and of the text file written of it
-- whether an article carries a file or is only text
+Whether each article carries a file or is only text is kept in
+`learned_segments` (see NNTPIndexer.note_fetched()); given back to a later
+run (see NNTPIndexer.fetch_files()), an article that carries a file isn't
+fetched again when only text is wanted.
 
-Given back to a later run (see NNTPIndexer.fetch_files()), anything
-already there and still right is skipped without fetching it, and so are
-the articles that turned out to carry a file when only text is wanted.
+Anything already there is skipped without fetching it: a file without a
+.ERRORS file beside it is whole (see NNTPErrorsFile), and so is a text
+file or an article that is there.
 
 Files are put together in a staging directory (the one 'nr get' uses for
-the same files), so a run that stopped carries on where it left off.  A
-file missing a part (or with a damaged one) is still placed, with zeros
-where the part goes, but its articles are noted in `unfinished`.
+the same files), so a run that stopped carries on where it left off, and
+are only moved into place once everything was tried.  A file missing a
+part (or with a damaged one) is still placed, with zeros where the part
+goes and a .ERRORS file beside it, but its articles are noted in
+`unfinished`.  The text and articles that couldn't be had are listed in
+text.ERRORS and articles.ERRORS the same way.  An article no server had
+is only asked for again when that can help (see NNTPRetry); the .ERRORS
+file remembers it.
 """
 
 import gevent.monkey
@@ -63,8 +66,6 @@ from os.path import basename
 from os.path import getsize
 from os.path import isfile
 from os.path import join
-from shutil import copyfile
-from shutil import move
 from shutil import rmtree
 from datetime import UTC
 from zlib import crc32
@@ -81,15 +82,22 @@ from .NNTPDownloader import STAGING_WORK
 from .NNTPDownloader import COMMIT_EVERY
 from .NNTPDownloader import SUBJECT_NAME_RE
 from .NNTPDownloader import safe_name
-from .NNTPDownloader import ERRORS_EXTENSION
 from .NNTPDownloader import clear_errors
 from .NNTPDownloader import place_file
+from .NNTPDownloader import sweep
 from .NNTPDownloader import tidy_name
 from .NNTPDownloader import write_errors
+from .NNTPErrorsFile import ERRORS_EXTENSION
+from .NNTPErrorsFile import NNTPErrorsFile
+from .NNTPErrorsFile import PART_DAMAGED
+from .NNTPErrorsFile import PART_MISSING
 from .NNTPArticle import NNTPArticle
+from .Utils import utcnow
 from .NNTPEmptyContent import NNTPEmptyContent
 from .NNTPGetDatabase import NNTPGetDatabase
 from .NNTPIndexer import SegmentNote
+from .NNTPRetry import DEFAULT_RETRY_WINDOW
+from .NNTPRetry import NNTPRetry
 from .NNTPSegmentedPost import NNTPSegmentedPost
 from .NNTPnzb import NNTPnzb
 from .NNTPnzb import NZBSegmentNumber
@@ -117,7 +125,7 @@ TEXT_HEADERS = ('Subject', 'From', 'Date', 'Newsgroups', 'Message-ID')
 KEEP_EVERY = 500
 
 # Nothing known yet of an article
-UNKNOWN = SegmentNote(None, None, None)
+UNKNOWN = SegmentNote(None)
 
 
 def posted_on(post):
@@ -149,24 +157,6 @@ def file_crc32(path):
             checksum = crc32(block, checksum)
 
     return '%08x' % checksum
-
-
-def still_right(path, crc, size=None):
-    """
-    Returns True if a file is there with the size (when given) and crc32
-    noted; False when it isn't (or nothing was noted)
-    """
-    if not crc or not isfile(path):
-        return False
-
-    try:
-        if size is not None and getsize(path) != size:
-            return False
-
-        return file_crc32(path) == crc
-
-    except OSError:
-        return False
 
 
 def file_parts(body, work_dir=None):
@@ -235,7 +225,8 @@ class NNTPFetcher(NNTPDownloader):
 
     def __init__(self, manager, staging_dir, download_dir, files=True,
                  text=False, articles=False, archiver=None, keep=True,
-                 hooks=None):
+                 hooks=None, retry_window=DEFAULT_RETRY_WINDOW,
+                 retry_missing=False):
         """
         Prepares a fetcher
 
@@ -253,9 +244,13 @@ class NNTPFetcher(NNTPDownloader):
           description)
         - hooks: hooks to call around each step (pre_/post_ download and
           move)
+        - retry_window / retry_missing: when an article no server had is
+          asked for again (see NNTPDownloader)
         """
         super().__init__(manager, staging_dir, download_dir, repair=False,
-                         extract=False, cleanup=True, hooks=hooks)
+                         extract=False, cleanup=True, hooks=hooks,
+                         retry_window=retry_window,
+                         retry_missing=retry_missing)
         self.files = bool(files)
         self.text = bool(text)
         self.articles = bool(articles)
@@ -279,8 +274,12 @@ class NNTPFetcher(NNTPDownloader):
         self.unfinished = set()
 
         # What was learned (see NNTPIndexer.note_fetched())
-        self.learned_files = {}
         self.learned_segments = {}
+
+        # The articles whose text (or copy) was wanted and didn't come
+        # ({'text': [message_id], 'article': [...]}), for text.ERRORS and
+        # articles.ERRORS
+        self.unsaved = {'text': [], 'article': []}
 
     @property
     def archiver(self):
@@ -335,43 +334,53 @@ class NNTPFetcher(NNTPDownloader):
                 key: entry.get(key) for key in (
                     'subject', 'poster', 'posted', 'groups')})
 
+        # What a run before remembers of the articles no server had
+        for folder, wanted in ((TEXT_FOLDER, self.text),
+                               (ARTICLES_FOLDER, self.articles)):
+            if wanted:
+                self.memory.update(NNTPErrorsFile(
+                    join(self.folder, folder)).load().parts)
+
         # What is still needed of each article ('file', 'text', 'article')
         needed = {}
         assemble = []
         for f in files:
             if self.files:
                 target = self._target(f)
-                if target and still_right(
-                        target, f.get('crc32'), f.get('size')):
+                errors = NNTPErrorsFile(target).load() if target else None
+                if target and isfile(target) and not errors.found:
+                    # There already, and whole (one that isn't has a
+                    # .ERRORS file beside it)
                     self.skipped += 1
-                    clear_errors(target)
 
-                elif any(known.get(m, SegmentNote(None, None, None)).kind
-                         != ArchiveKind.Text for _, m in f['segments']):
+                elif any(known.get(m, UNKNOWN).kind != ArchiveKind.Text
+                         for _, m in f['segments']):
+                    if errors is not None:
+                        self.memory.update(errors.parts)
+
                     assemble.append(f)
                     for _, message_id in f['segments']:
-                        if known.get(message_id, SegmentNote(
-                                None, None, None)).kind != ArchiveKind.Text:
+                        if known.get(message_id, UNKNOWN).kind != \
+                                ArchiveKind.Text:
                             needed.setdefault(message_id, set()).add('file')
 
             for _, message_id in f['segments']:
-                note = known.get(message_id, SegmentNote(None, None, None))
+                note = known.get(message_id, UNKNOWN)
                 if self.articles:
-                    if still_right(self._article_path(message_id),
-                                   note.crc32):
+                    if isfile(self._article_path(message_id)):
                         self.skipped += 1
                     else:
                         needed.setdefault(message_id, set()).add('article')
 
                 if self.text and note.kind != ArchiveKind.Binary and \
                         message_id not in texts:
-                    if note.kind == ArchiveKind.Text and still_right(
-                            self._text_path(message_id), note.text_crc32):
+                    if isfile(self._text_path(message_id)):
                         self.skipped += 1
                     else:
                         needed.setdefault(message_id, set()).add('text')
 
         if not needed:
+            self._note_unsaved()
             return True
 
         db = lock = None
@@ -407,6 +416,7 @@ class NNTPFetcher(NNTPDownloader):
                     session, assemble, known), name=name,
                     staging=self.staging)
 
+            self._note_unsaved()
             if db is not None:
                 db.close()
 
@@ -425,6 +435,33 @@ class NNTPFetcher(NNTPDownloader):
                 self.unfinished)
 
         return not self.unfinished
+
+    def _note_unsaved(self):
+        """
+        Writes text.ERRORS and articles.ERRORS listing the text and articles
+        that were wanted and didn't come (see unsaved); each goes once
+        everything it listed is there
+        """
+        for kind, folder, wanted in (
+                ('text', TEXT_FOLDER, self.text),
+                ('article', ARTICLES_FOLDER, self.articles)):
+            if not wanted:
+                continue
+
+            path = join(self.folder, folder)
+            ids = sorted(set(self.unsaved[kind]))
+            if not ids:
+                clear_errors(path)
+                continue
+
+            makedirs(self.folder, exist_ok=True)
+            sweep(self.folder)
+            now = utcnow()
+            write_errors(path, [
+                '<%s>: %s' % (m, self._why(m, now=now)) for m in ids], {
+                m: self.memory[m] for m in ids if m in self.memory},
+                heading='Some of the %s could not be saved' % (
+                    'text' if kind == 'text' else 'articles'))
 
     def _target(self, f):
         """
@@ -466,6 +503,7 @@ class NNTPFetcher(NNTPDownloader):
         Fetches the articles needed (each once) and saves what is wanted of
         them
         """
+        now = utcnow()
         noted = {} if session is None else {
             row.message_id: row for row in session.query(DownloadedSegment)}
 
@@ -478,111 +516,170 @@ class NNTPFetcher(NNTPDownloader):
                 wants.discard('file')
                 self.resumed += 1
 
-        # By group (each is asked for in the group its file was posted to)
+        # By group (each is asked for in the group its file was posted to);
+        # one no server had is only asked for again when that can help
         wanted = {}
         for f in files:
+            posted = NNTPRetry.posted(f.get('posted'))
             for number, message_id in f['segments']:
-                if needed.get(message_id):
+                wants = needed.get(message_id)
+                if not wants:
+                    continue
+
+                if self._state(message_id, noted.get(message_id),
+                               now) != 'ask':
+                    # No server had it (whole), and asking again won't help
+                    # yet; what we have of a damaged one is used
+                    if self.memory[message_id]['state'] == PART_DAMAGED:
+                        wants.discard('file')
+                    else:
+                        self._unsaved(message_id, wants)
+                        wants.clear()
+
+                if wants:
                     wanted.setdefault(f.get('group'), []).append(
-                        (message_id, (f, number)))
+                        (message_id, (f, number, posted)))
+                else:
+                    self.held += 1
+                    self.unfinished.add(message_id)
 
         parts = None if session is None else join(self.staging, STAGING_PARTS)
         work_dir = join(self.staging, STAGING_WORK) if self.staging else None
-        fetched = 0
 
         # Fetched posts small enough to keep in the archive
         keeping = []
-        max_size = self.archiver.max_size
-        for group, entries in wanted.items():
-            for (message_id, (f, number)), (article, status) in \
-                    NNTPArchiver._fetch(
-                        self.manager, entries, work_dir, group,
-                        self.manager.window(), decoders=False):
-                wants = needed[message_id]
-                if article is None:
-                    if status == 'missing':
-                        self.missing += 1
-                        if 'file' in wants:
-                            # No server has it (its place is left as zeros)
-                            session.merge(DownloadedSegment(
-                                message_id=message_id,
-                                filename=safe_name(f.get('name'))[:256],
-                                number=number, missing=True))
+        before = self.fetched
+        try:
+            for group, entries in wanted.items():
+                self._grab_group(session, noted, needed, group, entries,
+                                 parts, work_dir, keeping, now)
 
-                    else:
-                        # Asked for again next time
-                        self.failed += 1
+        except KeyboardInterrupt:
+            # Stopped; what came is kept for the next run
+            self._keep(keeping)
+            if session is not None:
+                session.commit()
+            raise
 
-                    self.unfinished.add(message_id)
-                    continue
-
-                fetched += 1
-                raw = sent(article.body.getvalue() or b'')
-                note = known.get(message_id, SegmentNote(None, None, None))
-                post = NNTPArchivePost(message_id, raw=raw)
-                found = next(file_parts(post.body, work_dir), None)
-                kind = ArchiveKind.Binary if found is not None \
-                    else ArchiveKind.Text
-                text_crc32 = note.text_crc32
-
-                if 'article' in wants:
-                    makedirs(join(self.folder, ARTICLES_FOLDER),
-                             exist_ok=True)
-                    write_file(self._article_path(message_id), raw)
-                    self.written['articles'] += 1
-
-                if 'text' in wants and found is None:
-                    self.archiver.convert(post)
-                    if post.kind == ArchiveKind.Text and post.text:
-                        text_crc32 = self.write_text(message_id, post.text, {
-                            name: post.header(name) for name in TEXT_HEADERS
-                        }, subject=f.get('subject'), poster=f.get('poster'),
-                            groups=group)
-
-                    elif post.kind == ArchiveKind.Binary:
-                        # It carries a file we can't put together (ie: a
-                        # MIME attachment)
-                        kind = ArchiveKind.Binary
-
-                if 'file' in wants and found is not None:
-                    # Written under a temporary name, and only noted once
-                    # it is whole
-                    path = join(parts, '%s.part' % sha1(
-                        message_id.encode('utf-8')).hexdigest()[:20])
-                    write_file(path, found.getvalue() or b'')
-                    session.merge(DownloadedSegment(
-                        message_id=message_id,
-                        filename=safe_name(
-                            found.filename, f.get('name'))[:256],
-                        number=number, begin=found.begin(), end=found.end(),
-                        path=path, valid=found.is_valid(), missing=False))
-                    if not found.is_valid():
-                        self.damaged += 1
-                        self.unfinished.add(message_id)
-
-                self.learned_segments[message_id] = SegmentNote(
-                    kind, '%08x' % crc32(raw), text_crc32)
-
-                if self.keep and len(raw) <= max_size:
-                    # A post of its own now, as the archive keeps them
-                    keeping.append(NNTPArchivePost(
-                        message_id, raw=raw, subject=f.get('subject'),
-                        poster=f.get('poster'), posted=posted_on(post),
-                        size=len(raw), groups={group} if group else ()))
-                    if len(keeping) >= KEEP_EVERY:
-                        self.archiver.keep_fetched(keeping)
-                        keeping = []
-
-                if session is not None and fetched % COMMIT_EVERY == 0:
-                    session.commit()
-
-        if keeping:
-            self.archiver.keep_fetched(keeping)
-
+        self._keep(keeping)
         if session is not None:
             session.commit()
-        self.fetched += fetched
-        return fetched
+        return self.fetched - before
+
+    def _keep(self, keeping):
+        """
+        Hands the posts fetched to the archive (see keep_fetched()); the
+        list is emptied
+        """
+        if keeping:
+            self.archiver.keep_fetched(keeping)
+            keeping.clear()
+
+    def _unsaved(self, message_id, wants):
+        """
+        Notes that the text or copy of an article that was wanted didn't
+        come (see unsaved)
+        """
+        for kind in ('text', 'article'):
+            if kind in wants:
+                self.unsaved[kind].append(message_id)
+
+    def _grab_group(self, session, noted, needed, group, entries, parts,
+                    work_dir, keeping, now):
+        """
+        Fetches the articles wanted of one group (see _grab()); each one
+        fetched is counted in fetched
+        """
+        max_size = self.archiver.max_size
+        for (message_id, (f, number, posted)), (article, status) in \
+                NNTPArchiver._fetch(
+                    self.manager, entries, work_dir, group,
+                    self.manager.window(), decoders=False):
+            wants = needed[message_id]
+            if article is None:
+                if status == 'missing':
+                    self.missing += 1
+                    self._tried(message_id, number, PART_MISSING, posted, now)
+                    if 'file' in wants:
+                        # No server has it (its place is left as zeros; any
+                        # part of it we had is kept)
+                        row = noted.get(message_id) or DownloadedSegment(
+                            message_id=message_id,
+                            filename=safe_name(f.get('name'))[:256],
+                            number=number)
+                        row.missing = True
+                        session.merge(row)
+
+                else:
+                    # Asked for again next time
+                    self.failed += 1
+
+                self._unsaved(message_id, wants)
+                self.unfinished.add(message_id)
+                continue
+
+            self.fetched += 1
+            raw = sent(article.body.getvalue() or b'')
+            post = NNTPArchivePost(message_id, raw=raw)
+            found = next(file_parts(post.body, work_dir), None)
+            kind = ArchiveKind.Binary if found is not None \
+                else ArchiveKind.Text
+
+            # Had, so nothing is remembered of it any more (unless it only
+            # came damaged; see below)
+            self.memory.pop(message_id, None)
+
+            if 'article' in wants:
+                makedirs(join(self.folder, ARTICLES_FOLDER), exist_ok=True)
+                write_file(self._article_path(message_id), raw)
+                self.written['articles'] += 1
+
+            if 'text' in wants and found is None:
+                self.archiver.convert(post)
+                if post.kind == ArchiveKind.Text and post.text:
+                    self.write_text(message_id, post.text, {
+                        name: post.header(name) for name in TEXT_HEADERS
+                    }, subject=f.get('subject'), poster=f.get('poster'),
+                        groups=group)
+
+                elif post.kind == ArchiveKind.Binary:
+                    # It carries a file we can't put together (ie: a MIME
+                    # attachment)
+                    kind = ArchiveKind.Binary
+
+            if 'file' in wants and found is not None:
+                # Written under a temporary name, and only noted once it is
+                # whole
+                path = join(parts, '%s.part' % sha1(
+                    message_id.encode('utf-8')).hexdigest()[:20])
+                write_file(path, found.getvalue() or b'')
+                row = noted.get(message_id) or DownloadedSegment(
+                    message_id=message_id)
+                row.filename = safe_name(found.filename, f.get('name'))[:256]
+                row.number = number
+                row.begin, row.end = found.begin(), found.end()
+                row.path, row.valid = path, found.is_valid()
+                row.missing = False
+                if not row.valid:
+                    # Asked for again only when that can help
+                    self._tried(message_id, number, PART_DAMAGED, posted, now)
+                    self.damaged += 1
+                    self.unfinished.add(message_id)
+                session.merge(row)
+
+            self.learned_segments[message_id] = SegmentNote(kind)
+
+            if self.keep and len(raw) <= max_size:
+                # A post of its own now, as the archive keeps them
+                keeping.append(NNTPArchivePost(
+                    message_id, raw=raw, subject=f.get('subject'),
+                    poster=f.get('poster'), posted=posted_on(post),
+                    size=len(raw), groups={group} if group else ()))
+                if len(keeping) >= KEEP_EVERY:
+                    self._keep(keeping)
+
+            if session is not None and self.fetched % COMMIT_EVERY == 0:
+                session.commit()
 
     def write_text(self, message_id, text, headers=None, subject=None,
                    poster=None, posted=None, groups=None):
@@ -688,8 +785,7 @@ class NNTPFetcher(NNTPDownloader):
             lost = len(self.lost)
             assembled = self._assemble(session, [f])
             ids = [m for _, m in f['segments']
-                   if self.learned_segments.get(m, known.get(
-                       m, SegmentNote(None, None, None))).kind
+                   if self.learned_segments.get(m, known.get(m, UNKNOWN)).kind
                    != ArchiveKind.Text]
 
             def wrong(lines):
@@ -698,60 +794,65 @@ class NNTPFetcher(NNTPDownloader):
                 return [line for line in lines
                         if any('<%s>' % m in line for m in ids)] or lines
 
+            def remembered(parts):
+                # What is remembered of its parts (see NNTPErrorsFile)
+                return {m: entry for m, entry in (parts or {}).items()
+                        if m in ids}
+
+            makedirs(self.folder, exist_ok=True)
+            sweep(self.folder)
             if f['name'] not in assembled:
                 # None of its parts came (an article that is only text
                 # isn't a part, so a file of nothing else is fine)
                 self.unfinished.update(ids)
                 target = self._target(f)
                 if ids and target:
-                    makedirs(self.folder, exist_ok=True)
-                    write_errors(target, wrong([
-                        line for _, lines in self.lost[lost:]
-                        for line in lines]))
+                    # Said before anything of it placed before goes, so it
+                    # never looks whole
+                    if write_errors(target, wrong([
+                            line for _, lines in self.lost[lost:]
+                            for line in lines]), remembered({
+                                m: self.memory[m] for m in ids
+                                if m in self.memory})):
+                        NNTPErrorsFile.discard(target)
                 continue
 
             path, complete = assembled[f['name']]
-            whole_file = complete and path in self.checks
             target = self._target(f) or join(self.folder, basename(path))
-            if not whole_file and isfile(target) and \
+            if not complete and isfile(target) and \
                     not isfile(target + ERRORS_EXTENSION):
-                # A copy is there already (that we couldn't check, and that
-                # isn't one we left unfinished); what didn't all come goes
-                # beside it instead of over it
+                # A whole copy is there already (one that isn't has a
+                # .ERRORS file); what didn't all come goes beside it
+                # instead of over it
                 target += '.partial'
 
-            makedirs(self.folder, exist_ok=True)
-            place_file(path, target)
-            self.written['files'] += 1
-
-            if not whole_file:
+            if not complete:
                 # Placed as it is, but not all of it is there; none of its
                 # articles count as saved, and what is wrong is said beside
-                # it
+                # it (first, so it never looks whole)
                 self.unfinished.update(ids)
-                write_errors(target, wrong(self.errors.get(path) or [
-                    'Some of it is missing or damaged.']))
+                if not write_errors(target, wrong(self.errors.get(path) or [
+                        'Some of it is missing or damaged.']),
+                        remembered(self.parts_of.get(path))):
+                    logger.warning(
+                        '%s stays in %s (its .ERRORS file could not be '
+                        'written).' % (basename(path), self.staging))
+                    continue
+
+                place_file(path, target)
+                self.written['files'] += 1
                 continue
 
-            # All there now: whatever was said was wrong before goes (and
-            # so does an unfinished copy left beside one of yours)
+            # All there now: whatever was said was wrong before goes (after
+            # it is in place), and so does an unfinished copy left beside
+            # one of yours
+            place_file(path, target)
+            self.written['files'] += 1
             clear_errors(target)
-            for leftover in (target + '.partial', ):
-                clear_errors(leftover)
-                try:
-                    remove(leftover)
-
-                except FileNotFoundError:
-                    pass
-
-                except OSError as e:
-                    logger.warning('Could not remove %s (%s).' % (
-                        leftover, e))
+            if NNTPErrorsFile.discard(target + '.partial'):
+                clear_errors(target + '.partial')
 
             whole += 1
-            if f.get('id') is not None and not f.get('partial'):
-                # Only all of its articles make the whole file
-                self.learned_files[f['id']] = self.checks[path]
 
         return whole
 
@@ -770,6 +871,9 @@ class NNTPFetcher(NNTPDownloader):
             text += ', %d damaged' % self.damaged
         if self.failed:
             text += ', %d failed (asked for again next time)' % self.failed
+        if self.held:
+            text += ', %d not asked for again (no server had them)' % \
+                self.held
         return text
 
     def __repr__(self):

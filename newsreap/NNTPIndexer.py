@@ -43,7 +43,6 @@ gevent.monkey.patch_all()
 
 import re
 from collections import namedtuple
-from datetime import datetime
 from datetime import timedelta
 from datetime import UTC
 from hashlib import md5
@@ -239,9 +238,8 @@ MAX_MESSAGE_ID = 250
 MAX_KEY = 512
 
 # What a download learned about an article (see Segment): whether it
-# carries a file or is only text (see ArchiveKind), the crc32 of the
-# article as sent, and of the text file written of it (None when unknown)
-SegmentNote = namedtuple('SegmentNote', ('kind', 'crc32', 'text_crc32'))
+# carries a file or is only text (see ArchiveKind; None when unknown)
+SegmentNote = namedtuple('SegmentNote', ('kind', ))
 
 
 def parse_subject(subject):
@@ -550,28 +548,6 @@ def keyword_choices(keywords, case_sensitive=False):
         found.append((exclude, choices))
 
     return found
-
-
-def keyword_terms(keywords, case_sensitive=False):
-    """
-    Splits search keywords (see parse_keywords()) into:
-    - plain ones: (exclude, column, text), found anywhere they are
-    - ones holding a * or ? wildcard: NNTPSearchTerm conditions that find
-      them anywhere too (ie: 'holi*ay' is '*holi*ay*')
-    """
-    plain = []
-    terms = []
-    for exclude, column, value in parse_keywords(keywords):
-        if not WILDCARD_RE.search(value):
-            plain.append((exclude, column, value))
-            continue
-
-        terms.append(NNTPSearchTerm(
-            'poster' if column == 'poster' else SEARCH_ANY,
-            '%s*%s*' % ('!' if exclude else '', value),
-            case_sensitive=case_sensitive))
-
-    return plain, terms
 
 
 def like_escape(value):
@@ -2037,12 +2013,11 @@ class NNTPIndexer:
         Returns what downloading a collection (by its id or GID), or some
         of the articles indexed, needs: (files, known)
 
-        - files: [{'id', 'name', 'group', 'subject', 'poster', 'segments':
-          [(part, message_id)], 'size', 'crc32', 'partial'}], in the order
-          an NZB file lists them; size and crc32 are what the file was once
-          put together as (None until then), and partial is True when only
-          some of its articles are listed.  A part posted twice uses the
-          lowest Message-ID (as nzb() does).
+        - files: [{'id', 'name', 'group', 'subject', 'poster', 'posted',
+          'segments': [(part, message_id)], 'partial'}], in the order an
+          NZB file lists them; posted is when its last article was, and
+          partial is True when only some of its articles are listed.  A
+          part posted twice uses the lowest Message-ID (as nzb() does).
         - known: {message_id: SegmentNote} for the articles a download
           learned about before
         - message_ids: only these articles, under the files they belong
@@ -2088,7 +2063,7 @@ class NNTPIndexer:
             rows = {}
             for row in session.query(
                     Segment.file_id, Segment.part, Segment.message_id,
-                    Segment.kind, Segment.crc32, Segment.text_crc32)\
+                    Segment.kind)\
                     .filter(Segment.file_id.in_(ids))\
                     .order_by(Segment.file_id, Segment.part,
                               Segment.message_id):
@@ -2096,8 +2071,7 @@ class NNTPIndexer:
 
             for entry in chunk:
                 segments, seen, partial = [], set(), False
-                for _, part, message_id, kind, crc32, text_crc32 in \
-                        rows.get(entry.id, ()):
+                for _, part, message_id, kind in rows.get(entry.id, ()):
                     if part in seen:
                         continue
 
@@ -2107,66 +2081,50 @@ class NNTPIndexer:
                     seen.add(part)
 
                     segments.append((part, message_id))
-                    if kind is not None or crc32 or text_crc32:
-                        known[message_id] = SegmentNote(
-                            kind, crc32, text_crc32)
+                    if kind is not None:
+                        known[message_id] = SegmentNote(kind)
 
                 if segments:
                     files.append({
                         'id': entry.id, 'name': entry.filename,
                         'group': groups.get(entry.id),
                         'subject': entry.subject, 'poster': entry.poster,
-                        'segments': segments, 'size': entry.file_size,
-                        'crc32': entry.crc32, 'partial': partial})
+                        'posted': entry.last_posted or entry.first_posted,
+                        'segments': segments, 'partial': partial})
 
         return files, known
 
     @staticmethod
-    def note(session, files=None, segments=None):
+    def note(session, segments=None):
         """
-        Writes what was learned of files and articles (see note_fetched());
-        committed as it goes.  A value not known (None) leaves the one
-        noted before as it is, and a row that is gone (or was never
-        indexed, ie: an article only cached) is skipped.
+        Writes what was learned of articles (see note_fetched()); committed
+        as it goes.  A value not known (None) leaves the one noted before as
+        it is, and a row that is gone (or was never indexed, ie: an article
+        only cached) is skipped.
+
+        - segments: {message_id: SegmentNote}
         """
-        files_table = CollectionFile.__table__
-        segments_table = Segment.__table__
+        table = Segment.__table__
+        statement = update(table).where(
+            table.c.message_id == bindparam('row_id')).values(
+            kind=func.coalesce(bindparam(
+                'row_kind', type_=table.c.kind.type), table.c.kind))
+        rows = [{'row_id': message_id, 'row_kind': note.kind}
+                for message_id, note in (segments or {}).items()
+                if note.kind is not None]
 
-        def kept(table, name):
-            # The value given, or the one there already
-            return func.coalesce(bindparam('row_%s' % name), table.c[name])
+        # One statement for many rows
+        for start in range(0, len(rows), NOTE_COMMIT_SIZE):
+            session.execute(statement, rows[start:start + NOTE_COMMIT_SIZE])
+            session.commit()
 
-        for statement, rows in (
-                (update(files_table).where(
-                    files_table.c.id == bindparam('row_id')).values(
-                    file_size=kept(files_table, 'file_size'),
-                    crc32=kept(files_table, 'crc32')), [
-                    {'row_id': file_id, 'row_file_size': size,
-                     'row_crc32': crc32}
-                    for file_id, (size, crc32) in (files or {}).items()]),
-                (update(segments_table).where(
-                    segments_table.c.message_id ==
-                    bindparam('row_id')).values(
-                    kind=kept(segments_table, 'kind'),
-                    crc32=kept(segments_table, 'crc32'),
-                    text_crc32=kept(segments_table, 'text_crc32')), [
-                    {'row_id': message_id, 'row_kind': note.kind,
-                     'row_crc32': note.crc32,
-                     'row_text_crc32': note.text_crc32}
-                    for message_id, note in (segments or {}).items()])):
-            # One statement for many rows
-            for start in range(0, len(rows), NOTE_COMMIT_SIZE):
-                session.execute(statement, rows[start:start + NOTE_COMMIT_SIZE])
-                session.commit()
-
-    def note_fetched(self, files=None, segments=None):
+    def note_fetched(self, segments=None):
         """
         Keeps what a download learned (see NNTPFetcher), so running it
-        again skips what is already there and right; returns False (with a
-        warning) if it couldn't be kept, which only means the next run
-        checks by fetching again
+        again never fetches an article just to find out it carries a file;
+        returns False (with a warning) if it couldn't be kept, which only
+        means the next run fetches to find out again
 
-        - files: {file id: (size, crc32)}
         - segments: {message_id: SegmentNote}
         """
         session = None
@@ -2175,7 +2133,7 @@ class NNTPIndexer:
             if session is None:
                 return False
 
-            self.note(session, files, segments)
+            self.note(session, segments)
 
         except (SQLAlchemyError, OSError) as e:
             if session is not None:
@@ -2187,7 +2145,7 @@ class NNTPIndexer:
 
             logger.warning(
                 'Could not note what was downloaded in the index (%s); the '
-                'next run checks it again by fetching.' % e)
+                'next run fetches to find out again.' % e)
             return False
 
         return True

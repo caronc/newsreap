@@ -108,7 +108,7 @@ def cache(db_file, articles, start=1, posted=POSTED):
 
 # Database servers the index is tested on too (besides SQLite), given as
 # database URLs; ie:
-#   NEWSREAP_TEST_POSTGRESQL=postgresql+psycopg2://user:pass@host/db
+#   NEWSREAP_TEST_POSTGRESQL=postgresql+psycopg://user:pass@host/db
 #   NEWSREAP_TEST_MYSQL=mysql+pymysql://user:pass@host/db
 # Everything in them is removed first.
 INDEX_SERVERS = [
@@ -660,8 +660,9 @@ def test_index_can_be_kept_on_a_database_server(tmp_path):
     assert settings.index_database() == \
         join(str(tmp_path), 'index.db')
 
-    settings.nntp_database['index_engine'] = 'postgresql://u:p@host/index'
-    assert settings.index_database() == 'postgresql://u:p@host/index'
+    settings.nntp_database['index_engine'] = \
+        'postgresql+psycopg://u:p@host/index'
+    assert settings.index_database() == 'postgresql+psycopg://u:p@host/index'
 
     # A URL to an SQLite file works too
     path = str(tmp_path / 'elsewhere.db')

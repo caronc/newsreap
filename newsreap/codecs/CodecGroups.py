@@ -40,11 +40,6 @@ class GroupStatus:
     POSTING_DENIED = 'n'
     POSTING_MODERATED = 'm'
 
-GROUP_STATUS_FLAGS = (
-    GroupStatus.POSTING_ALLOWED,
-    GroupStatus.POSTING_DENIED,
-    GroupStatus.POSTING_MODERATED,
-)
 
 class CodecGroups(CodecBase):
     """

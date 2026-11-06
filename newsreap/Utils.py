@@ -28,7 +28,6 @@ from os import makedirs
 from os import access
 from os import chmod
 from os import lstat
-from os import error as _OSError
 
 from os.path import isdir
 from os.path import exists
@@ -92,7 +91,6 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 STRING_DELIMITERS = r'[\[\]\;,\s]+'
 
 # Pre-Escape content since we reference it so much
-ESCAPED_PATH_SEPARATOR = re.escape('\\/')
 ESCAPED_WIN_PATH_SEPARATOR = re.escape('\\')
 ESCAPED_NUX_PATH_SEPARATOR = re.escape('/')
 
@@ -694,6 +692,12 @@ def plain_subprocess():
 Popen = plain_subprocess().Popen
 
 
+# What Popen can only do by forking (see start_program())
+FORKING_OPTIONS = {
+    'cwd', 'preexec_fn', 'pass_fds', 'start_new_session', 'process_group',
+    'user', 'group', 'extra_groups', 'umask', 'close_fds'}
+
+
 def start_program(command, **kwargs):
     """
     Starts a program and returns its Popen (see Popen); the keywords are
@@ -704,8 +708,17 @@ def start_program(command, **kwargs):
     Python only uses it for a program named by its full path and with
     close_fds off (what we open is never handed on anyway: Python makes
     every file it opens non-inheritable).
+
+    Options posix_spawn can't do (ie: cwd) are refused with a ValueError;
+    Python would fork for them instead.
     """
     from shutil import which
+
+    forking = sorted(set(kwargs) & FORKING_OPTIONS)
+    if forking:
+        raise ValueError(
+            'start_program() can\'t be given %s (it would fork)' % ', '.join(
+                forking))
 
     command = [str(part) for part in command]
     program = command[0] if dirname(command[0]) else which(command[0])

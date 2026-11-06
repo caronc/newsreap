@@ -31,7 +31,6 @@ from tempfile import mkdtemp
 from newsreap.Utils import mkdir
 from newsreap.NNTPContent import NNTPContent
 from newsreap.NNTPArticle import NNTPArticle
-from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.NNTPSettings import DEFAULT_TMP_DIR
 from newsreap.Utils import random_str
 from newsreap.Utils import bytes_to_strsize

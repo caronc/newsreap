@@ -44,7 +44,7 @@ from os.path import dirname
 from os.path import isfile
 from os.path import join
 from tempfile import gettempdir
-from zlib import crc32
+from time import monotonic
 
 from sqlalchemy import and_
 from sqlalchemy import literal
@@ -56,7 +56,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .HookManager import HookManager
 from .NNTPArchivePost import NNTPArchivePost
-from .NNTPArchivePost import sent
 from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPConnectionRequest import NNTPConnectionRequest
 from .NNTPSearchTerm import SEARCH_ANY
@@ -103,9 +102,6 @@ DEFAULT_ARCHIVE_MAX_SIZE = '64KB'
 # How many cached articles are worked through (and saved) at a time
 DEFAULT_ARCHIVE_CHUNK_SIZE = 500
 
-# How many articles are asked for at once (across the connections)
-DEFAULT_ARCHIVE_WINDOW = 10
-
 # How many times a post that couldn't be decrypted is tried again on its own
 DEFAULT_PGP_RETRIES = 1
 
@@ -119,6 +115,8 @@ WORD_RE = re.compile(r'[^\W_]+')
 # innodb_ft_min_token_size); they are checked by looking through the text
 MYSQL_MIN_WORD = 3
 
+# How long Ctrl-C waits for the articles already asked for (seconds)
+STOP_WAIT = 10
 
 
 class NNTPArchiver:
@@ -533,9 +531,8 @@ class NNTPArchiver:
                 # What a download would want to know of them (so it never
                 # fetches them just to find out)
                 NNTPIndexer.note(session, segments={
-                    post.message_id: SegmentNote(
-                        post.kind, '%08x' % crc32(sent(post.raw)), None)
-                    for post in kept if post.raw and post.kind in (
+                    post.message_id: SegmentNote(post.kind)
+                    for post in kept if post.kind in (
                         ArchiveKind.Text, ArchiveKind.Binary)})
 
                 session.commit()
@@ -747,9 +744,16 @@ class NNTPArchiver:
 
         - decoders: what NNTPConnection.get() decodes them with (False for
           the article as it is; None for the usual ones, ie: yEnc)
+
+        Ctrl-C while waiting stops asking for more; the articles already
+        asked for are still yielded (for up to STOP_WAIT seconds), then
+        KeyboardInterrupt is raised.  Pressing it again stops at once.
         """
         pending = deque()
         todo = iter(wanted)
+
+        # When we stop waiting (once Ctrl-C was pressed)
+        stop_at = None
 
         def submit():
             # Top our requests back up to our window size
@@ -772,14 +776,33 @@ class NNTPArchiver:
             submit()
             while pending:
                 # Handle them in the order we asked
-                entry, request = pending.popleft()
-                request.wait()
+                entry, request = pending[0]
+                try:
+                    if stop_at is None:
+                        request.wait()
 
-                # Keep our connections busy while this one is kept
-                submit()
+                    elif not request.wait(max(0.0, stop_at - monotonic())):
+                        # Out of time; the rest is asked for next time
+                        break
+
+                except KeyboardInterrupt:
+                    if stop_at is not None:
+                        raise
+
+                    # Nothing more is asked for; what is on its way is kept
+                    stop_at = monotonic() + STOP_WAIT
+                    continue
+
+                pending.popleft()
+                if stop_at is None:
+                    # Keep our connections busy while this one is kept
+                    submit()
 
                 results = list(request.response) + [None, None]
                 yield entry, (results[0], results[1] or 'failed')
+
+            if stop_at is not None:
+                raise KeyboardInterrupt
 
         finally:
             # Anything not handled yet (ie: Ctrl-C) is no longer wanted

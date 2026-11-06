@@ -45,14 +45,6 @@ class ArchiveKind:
     Refused = 3
 
 
-# A list of the kinds defined above
-ARCHIVE_KINDS = (
-    ArchiveKind.Text,
-    ArchiveKind.Binary,
-    ArchiveKind.Missing,
-    ArchiveKind.Refused,
-)
-
 
 class ArchivedPost(ObjectBase):
     """
