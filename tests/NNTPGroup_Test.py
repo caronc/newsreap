@@ -138,3 +138,14 @@ class NNTPGroup_Test(TestBase):
             result = NNTPGroup.split(val)
             assert(isinstance(result, set))
             assert(len(result) == 0)
+
+
+def test_a_stored_group_can_be_shown():
+    """
+    A group row (from the main database) prints without raising
+    """
+    from newsreap.objects.nntp.Group import Group
+
+    group = Group(name='alt.binaries.test', flags='y', watch=True)
+    assert repr(group) == \
+        "<Group(id=None, name='alt.binaries.test', flags='y', watch=True)>"

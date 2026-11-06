@@ -676,10 +676,16 @@ def plain_subprocess():
     """
     Returns a copy of Python's own subprocess module, loaded on its own so
     gevent's monkey patching never touches it
+
+    - It always starts programs with posix_spawn where there is one.
+      Python only does on glibc; elsewhere (ie: musl on Alpine) it forks,
+      and that hangs once gevent is running.
     """
     spec = find_spec('subprocess')
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+    if hasattr(module.os, 'posix_spawn') and not module._mswindows:
+        module._USE_POSIX_SPAWN = True
     return module
 
 

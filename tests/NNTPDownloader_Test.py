@@ -22,6 +22,8 @@ import zipfile
 from shutil import which
 from zlib import crc32
 
+import re
+
 import pytest
 from click.testing import CliRunner
 
@@ -386,8 +388,10 @@ def test_damaged_files_are_repaired_with_just_enough_recovery_volumes(
     source = tmp_path / 'made'
     source.mkdir()
     (source / 'notes.txt').write_bytes(NOTES)
+    # 9 blocks; half as many again as recovery blocks, in 3 volumes (how
+    # they are shared out differs between par2 versions)
     run_program(
-        [which('par2'), 'create', '-r30', '-n3', '-s1024', '-q',
+        [which('par2'), 'create', '-r50', '-n3', '-s1024', '-q',
          str(source / 'notes.par2'), str(source / 'notes.txt')], check=True)
 
     files = [post(server, tmp_path, 'notes.txt', NOTES, parts=4)]
@@ -410,9 +414,16 @@ def test_damaged_files_are_repaired_with_just_enough_recovery_volumes(
         == NOTES
     assert not (tmp_path / 'Downloads' / 'release' / 'notes.par2').exists()
 
-    # Not every recovery volume was needed
-    assert len(asked(server) & {m for _, s in volumes for _, m in s}) < \
-        len(volumes)
+    # Only the recovery blocks the missing part needs (it covers 3 blocks)
+    # were fetched, not all of them
+    def blocks(name):
+        return int(re.search(r'\+([0-9]+)\.par2$', name).group(1))
+
+    fetched = asked(server)
+    total = sum(blocks(name) for name, _ in volumes)
+    got = sum(blocks(name) for name, segments in volumes
+              if {m for _, m in segments} & fetched)
+    assert 3 <= got < total
 
 
 @pytest.mark.parametrize('answer, needed, fetched', [
@@ -1039,3 +1050,27 @@ def test_a_copy_cut_short_leaves_nothing_behind(tmp_path, monkeypatch):
         module.place_file(str(source), str(target))
 
     assert sorted(os.listdir(str(tmp_path))) == ['from.bin']
+
+
+@pytest.mark.parametrize('needed, chosen', [
+    # Nothing needed; nothing fetched
+    (0, []),
+    # The fewest blocks that will do, then the fewest volumes
+    (2, ['n.vol1+2.par2']),
+    (3, ['n.vol0+1.par2', 'n.vol1+2.par2']),
+    (4, ['n.vol3+4.par2']),
+    (6, ['n.vol1+2.par2', 'n.vol3+4.par2']),
+    # par2 didn't say (or wants more than there is): every volume that
+    # holds anything
+    (float('inf'), ['n.vol0+1.par2', 'n.vol1+2.par2', 'n.vol3+4.par2']),
+    (99, ['n.vol0+1.par2', 'n.vol1+2.par2', 'n.vol3+4.par2']),
+])
+def test_just_enough_recovery_volumes_are_chosen(needed, chosen):
+    """
+    Recovery volumes are chosen to fetch as few blocks as will do; one
+    holding no blocks is never fetched
+    """
+    volumes = [{'name': name} for name in (
+        'n.vol7+0.par2', 'n.vol0+1.par2', 'n.vol1+2.par2', 'n.vol3+4.par2')]
+    assert [f['name'] for f in NNTPDownloader.recovery_volumes(
+        volumes, needed)] == chosen

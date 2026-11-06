@@ -416,3 +416,21 @@ def test_the_overview_format_is_asked_for_once(tmp_path):
         assert len(sock.xover('alt.test', 1, 1)) == 1
         assert sock.overview_format() == OVERVIEW_EXTRAS
         sock.close()
+
+
+def test_server_settings_that_are_not_numbers_use_their_defaults():
+    """
+    A server setting that should be a number (or an iostream that isn't a
+    name) falls back to its default instead of stopping the connection
+    from being made
+    """
+    sock = NNTPConnection(
+        host='localhost', port=119, retries='lots', retry_wait=None,
+        stall_timeout=[60], min_rate='fast', slow_window=-5, iostream=5)
+
+    assert sock.retries == 3
+    assert sock.retry_wait == 2.0
+    assert sock.stall_timeout == 60.0
+    assert sock.min_rate == 1024
+    assert sock.slow_window == 0.0
+    assert sock._iostream == NNTPIOStream.RFC3977_GZIP

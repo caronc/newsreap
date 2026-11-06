@@ -60,5 +60,5 @@ class Group(ObjectBase):
         super().__init__(*args, **kwargs)
 
     def __repr__(self):
-        return "<Group(id='%d', name='%s', flag=%s', watch='%s')>" % (
-                self.id, self.name, self.flag, self.watch)
+        return "<Group(id=%s, name='%s', flags='%s', watch=%s)>" % (
+            self.id, self.name, self.flags, self.watch)

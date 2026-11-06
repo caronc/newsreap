@@ -29,6 +29,7 @@ from .NNTPSegmentedPost import NNTPSegmentedPost
 from .NNTPArticle import NNTPArticle
 from .NNTPConnection import XoverGrouping
 from .NNTPConnectionRequest import NNTPConnectionRequest
+from .NNTPRequest import NNTPRequest
 from .NNTPSettings import NNTPSettings
 from .NNTPStatistics import NNTPStatistics
 
@@ -74,32 +75,19 @@ class WorkTracker:
         """
         Marks a worker available
         """
-        try:
-            self.lock.acquire(blocking=True)
-            # Store our worker
+        with self.lock:
             self.available.add(worker)
             self.busy.discard(worker)
-            return True
-
-        finally:
-            self.lock.release()
-
-        return False
+        return True
 
     def mark_busy(self, worker):
         """
         Marks a worker unavailable
         """
-        try:
-            self.lock.acquire(blocking=True)
+        with self.lock:
             self.busy.add(worker)
             self.available.discard(worker)
-            return True
-
-        finally:
-            self.lock.release()
-
-        return False
+        return True
 
     def __len__(self):
         """
@@ -179,6 +167,14 @@ class Worker(Greenlet):
             request.timer_start()
             try:
                 request.run(connection=self._connection)
+
+            except Exception:
+                # A broken request mustn't stop the worker (it would still
+                # look available and nothing would take the next request);
+                # anything waiting on it is woken up
+                logger.exception('A request failed: %r' % request)
+                if not request.is_set():
+                    request.abort()
 
             finally:
                 request.timer_stop()
@@ -341,10 +337,15 @@ class NNTPManager:
         """
         while not self._work_queue.empty():
             try:
-                self._work_queue.get_nowait()
+                request = self._work_queue.get_nowait()
+
             except EmptyQueueException:
                 # Nothing available for us
                 break
+
+            # Nothing will run it now; wake up anything waiting on it
+            if isinstance(request, NNTPRequest):
+                request.abort()
 
         for worker in self._workers:
             # Toggle Exit
@@ -394,19 +395,16 @@ class NNTPManager:
 
         """
 
-        # Determine if we need to spin a worker or not
-        self._work_tracker.lock.acquire(blocking=True)
+        # Determine if we need to spin a worker or not (the lock is let go
+        # of even if starting one fails)
+        with self._work_tracker.lock:
+            if len(self._work_tracker.available) == 0:
+                if len(self._work_tracker) < self._settings.connections():
+                    # Spin up more work
+                    self.spawn_workers(count=1)
 
-        if len(self._work_tracker.available) == 0:
-            if len(self._work_tracker) < self._settings.connections():
-                # Spin up more work
-                self.spawn_workers(count=1)
-
-        # Append to Queue for processing
-        self._work_queue.put(request)
-
-        # Release our lock
-        self._work_tracker.lock.release()
+            # Append to Queue for processing
+            self._work_queue.put(request)
 
     def group(self, name, block=True):
         """
@@ -655,7 +653,7 @@ class NNTPManager:
         return responses
 
     def get(self, id, work_dir, decoders=None, group=None, max_bytes=0,
-            block=True, force=False):
+            block=True):
         """
         Queue's an NNTPRequest for processing and returns it's
         response if block is set to True.
@@ -679,9 +677,6 @@ class NNTPManager:
         having only been partially complete  Use this option when you need to
         inspect the first bytes of a binary file. Set this to zero to download
         the entire thing (this is the default value)
-
-        The force flag when set to true forces the download of content even
-        if it has previously already been retrieved.
         """
 
         # A list of results
@@ -808,39 +803,28 @@ class NNTPManager:
             for segpost in iter(id):
                 # Iterate over our Segmented Post Entries
                 for article in iter(segpost):
-                    # For each segment in our list
+                    # Load what was fetched back into our NNTPnzb object (a
+                    # missing article has nothing to load)
                     resp = next(resp_iter)
-
-                    # This should always equate since our response list
-                    # was generated from our post
-                    assert(article.id == resp.id)
-
-                    # Load our response back to our NNTPnzb object
-                    article.load(resp)
+                    if resp is not None:
+                        article.load(resp)
 
         elif isinstance(id, NNTPSegmentedPost):
             # Support NNTPSegmentedPost() Objects
             resp_iter = iter(responses)
 
             # Iterate over our Segmented Post Entries
-            for article in iter(segpost):
-                # For each segment in our list
+            for article in iter(id):
+                # Load what was fetched back into our post (a missing
+                # article has nothing to load)
                 resp = next(resp_iter)
-
-                # This should always equate since our response list
-                # was generated from our post
-                assert(article.id == resp.id)
-
-                # Load our response back to our NNTPnzb object
-                article.load(resp)
+                if resp is not None:
+                    article.load(resp)
 
         elif isinstance(id, NNTPArticle):
-            # This should always equate since our response list
-            # was generated from our post
-            assert(id.id == responses[0].id)
-
-            # Load our response back to our NNTPnzb object
-            article.load(responses[0])
+            # Load what was fetched back into the article given
+            if responses[0] is not None:
+                id.load(responses[0])
 
             # Return our single article
             return responses[0]

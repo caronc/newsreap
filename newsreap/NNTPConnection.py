@@ -292,11 +292,15 @@ class NNTPConnection(SocketBase):
         super().__init__(*args, **kwargs)
 
         # Retry and dead connection detection settings
-        self.retries = max(0, int(retries))
-        self.retry_wait = max(0.0, float(retry_wait))
-        self.stall_timeout = max(0.0, float(stall_timeout))
-        self.min_rate = max(0, int(min_rate))
-        self.slow_window = max(0.0, float(slow_window))
+        self.retries = self._setting(retries, NNTP_RETRIES, int, 'retries')
+        self.retry_wait = self._setting(
+            retry_wait, NNTP_RETRY_WAIT, float, 'retry_wait')
+        self.stall_timeout = self._setting(
+            stall_timeout, NNTP_STALL_TIMEOUT, float, 'stall_timeout')
+        self.min_rate = self._setting(
+            min_rate, NNTP_MIN_TRANSFER_RATE, int, 'min_rate')
+        self.slow_window = self._setting(
+            slow_window, NNTP_SLOW_RATE_WINDOW, float, 'slow_window')
 
         # Store the default encoding
         self.encoding = encoding
@@ -326,9 +330,9 @@ class NNTPConnection(SocketBase):
 
         elif iostream:
             # Default
+            self._iostream = NNTPIOStream.RFC3977_GZIP
             logger.warning('An invalid iostream was specified; '
                            "using default: '%s'." % self._iostream)
-            self._iostream = NNTPIOStream.RFC3977_GZIP
 
         else:
             # iostream is None (0, or False)
@@ -441,6 +445,23 @@ class NNTPConnection(SocketBase):
             self.work_dir = DEFAULT_TMP_DIR
         else:
             self.work_dir = abspath(expanduser(work_dir))
+
+    @staticmethod
+    def _setting(value, default, kind, name):
+        """
+        Returns a server's number setting (never below 0)
+
+        - kind: int or float
+        - a value that isn't a number falls back to the default
+        """
+        try:
+            return max(kind(0), kind(value))
+
+        except (TypeError, ValueError, OverflowError):
+            # ie: 'fast' or a list in the configuration
+            logger.warning("%s: '%s' isn't a number; using %s." % (
+                name, value, default))
+            return default
 
     def append(self, connection, *args, **kwargs):
         """

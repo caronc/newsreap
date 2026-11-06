@@ -101,6 +101,8 @@ def sqlite_tuned(engine):
       leaves a broken database; at worst the last commit is lost
     - synchronous NORMAL: doesn't wait on the disk after every commit
     - temporary tables (ie: for sorting) are kept in memory
+    - foreign keys are enforced (as PostgreSQL and MySQL do), so a row
+      can't be removed while others still point to it
     """
     @event.listens_for(engine, 'connect')
     def connect(dbapi_connection, _):
@@ -108,6 +110,7 @@ def sqlite_tuned(engine):
         cursor.execute('PRAGMA journal_mode = WAL')
         cursor.execute('PRAGMA synchronous = NORMAL')
         cursor.execute('PRAGMA temp_store = MEMORY')
+        cursor.execute('PRAGMA foreign_keys = ON')
         cursor.close()
 
 
@@ -232,10 +235,12 @@ class Database:
             self._engine_str = engine
 
         if not self._engine:
-            logger.debug('Preparing engine: %s' % self._engine_str)
             # Note: echo is always set to False, logging is handled by NewsReap
             #       and not by SQLAlchemy
             self._engine = create_engine(engine, echo=False)
+
+            logger.debug('Preparing engine: %s' % (
+                self._engine.url.render_as_string(hide_password=True)))
             if self._engine.dialect.name == 'sqlite':
                 # What our searches need
                 sqlite_functions(self._engine)
@@ -404,6 +409,8 @@ class Database:
                 return True
 
         except OperationalError:
+            # Leave the session usable for what comes next
+            self._session.rollback()
             logger.error('Database.set({0}.{1}={2}) failed.'.format(
                 group, key, value
             ))

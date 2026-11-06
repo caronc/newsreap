@@ -744,6 +744,31 @@ def collection_found(entry):
                               .split()))})
 
 
+def shown(found, show=True, fields=None):
+    """
+    Prints what a search found and returns its results (not its headings)
+    with only what is needed to act on them, so a big search isn't held in
+    memory with all of its printed lines
+
+    - show: print the lines (a quiet run only gathers)
+    - fields: the details kept of each result (all of them if None)
+    """
+    kept = []
+    for entry in found:
+        if show:
+            for line in entry.lines:
+                click.echo(line)
+
+        if entry.key is None:
+            # A heading
+            continue
+
+        kept.append(Found(entry.key, (), entry.data if fields is None else {
+            key: entry.data[key] for key in fields if key in entry.data}))
+
+    return kept
+
+
 def counted(entries):
     """
     Returns what search results are, by kind ({kind: [entry]}), and how
@@ -767,16 +792,10 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title,
 
     - retry_missing: ask again for articles no server had (see NNTPRetry)
     """
-    found = [entry for entry in found]
-    entries = [entry for entry in found if entry.key is not None]
+    entries = shown(found, show=not quiet)
     if not entries:
         click.echo('Nothing found.')
         return 0
-
-    if not quiet:
-        for entry in found:
-            for line in entry.lines:
-                click.echo(line)
 
     kinds, what = counted(entries)
     size = sum(entry.data.get('size') or 0 for entry in entries)
@@ -980,15 +999,11 @@ def remove(ctx, found, groups, pager):
     Removes what a search found (--delete): it is shown first, and the user
     is asked (unless -y was given)
     """
-    found = [entry for entry in found]
-    wanted = [entry for entry in found if entry.key is not None]
+    # Removing only needs what each is and where it is kept
+    wanted = shown(found, fields=('kind', 'group'))
     if not wanted:
         click.echo('Nothing found.')
         return
-
-    for entry in found:
-        for line in entry.lines:
-            click.echo(line)
 
     kinds, what = counted(wanted)
     if not ctx.get('noprompt') and not click.confirm(

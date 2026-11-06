@@ -994,14 +994,7 @@ class NNTPDownloader:
             # It didn't say how many; every volume, to be sure
             needed = float('inf')
 
-        chosen = []
-        for f in sorted(volumes, key=lambda f: int(
-                PAR2_VOLUME_RE.search(f['name']).group('blocks'))):
-            if needed <= 0:
-                break
-            chosen.append(f)
-            needed -= int(PAR2_VOLUME_RE.search(f['name']).group('blocks'))
-
+        chosen = self.recovery_volumes(volumes, needed)
         if chosen:
             self._fetch(session, chosen)
             assembled.update(self._assemble(session, chosen))
@@ -1015,6 +1008,46 @@ class NNTPDownloader:
 
         self.repaired = True
         return True
+
+    @staticmethod
+    def recovery_volumes(volumes, needed):
+        """
+        Returns the recovery volumes worth fetching to get `needed` recovery
+        blocks, fetching as few blocks as it can
+
+        - volumes: the par2 volumes listed ({'name': ...}); a name says how
+          many blocks it holds (ie: name.vol3+4.par2 holds 4)
+        - The fewest blocks that reach `needed` (then the fewest volumes);
+          every volume when that many can't be had
+        - A volume holding no blocks is never worth fetching
+        """
+        held = sorted(
+            ((int(PAR2_VOLUME_RE.search(f['name']).group('blocks')), f)
+             for f in volumes), key=lambda entry: entry[0])
+        held = [entry for entry in held if entry[0] > 0]
+        if needed <= 0:
+            return []
+
+        if needed >= sum(blocks for blocks, _ in held):
+            return [f for _, f in held]
+
+        # Every total of blocks some volumes add up to, and the fewest
+        # volumes (their positions in held) that do (there are only a
+        # handful of volumes)
+        totals = {0: ()}
+        for no, (blocks, _) in enumerate(held):
+            for total, chosen in list(totals.items()):
+                if total >= needed:
+                    # Already enough; more would only add blocks
+                    continue
+
+                if total + blocks not in totals or \
+                        len(chosen) + 1 < len(totals[total + blocks]):
+                    totals[total + blocks] = chosen + (no, )
+
+        best = min((total for total in totals if total >= needed),
+                   key=lambda total: (total, len(totals[total])))
+        return [held[no][1] for no in totals[best]]
 
     def _extract(self, archives, passwords):
         """

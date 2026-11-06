@@ -1453,3 +1453,51 @@ def test_fetched_headers_can_be_searched_right_away(tmp_path):
             'Nothing found.\n1 collection(s) still forming match; add '
             '--forming to see them.\n')
         assert 'Fresh.Upload' in nr('search', '--forming', 'fresh').output
+
+
+def test_articles_not_done_yet_are_read_in_order_without_sorting(paths):
+    """
+    Indexing (and archiving) read the cached articles not done yet in
+    article order straight from an index; sorting every article left on
+    each chunk slows big groups down more and more
+    """
+    import sqlite3
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    cache(paths[GROUP], release('Ordered', files=2, segments=3))
+    caught_up(paths[GROUP])
+
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if 'FROM article' in statement and \
+                statement.lstrip().upper().startswith('SELECT'):
+            statements.append((statement, parameters))
+
+    event.listen(Engine, 'before_cursor_execute', capture)
+    try:
+        NNTPIndexer(paths['index']).index(GROUP, paths[GROUP])
+
+    finally:
+        event.remove(Engine, 'before_cursor_execute', capture)
+
+    # What archiving asks (see NNTPArchiver.archive())
+    statements.append((
+        'SELECT article_no FROM article WHERE size <= ? AND archived = 0 '
+        'AND article_no > ? ORDER BY article_no LIMIT 10', (65536, 0)))
+
+    db = sqlite3.connect(paths[GROUP])
+    try:
+        plans = [
+            ' '.join(str(row[-1]) for row in db.execute(
+                'EXPLAIN QUERY PLAN ' + statement, parameters or ()))
+            for statement, parameters in statements
+            if 'ORDER BY' in statement]
+
+    finally:
+        db.close()
+
+    assert len(plans) >= 2
+    for plan in plans:
+        assert 'TEMP B-TREE' not in plan, plan

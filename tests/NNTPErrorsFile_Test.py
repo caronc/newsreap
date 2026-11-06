@@ -144,12 +144,19 @@ def test_a_name_that_isnt_utf8_can_still_be_written(tmp_path):
     assert found.parts == PARTS
 
 
-def test_deeply_nested_junk_is_corrupt(tmp_path):
+def test_deeply_nested_junk_is_corrupt(tmp_path, monkeypatch):
     """
-    A file of brackets nested too deep to read is corrupt, not a crash
+    A file of brackets nested too deep is corrupt; it is refused before
+    YAML builds it (building it recurses, which can crash Python outright)
     """
+    import yaml
+
     path = str(tmp_path / 'notes.txt')
     with open(path + ERRORS_EXTENSION, 'w', encoding='utf-8') as fp:
         fp.write('parts: ' + '[' * 200000)
 
+    def built(*args, **kwargs):
+        raise AssertionError('the nested lists were built')
+
+    monkeypatch.setattr(yaml, 'load', built)
     assert NNTPErrorsFile(path).load().corrupt

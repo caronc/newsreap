@@ -21,6 +21,8 @@ if 'threading' in sys.modules:
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import pytest
+
 from newsreap.SortedSet import sortedset
 from os.path import abspath
 from os.path import dirname
@@ -1191,3 +1193,26 @@ def test_programs_are_never_started_in_a_way_that_forks():
                    {'close_fds': True}):
         with pytest.raises(ValueError, match='would fork'):
             start_program(['true'], **option)
+
+
+def test_programs_start_without_python_forking(monkeypatch):
+    """
+    Programs are started with posix_spawn wherever the system has it (ie:
+    musl on Alpine too, where Python would fork instead, and hang once
+    gevent is running)
+    """
+    import os
+
+    from newsreap.Utils import Popen
+    from newsreap.Utils import start_program
+    from newsreap.Utils import wait_program
+
+    if not hasattr(os, 'posix_spawn'):
+        pytest.skip('this system has no posix_spawn')
+
+    def forked(*args, **kwargs):
+        raise AssertionError('Python forked to start a program')
+
+    monkeypatch.setitem(
+        Popen._execute_child.__globals__, '_fork_exec', forked)
+    assert wait_program(start_program(['true'])) == 0

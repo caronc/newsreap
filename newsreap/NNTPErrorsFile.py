@@ -64,6 +64,10 @@ MAX_LINE = 65536
 # The fastest YAML reader there is
 Loader = getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
 
+# How deep lists and mappings may be nested in one (ours go 4 deep); YAML
+# builds deeper ones by recursion, which can crash Python outright
+MAX_NESTING = 32
+
 
 class Dumper(getattr(yaml, 'CSafeDumper', yaml.SafeDumper)):
     """
@@ -133,7 +137,22 @@ class NNTPErrorsFile:
                 raise ValueError('it is too big to be one of ours')
 
             with open(self.target, encoding='utf-8') as fp:
-                data = yaml.load(fp, Loader=Loader)
+                content = fp.read()
+
+            # Checked a piece at a time first (that doesn't recurse)
+            depth = 0
+            for event in yaml.parse(content, Loader=Loader):
+                if isinstance(event, (yaml.MappingStartEvent,
+                                      yaml.SequenceStartEvent)):
+                    depth += 1
+                    if depth > MAX_NESTING:
+                        raise ValueError('it is nested too deep')
+
+                elif isinstance(event, (yaml.MappingEndEvent,
+                                        yaml.SequenceEndEvent)):
+                    depth -= 1
+
+            data = yaml.load(content, Loader=Loader)
 
         except FileNotFoundError:
             return self

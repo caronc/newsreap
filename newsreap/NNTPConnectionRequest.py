@@ -85,7 +85,6 @@ class NNTPConnectionRequest(NNTPRequest):
                 return False
 
             _name = action[0]
-            _func = getattr(connection, _name)
 
             # Handle Arguments
             try:
@@ -106,16 +105,33 @@ class NNTPConnectionRequest(NNTPRequest):
                 _kwargs = dict()
 
             try:
-                self.append(_func(*_args, **_kwargs))
+                result = getattr(connection, _name)(*_args, **_kwargs)
 
             except Exception as e:
                 # A failed action has no result; keep going with the rest
                 logger.warning('NNTP %s() request failed.' % _name)
-                logger.debug('Request exception: %s' % str(e))
-                self.append(None)
+                logger.debug('Request exception: %s' % str(e), exc_info=True)
+                result = None
+
+            if self.is_set():
+                # Aborted while it ran; abort() already answered it
+                return False
+
+            self.append(result)
 
         # Return that we've set content okay
         return True
+
+
+    def abort(self):
+        """
+        Stops the request; every action not answered yet is answered with
+        None (as a failed one is), so there is always one answer per action
+        """
+        if not self.is_set():
+            self.response.extend(
+                [None] * (len(self.actions) - len(self.response)))
+        super().abort()
 
 
     def __repr__(self):

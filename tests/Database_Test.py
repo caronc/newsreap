@@ -25,6 +25,8 @@ from os.path import dirname
 from os.path import abspath
 from os.path import join
 
+import pytest
+
 try:
     from tests.TestBase import TestBase
 
@@ -87,3 +89,82 @@ class Database_Test(TestBase):
         assert entry in session
         assert db2.get('name') == 'two'
         db2.close()
+
+
+def test_a_failed_setting_leaves_the_session_usable(tmp_path, monkeypatch):
+    """
+    When saving a setting fails, the session is rolled back so the next
+    database call still works
+    """
+    from sqlalchemy.exc import OperationalError
+
+    db = NNTPGroupDatabase(
+        engine='sqlite:///%s' % (tmp_path / 'db.db'), reset=True)
+    session = db.session()
+
+    def locked(*args, **kwargs):
+        raise OperationalError('UPDATE vsp', {}, Exception('locked'))
+
+    rolled_back = []
+    monkeypatch.setattr(session, 'query', locked)
+    monkeypatch.setattr(
+        session, 'rollback', lambda: rolled_back.append(True))
+
+    assert db.set('name', 'value') is False
+    assert rolled_back == [True]
+    monkeypatch.undo()
+    db.close()
+
+
+def test_database_passwords_are_never_logged(caplog):
+    """
+    The database URL is logged without its password
+    """
+    pytest.importorskip('psycopg')
+    import logging
+    from newsreap.Logging import NEWSREAP_ENGINE
+
+    caplog.set_level(logging.DEBUG, logger=NEWSREAP_ENGINE)
+    try:
+        NNTPGroupDatabase(
+            engine='postgresql+psycopg://user:secret@127.0.0.1:1/nothing'
+        ).session()
+
+    except Exception:
+        # Nothing listens there; only what was logged matters
+        pass
+
+    assert 'Preparing engine' in caplog.text
+    assert 'secret' not in caplog.text
+
+
+def test_sqlite_refuses_to_remove_rows_still_pointed_to(tmp_path):
+    """
+    SQLite enforces foreign keys as the database servers do: a collection
+    can't be removed while its files still point to it
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+    from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
+
+    db = NNTPIndexDatabase.from_file(str(tmp_path / 'index.db'))
+    session = db.session()
+    try:
+        session.execute(text(
+            "INSERT INTO collection (id, key, name, poster, state, source, "
+            "files, files_expected, segments, segments_expected, size, "
+            "score, tags) VALUES (1, 'k', 'n', 'p', 1, 1, 1, 1, 0, 0, 0, "
+            "0, '')"))
+        session.execute(text(
+            "INSERT INTO collection_file (id, key, collection_id, subject, "
+            "poster, filename, file_no, segments_expected, segments, size) "
+            "VALUES (1, 'f', 1, 's', 'p', 'n', 1, 1, 0, 0)"))
+        session.commit()
+
+        with pytest.raises(IntegrityError):
+            session.execute(text('DELETE FROM collection WHERE id = 1'))
+            session.commit()
+
+    finally:
+        session.rollback()
+        db.close()

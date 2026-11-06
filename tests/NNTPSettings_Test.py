@@ -502,3 +502,32 @@ class NNTPSettings_Test(TestBase):
         except AttributeError:
             # recursion error occured
             assert(True)
+
+
+def test_sections_that_are_not_settings_are_ignored(tmp_path):
+    """
+    A section (or a server) that isn't a list of settings is reported and
+    left out; the rest of the configuration still loads
+    """
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.conftest import config_for
+
+    with FakeNNTPServer() as server:
+        path = config_for(server, tmp_path / 'config.yaml')
+        with open(path) as fp:
+            content = fp.read()
+
+        # A server given as a bare name, and broken sections
+        content = content.replace(
+            'servers:\n', 'servers:\n  - just-a-host-name\n', 1)
+        with open(path, 'w') as fp:
+            fp.write(content + '\nposting: 5\ndownloads: [1, 2]\n')
+
+        settings = NNTPSettings(cfg_file=path)
+        try:
+            assert settings.is_valid()
+            assert len(settings.nntp_servers) == 1
+            assert settings.nntp_servers[0]['port'] == server.port
+
+        finally:
+            settings.close()

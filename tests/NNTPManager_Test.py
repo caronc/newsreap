@@ -39,7 +39,10 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(abspath(__file__))))
     from tests.TestBase import TestBase
 
+import pytest
+
 from tests.FakeNNTPServer import FakeNNTPServer
+from tests.conftest import config_for
 
 from newsreap.NNTPSettings import NNTPSettings
 from newsreap.NNTPManager import NNTPManager
@@ -163,7 +166,6 @@ def test_a_request_says_how_long_it_took(tmp_path):
     done; the time stays put once it is done
     """
     from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
-    from tests.conftest import config_for
 
     with FakeNNTPServer(join_group=False) as server:
         settings = NNTPSettings(cfg_file=config_for(
@@ -183,4 +185,179 @@ def test_a_request_says_how_long_it_took(tmp_path):
 
         finally:
             manager.close()
+            settings.close()
+
+
+def manager_for(server, tmp_path):
+    """
+    Returns (settings, manager) for a FakeNNTPServer
+    """
+    settings = NNTPSettings(cfg_file=config_for(
+        server, tmp_path / 'config.yaml'))
+    return settings, NNTPManager(settings)
+
+
+def stored(server, tmp_path, *message_ids):
+    """
+    Makes a small article available for each Message-ID given
+    """
+    for message_id in message_ids:
+        path = tmp_path / ('%s.eml' % message_id.strip('<>'))
+        path.write_bytes(b'Subject: test\r\n\r\nhello there\r\n')
+        server.add_article(message_id, str(path), 'alt.binaries.test')
+
+
+def test_an_article_object_is_fetched_and_filled_in(tmp_path):
+    """
+    Handing the manager an NNTPArticle fills that article in with what
+    was fetched
+    """
+    from newsreap.NNTPArticle import NNTPArticle
+
+    with FakeNNTPServer(join_group=False) as server:
+        stored(server, tmp_path, '<one@example.com>')
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            article = NNTPArticle(id='<one@example.com>')
+            assert manager.get(article, str(tmp_path)) is not None
+            assert article.body is not None
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_each_part_of_a_segmented_post_is_fetched(tmp_path):
+    """
+    Handing the manager an NNTPSegmentedPost fetches every article in it,
+    and one that is missing doesn't stop the rest
+    """
+    from newsreap.NNTPArticle import NNTPArticle
+    from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+
+    with FakeNNTPServer(join_group=False) as server:
+        stored(server, tmp_path, '<a@example.com>', '<b@example.com>')
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            post = NNTPSegmentedPost('file.bin')
+            for no, message_id in enumerate(
+                    ('<a@example.com>', '<gone@example.com>',
+                     '<b@example.com>'), 1):
+                post.add(NNTPArticle(id=message_id, no=no))
+
+            responses = manager.get(post, str(tmp_path))
+            assert len(responses) == 3
+            assert [entry is not None for entry in responses] == [
+                True, False, True]
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_a_request_that_breaks_leaves_the_worker_running(tmp_path):
+    """
+    A request whose run() raises is marked done, and the worker that ran
+    it carries on with the next one
+    """
+    from newsreap.NNTPRequest import NNTPRequest
+    from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+
+    class Broken(NNTPRequest):
+        def run(self, connection, *args, **kwargs):
+            raise RuntimeError('broken')
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings = NNTPSettings(cfg_file=config_for(
+            server, tmp_path / 'config.yaml', connections=1))
+        manager = NNTPManager(settings)
+        try:
+            broken = Broken()
+            manager.put(broken)
+            assert broken.wait(timeout=5)
+
+            after = NNTPConnectionRequest(
+                actions=[('stat', ('<nothing@example.com>', ), {})])
+            manager.put(after)
+            assert after.wait(timeout=5)
+            assert len(after) == 1
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_an_unknown_action_is_answered_with_nothing(tmp_path):
+    """
+    An action the connection doesn't have gives None (like any other
+    failed action) and the actions after it still run
+    """
+    from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            request = NNTPConnectionRequest(actions=[
+                ('no_such_thing', (), {}),
+                ('stat', ('<nothing@example.com>', ), {})])
+            manager.put(request)
+            assert request.wait(timeout=5)
+            assert len(request) == 2
+            assert request.response[0] is None
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_a_worker_that_cannot_start_does_not_lock_the_manager(
+        tmp_path, monkeypatch):
+    """
+    If making a worker fails, the next request can still be handed over
+    """
+    from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            spawn = manager.spawn_workers
+
+            def broken(count=1):
+                raise OSError('no more connections')
+
+            monkeypatch.setattr(manager, 'spawn_workers', broken)
+            with pytest.raises(OSError):
+                manager.put(NNTPConnectionRequest(actions=[]))
+
+            monkeypatch.setattr(manager, 'spawn_workers', spawn)
+            request = NNTPConnectionRequest(
+                actions=[('stat', ('<nothing@example.com>', ), {})])
+            with gevent.Timeout(5):
+                manager.put(request)
+            assert request.wait(timeout=5)
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_closing_wakes_whoever_waits_on_a_queued_request(tmp_path):
+    """
+    Requests still queued when the manager closes are answered with
+    nothing instead of being waited on forever
+    """
+    from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            # Queued, with no worker started to take it
+            request = NNTPConnectionRequest(
+                actions=[('stat', ('<nothing@example.com>', ), {})])
+            manager._work_queue.put(request)
+            manager.close()
+            assert request.wait(timeout=1)
+            assert request.response == [None]
+
+        finally:
             settings.close()

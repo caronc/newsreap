@@ -390,3 +390,116 @@ def test_posts_are_narrowed_down_by_tag_score_and_time(archiver):
     assert found(before=POSTED + timedelta(days=1)) == {'talk@x'}
     assert found(terms=terms(isubject='*coffee*'),
                  after=POSTED + timedelta(hours=1)) == {'reply@x'}
+
+
+#
+# Acting on what a search found (--delete, --download)
+#
+def test_found_results_keep_only_what_is_needed_once_shown(capsys):
+    """
+    Once a result is printed, its lines are let go of; removing keeps only
+    what each result is and where it is kept
+    """
+    from newsreap.plugins.cli.search import Found
+    from newsreap.plugins.cli.search import shown
+
+    def found():
+        yield Found(None, ['alt.binaries.test:'], None)
+        yield Found('a@x', ['  [00001] first', '    snippet'], {
+            'kind': 'article', 'group': 'alt.binaries.test',
+            'subject': 'first', 'size': 10})
+
+    kept = shown(found(), fields=('kind', 'group'))
+    assert kept == [Found('a@x', (), {
+        'kind': 'article', 'group': 'alt.binaries.test'})]
+    assert capsys.readouterr().out.splitlines() == [
+        'alt.binaries.test:', '  [00001] first', '    snippet']
+
+    # Downloading keeps every detail (it puts articles together by them),
+    # and a quiet run prints nothing
+    kept = shown(found(), show=False)
+    assert kept[0].data['subject'] == 'first'
+    assert kept[0].lines == ()
+    assert capsys.readouterr().out == ''
+
+
+def test_what_a_search_found_is_downloaded_and_removed(
+        tmp_path, index_engine):
+    """
+    --delete removes the collections, posts and articles a search found,
+    and -z saves the NZB files of collections, on every index database
+    """
+    from click.testing import CliRunner
+
+    from newsreap.cli import cli
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.NNTPArchiver_Test import article
+    from tests.conftest import config_for
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000004 0000000001 y\n' % GROUP)
+
+    with FakeNNTPServer(group_list=str(group_list),
+                        join_group=False) as server:
+        for message_id, text in (('talk@x', 'Holiday photos are up'),
+                                 ('more@x', 'More holiday photos')):
+            path = tmp_path / ('%s.msg' % message_id)
+            path.write_bytes(article(text, Subject='Holiday talk'))
+            server.add_article(message_id, str(path), GROUP)
+
+        for no, (subject, poster, message_id) in enumerate(
+                [*release('Holiday', files=1, segments=2),
+                 ('Holiday talk', POSTER, 'talk@x'),
+                 ('Holiday talk', POSTER, 'more@x')], 1):
+            server.add_overview(
+                GROUP, no, subject, poster, POSTED + timedelta(minutes=no),
+                message_id, size=100)
+
+        # The index on the database being tested
+        config = config_for(server, tmp_path / 'config.yaml')
+        with open(config) as fp:
+            content = fp.read()
+        assert content.count('\ndatabase:\n') == 1
+        with open(config, 'w') as fp:
+            fp.write(content.replace(
+                '\ndatabase:\n',
+                "\ndatabase:\n   index_engine: '%s'\n" % index_engine))
+
+        runner = CliRunner()
+
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('update', 'groups').exit_code == 0
+        result = nr('update', GROUP, '--content')
+        assert result.exit_code == 0, result.output
+
+        # An NZB file for each collection found
+        collections = nr('search', 'holiday', '-q').output.split()
+        assert collections
+        out = tmp_path / 'out'
+        result = nr('-y', 'search', 'holiday', '-z', '-o', str(out))
+        assert result.exit_code == 0, result.output
+        assert sorted(path.suffix for path in out.iterdir()) == \
+            ['.nzb'] * len(collections)
+
+        # Posts: shown, asked, then removed
+        result = nr('search', '--posts', 'more', '--delete', input='y\n')
+        assert '<more@x>' in result.output
+        assert 'Removed 1 post(s).' in result.output
+        assert nr('search', '--posts', 'photos', '-q').output.split() == [
+            'talk@x']
+
+        # Articles (from their group's cache) and collections
+        result = nr('-y', 'search', '--articles', '-g', GROUP, 'talk',
+                    '--delete')
+        assert 'Removed 2 article(s).' in result.output, result.output
+        assert nr('search', '--articles', '-g', GROUP, 'talk',
+                  '-q').output.strip() == ''
+
+        result = nr('-y', 'search', 'holiday', '--delete')
+        assert 'Removed %d collection(s).' % len(collections) in \
+            result.output, result.output
+        assert nr('search', 'holiday', '-q').output.strip() == ''

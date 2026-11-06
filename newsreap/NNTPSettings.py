@@ -762,23 +762,28 @@ class NNTPSettings(NNTPDatabase):
                     cfg_data[SERVER_LIST_KEY],
                 )
 
-        if GLOBAL_KEY in cfg_data:
-            _cfg_data[GLOBAL_KEY].update(cfg_data[GLOBAL_KEY])
+        for key in (GLOBAL_KEY, DATABASE_KEY, PROCESSING_KEY, POSTING_KEY,
+                    DOWNLOAD_KEY):
+            section = cfg_data.get(key)
+            if isinstance(section, dict):
+                _cfg_data[key].update(section)
 
-        if DATABASE_KEY in cfg_data:
-            _cfg_data[DATABASE_KEY].update(cfg_data[DATABASE_KEY])
+            elif section is not None:
+                # ie: 'processing: 5'; its defaults are used instead
+                logger.error(
+                    "%s: '%s:' isn't a list of settings; it was ignored." % (
+                        cfg_file, key))
 
-        if PROCESSING_KEY in cfg_data:
-            _cfg_data[PROCESSING_KEY].update(cfg_data[PROCESSING_KEY])
+        servers = cfg_data.get(SERVER_LIST_KEY)
+        if isinstance(servers, (list, tuple)):
+            for no, server in enumerate(servers, 1):
+                if not isinstance(server, dict):
+                    # ie: a bare host name instead of 'host: name'
+                    logger.error(
+                        "%s: server #%d isn't a list of settings; it was "
+                        "ignored." % (cfg_file, no))
+                    continue
 
-        if POSTING_KEY in cfg_data:
-            _cfg_data[POSTING_KEY].update(cfg_data[POSTING_KEY])
-
-        if isinstance(cfg_data.get(DOWNLOAD_KEY), dict):
-            _cfg_data[DOWNLOAD_KEY].update(cfg_data[DOWNLOAD_KEY])
-
-        if SERVER_LIST_KEY in cfg_data:
-            for server in cfg_data[SERVER_LIST_KEY]:
                 defaults = DEFAULT_SERVER_VARIABLES.copy()
                 defaults.update(server)
                 _cfg_data[SERVER_LIST_KEY].append(defaults)

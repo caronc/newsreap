@@ -13,6 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 from sqlalchemy import Column
+from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
@@ -30,8 +31,17 @@ class Article(ObjectBase):
 
     __tablename__ = 'article'
 
-    # Article (Unique) Message-ID
-    message_id = Column(String(128), primary_key=True)
+    # Indexing and archiving read the articles not done yet in article
+    # order, a chunk at a time; these let them do that without sorting
+    # every article left on each chunk
+    __table_args__ = (
+        Index('ix_article_indexed_no', 'indexed', 'article_no'),
+        Index('ix_article_archived_no', 'archived', 'article_no'),
+    )
+
+    # Article (Unique) Message-ID; 250 characters is the longest RFC 5536
+    # allows (the same as the index keeps)
+    message_id = Column(String(250), primary_key=True)
 
     # Article No (unique to usenet server only)
     article_no = Column(Integer, nullable=False, unique=True, index=True)
@@ -62,13 +72,11 @@ class Article(ObjectBase):
 
     # Set once `nr update index` has put the article into a collection
     indexed = Column(
-        Boolean, default=False, server_default='0', nullable=False,
-        index=True)
+        Boolean, default=False, server_default='0', nullable=False)
 
     # Set once `nr update archive` has fetched (and kept) the article
     archived = Column(
-        Boolean, default=False, server_default='0', nullable=False,
-        index=True)
+        Boolean, default=False, server_default='0', nullable=False)
 
     # A flag that can be used to determine if the record should be
     # displayed or not; this over-rides any calculated score.

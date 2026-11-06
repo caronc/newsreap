@@ -1545,37 +1545,60 @@ class NNTPIndexer:
             '  (state = :settled AND ' + complete + '))')
             .bindparams(*params), values)
 
-        # Give every newly formed collection its GID
-        formed = session.query(Collection)\
-            .filter(Collection.gid.is_(None))\
-            .filter(Collection.state.in_(COLLECTION_FORMED))\
-            .all()
+        # Give every newly formed collection its GID, a chunk at a time (a
+        # first index can form a great many at once)
+        last = 0
+        while True:
+            ids = [row.id for row in session.query(Collection.id)
+                   .filter(Collection.gid.is_(None))
+                   .filter(Collection.state.in_(COLLECTION_FORMED))
+                   .filter(Collection.id > last)
+                   .order_by(Collection.id).limit(IN_LIST_SIZE)]
+            if not ids:
+                break
 
-        for collection in formed:
-            gid = self._gid(session, collection.id)
-            if gid is None:
-                # It has no segments to work it out from
-                continue
+            last = ids[-1]
+            gids = self._gids(session, ids)
 
-            other = session.query(Collection.id, Collection.state)\
-                .filter(Collection.gid == gid).first()
+            # The collections that already have these GIDs: (id, state)
+            taken = {}
+            for row in session.query(
+                    Collection.gid, Collection.id, Collection.state)\
+                    .filter(Collection.gid.in_(set(gids.values()))):
+                taken.setdefault(row.gid, (row.id, row.state))
 
-            if other is None:
-                collection.gid = gid
-                self.formed += 1
+            given = []
+            for collection_id in ids:
+                gid = gids.get(collection_id)
+                if gid is None:
+                    # It has no segments to work it out from
+                    continue
 
-            elif other.state == CollectionState.Deleted:
-                # A copy of something removed; remove it too
-                self._remove(session, collection.id)
+                other = taken.get(gid)
+                if other is None:
+                    # Ours now (a later one of this chunk is a copy of it)
+                    given.append({'_id': collection_id, 'gid': gid})
+                    taken[gid] = (collection_id, None)
+                    self.formed += 1
 
-            else:
-                # We already have this post (ie: it was imported from an NZB
-                # file); this is what was left over
-                logger.debug(
-                    'Collection #%d is a part of collection #%d.' % (
-                        collection.id, other.id))
+                elif other[1] == CollectionState.Deleted:
+                    # A copy of something removed; remove it too
+                    self._remove(session, collection_id)
 
-        session.commit()
+                else:
+                    # We already have this post (ie: it was imported from an
+                    # NZB file); this is what was left over
+                    logger.debug(
+                        'Collection #%d is a part of collection #%d.' % (
+                            collection_id, other[0]))
+
+            if given:
+                session.execute(
+                    update(Collection.__table__)
+                    .where(Collection.__table__.c.id == bindparam('_id'))
+                    .values(gid=bindparam('gid')), given)
+
+            session.commit()
 
         # The states were updated directly in the database; anything read
         # before now is out of date
@@ -1600,21 +1623,47 @@ class NNTPIndexer:
             entry.position is None, entry.position or 0,
             gid_order(entry.subject)))
 
-    @classmethod
-    def _gid(cls, session, collection_id):
+    @staticmethod
+    def _gids(session, collection_ids):
         """
-        Works out a collection's GID from the first segment (lowest part)
-        of its first file; None if it has no segments
+        Works out the GIDs of the collections given from the first segment
+        (lowest part) of each one's first file (in _files() order)
+
+        - collection_ids: a chunk of collection ids (see IN_LIST_SIZE)
+        - returns {collection id: GID}; one with no segments is left out
         """
-        files = cls._files(session, collection_id)
-        if not files:
-            return None
+        # Each collection's first file: (its sort key, file id)
+        first = {}
+        for row in session.query(
+                CollectionFile.collection_id, CollectionFile.id,
+                CollectionFile.position, CollectionFile.subject)\
+                .filter(CollectionFile.collection_id.in_(collection_ids)):
+            key = (row.position is None, row.position or 0,
+                   gid_order(row.subject), row.id)
+            best = first.get(row.collection_id)
+            if best is None or key < best[0]:
+                first[row.collection_id] = (key, row.id)
 
-        segment = session.query(Segment.message_id)\
-            .filter(Segment.file_id == files[0].id)\
-            .order_by(Segment.part, Segment.message_id).first()
+        if not first:
+            return {}
 
-        return None if segment is None else make_gid(segment.message_id)
+        # The lowest part of each of those files, then the lowest Message-ID
+        # holding it (a part can have been posted more than once)
+        owners = {file_id: collection_id
+                  for collection_id, (_, file_id) in first.items()}
+        lowest = select(
+            Segment.file_id, func.min(Segment.part).label('part'))\
+            .where(Segment.file_id.in_(owners))\
+            .group_by(Segment.file_id).subquery()
+
+        return {
+            owners[file_id]: make_gid(message_id)
+            for file_id, message_id in session.query(
+                Segment.file_id, func.min(Segment.message_id))
+            .join(lowest, and_(
+                Segment.file_id == lowest.c.file_id,
+                Segment.part == lowest.c.part))
+            .group_by(Segment.file_id)}
 
     def get(self, value):
         """

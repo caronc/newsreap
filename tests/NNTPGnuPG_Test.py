@@ -635,6 +635,7 @@ def test_programs_are_started_without_forking_us(tmp_path, monkeypatch):
     import gevent.subprocess
     import os
     from newsreap.SubProcess import SubProcess
+    from newsreap.Utils import Popen
     from newsreap.Utils import start_program
     from newsreap.Utils import wait_program
 
@@ -646,6 +647,11 @@ def test_programs_are_started_without_forking_us(tmp_path, monkeypatch):
                          (gevent.os, 'fork_gevent'),
                          (gevent.subprocess, 'fork_and_watch')):
         monkeypatch.setattr(module, name, forked)
+
+    # Python's own fork (and exec) in C, which our copy of subprocess falls
+    # back on when it doesn't use posix_spawn (ie: on musl)
+    monkeypatch.setitem(
+        Popen._execute_child.__globals__, '_fork_exec', forked)
 
     gpg = NNTPGnuPG(str(tmp_path / 'gpg'))
     assert gpg.import_keys(sample('reader-secret.asc')) == [
