@@ -14,8 +14,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 from datetime import UTC
 from datetime import datetime

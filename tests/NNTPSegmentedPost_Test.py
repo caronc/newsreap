@@ -14,14 +14,6 @@
 
 import re
 import sys
-if 'threading' in sys.modules:
-    #  gevent patching since pytests import
-    #  the sys library before we do.
-    del sys.modules['threading']
-
-import gevent.monkey
-gevent.monkey.patch_all()
-
 from os.path import isdir
 from os.path import dirname
 from os.path import abspath

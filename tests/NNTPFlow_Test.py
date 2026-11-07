@@ -12,8 +12,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 import time
 from os.path import join
@@ -71,7 +69,8 @@ def test_bad_user_stops_the_login(nntp_server):
     """
     sock = connect_to(nntp_server, username='nobody')
     assert sock.connect(timeout=5.0) is False
-    assert nntp_server.commands() == ['AUTHINFO USER nobody']
+    assert nntp_server.wait_for('QUIT')
+    assert nntp_server.commands() == ['AUTHINFO USER nobody', 'QUIT']
 
 
 def test_bad_password_stops_the_login(nntp_server):
@@ -80,7 +79,8 @@ def test_bad_password_stops_the_login(nntp_server):
     """
     sock = connect_to(nntp_server, password='wrong')
     assert sock.connect(timeout=5.0) is False
-    assert nntp_server.commands() == LOGIN[:2]
+    assert nntp_server.wait_for('QUIT')
+    assert nntp_server.commands() == LOGIN[:2] + ['QUIT']
 
 
 def test_server_without_compression():
@@ -121,7 +121,8 @@ def test_unwelcome_servers_are_not_logged_into(welcome):
     with FakeNNTPServer(welcome=welcome) as server:
         sock = connect_to(server)
         assert sock.connect(timeout=5.0) is False
-        assert server.commands() == []
+        # At most a goodbye (when the server left the line open)
+        assert set(server.commands()) <= {'QUIT'}
 
 
 def test_group_is_selected_again_after_reconnecting(nntp_server, tmp_path):

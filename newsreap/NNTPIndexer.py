@@ -38,8 +38,6 @@ Only articles that haven't been indexed before are looked at, so running
 it again after `nr update search` only handles what is new.
 """
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 import re
 from collections import namedtuple

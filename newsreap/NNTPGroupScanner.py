@@ -23,8 +23,6 @@ group's own database so they can be searched offline.
   connections, but only a few batches are held in memory at a time.
 """
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 from collections import deque
 from datetime import timedelta

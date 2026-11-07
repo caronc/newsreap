@@ -25,8 +25,6 @@ import certifi
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 from os.path import isfile
 from datetime import datetime
@@ -46,9 +44,9 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 # by whoever asked)
 DEFAULT_CONNECT_TIMEOUT = 30.0
 
-# Number of seconds to wait for a connection to expire/timeout
-# or fail to connect before failing out right
-socket.setdefaulttimeout(10.0)
+# How long (seconds) our sockets wait when nothing else was asked for; it is
+# set on each of our own sockets, never as the default for the whole program
+SOCKET_TIMEOUT = 10.0
 
 # Each entry is made up of:
 #   - the protocol identifier you can pass in as the `secure` argument
@@ -361,6 +359,7 @@ class SocketBase:
         while not established:
             # Create a new socket
             self.socket = socket.socket(family, socket.SOCK_STREAM)
+            self.socket.settimeout(timeout or SOCKET_TIMEOUT)
 
             # Set Reuse Address flag
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -620,10 +619,6 @@ class SocketBase:
             self.bindaddr,
             self.port,
         ))
-        if timeout:
-            socket.setdefaulttimeout(timeout)
-            logger.debug("Socket timeout set to :%ds" % (timeout))
-
         # Bind to address
         if not self.bind(timeout=timeout, retries=3):
             return False
@@ -699,6 +694,7 @@ class SocketBase:
 
         # Swap socket with new
         self.socket = conn
+        self.socket.settimeout(timeout or SOCKET_TIMEOUT)
 
         # Update our local information
         (self._local_addr, self._local_port) = self.socket.getsockname()[:2]

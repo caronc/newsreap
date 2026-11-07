@@ -53,8 +53,6 @@ Hooks are called around each step: pre_/post_ download, verify, repair,
 extract and move.  A pre_ hook answering False skips that step.
 """
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 import re
 from collections import Counter

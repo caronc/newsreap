@@ -26,8 +26,6 @@ key you hold, and to keep those secret keys and their passphrases.
   answering is stopped after `timeout` seconds.
 """
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 import re
 import subprocess

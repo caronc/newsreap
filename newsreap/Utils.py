@@ -690,9 +690,10 @@ def plain_subprocess():
 
 
 # Programs (gpg, rar, par2, ...) are started with the subprocess.Popen Python
-# itself ships (see start_program()).  The one gevent swaps in forks in
-# Python, and the child can run our other greenlets for a moment before the
-# program starts: a connection in the middle of a command would send it
+# itself ships (see start_program()).  NewsReap never patches the standard
+# library, but the program using it may (ie: a gevent web server).  gevent's
+# Popen forks in Python, and the child can run our other greenlets for a
+# moment before the program starts: a connection in the middle of a command would send it
 # again on the socket the child shares with us, and its answer would end up
 # in the next article we read.
 Popen = plain_subprocess().Popen

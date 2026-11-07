@@ -235,11 +235,6 @@
 #  If you setup you filters right, you can download content by group or
 #  single files.  Just pay attention to the id on the left (in your search)
 
-# This monkey patching must be done before anything else (including the
-# threading module) is imported
-import gevent.monkey
-gevent.monkey.patch_all()
-
 import click
 from os.path import basename
 from os.path import isdir

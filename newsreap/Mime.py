@@ -30,8 +30,6 @@ attempts to achieve the results we need for the newsreap program. Sources:
          official sources identified above.
 """
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 import re
 import ctypes

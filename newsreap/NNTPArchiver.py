@@ -34,8 +34,6 @@ be read and searched offline.
   or it isn't for any of our keys) is given up on at once.
 """
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 import re
 from collections import deque

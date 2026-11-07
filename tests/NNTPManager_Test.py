@@ -15,19 +15,7 @@
 # GNU Lesser General Public License for more details.
 
 import sys
-if 'threading' in sys.modules:
-    #  gevent patching since pytests import
-    #  the sys library before we do.
-    del sys.modules['threading']
-
-import gevent.monkey
-gevent.monkey.patch_all()
-
-# Import threading after monkey patching
-# see: http://stackoverflow.com/questions/8774958/\
-#        keyerror-in-module-threading-after-a-successful-py-test-run
-import threading
-
+import gevent
 from os.path import join
 from os.path import dirname
 from os.path import abspath

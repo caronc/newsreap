@@ -53,8 +53,6 @@ is only asked for again when that can help (see NNTPRetry); the .ERRORS
 file remembers it.
 """
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 from email.utils import parsedate_to_datetime
 from hashlib import sha1

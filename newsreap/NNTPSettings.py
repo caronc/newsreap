@@ -106,8 +106,6 @@
 #   Now make sure to include this path in the ramdisk path.  If you don't have
 #   a ramdisk; just leave this value empty
 
-import gevent.monkey
-gevent.monkey.patch_all()
 
 import re
 import sys

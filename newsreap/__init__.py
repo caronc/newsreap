@@ -20,10 +20,6 @@ __license__ = 'GPLv3'
 __copyright__ = 'Copyright (c) 2015-2026, Chris Caron <lead2gold@gmail.com>'
 __status__ = 'Alpha'
 
-# Ensure Content is patched
-import gevent.monkey
-gevent.monkey.patch_all()
-
 
 # Try importing again now
 from .NNTPConnection import NNTPConnection
