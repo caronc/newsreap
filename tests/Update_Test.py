@@ -161,11 +161,12 @@ def test_one_update_fetches_headers_content_and_nzb_files(tmp_path):
         # Scores are worked out again without fetching anything
         (tmp_path / 'filters.yaml').write_text(
             'filters:\n  - name: talk\n    subject: Coffee\n    score: 5\n')
-        commands = len(server.commands())
+        # (the last command's goodbye can still be on its way)
+        talked = len([c for c in server.commands() if c != 'QUIT'])
         result = nr('update', GROUP, '--rescore')
         assert result.exit_code == 0, result.output
         assert '1 rescored' in result.output
-        assert len(server.commands()) == commands
+        assert len([c for c in server.commands() if c != 'QUIT']) == talked
         assert '{+5}' in nr('search', '--posts', 'cafe').output
 
         # --rescore never fetches headers, so it can't be told which

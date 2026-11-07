@@ -12,12 +12,14 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from contextlib import contextmanager
 
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy import create_engine
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 
 from .Utils import parse_url
 
@@ -51,6 +53,13 @@ MEMORY_DATABASE_ENGINE = 'sqlite:///:memory:'
 # messages more feasable
 # configure Session class with desired options
 Session = sessionmaker(autoflush=True, expire_on_commit=False)
+
+
+class DatabaseUnavailable(Exception):
+    """
+    The database can't be used: it couldn't be opened, or its tables were
+    never made (ie: 'nr db init' wasn't run)
+    """
 
 
 def sqlite_file(engine):
@@ -235,7 +244,12 @@ class Database:
         if not self._engine:
             # Note: echo is always set to False, logging is handled by NewsReap
             #       and not by SQLAlchemy
-            self._engine = create_engine(engine, echo=False)
+            # A database server drops connections left idle (MySQL after 8
+            # hours by default); each one is checked before it is used, so
+            # a long running program (ie: a web server) never gets a dead one
+            self._engine = create_engine(
+                engine, echo=False, pool_pre_ping=make_url(
+                    engine).get_backend_name() != 'sqlite')
 
             logger.debug('Preparing engine: %s' % (
                 self._engine.url.render_as_string(hide_password=True)))
@@ -356,6 +370,47 @@ class Database:
                 return None
 
         return self._session
+
+    @contextmanager
+    def transaction(self):
+        """
+        A short piece of work with a session of its own (ie: one web
+        request), while the engine is kept and shared:
+
+            with db.transaction() as session:
+                session.add(...)
+
+        - what was done is committed at the end of the block
+        - an error undoes all of it (and is raised as usual)
+        - the session is closed afterwards; what was read stays usable
+
+        Raises DatabaseUnavailable if the database can't be used.
+
+        Notes:
+        - Open the database once when the program starts (ie: session());
+          the first transaction() does it otherwise.
+        - With SQLite, commit what session() changed before starting a
+          transaction() that writes; the second writer waits for the
+          first, and it can't finish while you wait.
+        - A database kept in memory is one per thread; use a file (or a
+          server) when threads share it.
+        """
+        if not self._exists and self.open() is None:
+            raise DatabaseUnavailable(
+                'The database %s could not be used.' % make_url(
+                    self.engine_str()).render_as_string(hide_password=True))
+
+        session = Session(bind=self._engine)
+        try:
+            yield session
+            session.commit()
+
+        except BaseException:
+            session.rollback()
+            raise
+
+        finally:
+            session.close()
 
     def parse_url(self):
         """
