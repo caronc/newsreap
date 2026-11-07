@@ -2251,7 +2251,7 @@ class NNTPIndexer:
         session.execute(text(
             'DELETE FROM collection_file WHERE collection_id = :id'), values)
 
-    def forget_group(self, group):
+    def forget_group(self, group, before=None):
         """
         Removes what was found in a group (as if it was never indexed):
         - the scanned files only it had (and their articles), and the
@@ -2259,6 +2259,9 @@ class NNTPIndexer:
           removed)
         - the posts kept from it that no other group has
         - their scores and tags, and how far the group was seen
+
+        With before (a UTC datetime), only the files and posts posted
+        before then go; how far the group was seen stays.
 
         Files other groups have too, and anything read from an NZB file,
         are kept.  Returns (files, collections, posts) removed.
@@ -2276,8 +2279,8 @@ class NNTPIndexer:
         # of once neither a kept post nor an indexed article has it.
         posts = 0
         while True:
-            ids = [m for m, in session.query(ArchiveGroup.message_id)
-                   .filter(ArchiveGroup.name == group).limit(IN_LIST_SIZE)]
+            ids = [m for m, in self._group_posts(session, group, before)
+                   .limit(IN_LIST_SIZE)]
             if not ids:
                 break
 
@@ -2303,13 +2306,8 @@ class NNTPIndexer:
         files = 0
         collections = set()
         while True:
-            ids = [file_id for file_id, in session.query(FileGroup.file_id)
-                   .join(CollectionFile, CollectionFile.id == FileGroup.file_id)
-                   .join(Collection,
-                         Collection.id == CollectionFile.collection_id)
-                   .filter(FileGroup.name == group)
-                   .filter(Collection.source == CollectionSource.Scan)
-                   .limit(IN_LIST_SIZE)]
+            ids = [file_id for file_id, in self._group_files(
+                session, group, before).limit(IN_LIST_SIZE)]
             if not ids:
                 break
 
@@ -2372,14 +2370,59 @@ class NNTPIndexer:
                 .filter(Collection.id.in_(ids))\
                 .delete(synchronize_session=False)
 
-        session.query(GroupClock)\
-            .filter(GroupClock.name == group)\
-            .delete(synchronize_session=False)
+        if before is None:
+            session.query(GroupClock)\
+                .filter(GroupClock.name == group)\
+                .delete(synchronize_session=False)
         session.commit()
 
         # Forget everything read before now; some of it no longer exists
         session.expunge_all()
         return files, len(emptied), posts
+
+    def count_group(self, group, before=None):
+        """
+        Returns (files, posts) forget_group() would let go of in a group
+        (files other groups have too are counted; they only lose the group)
+        """
+        session = self.session()
+        if session is None:
+            return 0, 0
+
+        return (self._group_files(session, group, before).count(),
+                self._group_posts(session, group, before).count())
+
+    @staticmethod
+    def _group_files(session, group, before=None):
+        """
+        Returns a query of the scanned files found in a group (only the
+        ones posted before `before` when given)
+        """
+        query = session.query(FileGroup.file_id)\
+            .join(CollectionFile, CollectionFile.id == FileGroup.file_id)\
+            .join(Collection, Collection.id == CollectionFile.collection_id)\
+            .filter(FileGroup.name == group)\
+            .filter(Collection.source == CollectionSource.Scan)
+        if before is not None:
+            query = query.filter(CollectionFile.last_posted < before)
+
+        return query
+
+    @staticmethod
+    def _group_posts(session, group, before=None):
+        """
+        Returns a query of the posts kept from a group (only the ones
+        posted before `before` when given)
+        """
+        query = session.query(ArchiveGroup.message_id)\
+            .filter(ArchiveGroup.name == group)
+        if before is not None:
+            query = query.join(
+                ArchivedPost,
+                ArchivedPost.message_id == ArchiveGroup.message_id)\
+                .filter(ArchivedPost.posted < before)
+
+        return query
 
     def import_nzb(self, path, name=None, merge=False):
         """

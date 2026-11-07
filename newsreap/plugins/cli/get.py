@@ -114,11 +114,6 @@ def get(ctx, group, workdir, headers, inspect, sources, hooks, output,
     A Message-ID downloads that one article as it is (--headers and
     --inspect show what it holds instead).
     """
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error("The database is not correctly configured.")
-        exit(1)
-
     if len(sources) == 0:
         logger.error("You must specify at least one source.")
         exit(1)

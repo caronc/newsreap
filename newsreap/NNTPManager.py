@@ -206,8 +206,10 @@ class NNTPManager:
         # A connection pool of NNTPConnections
         self._pool = []
 
-        # Statistics of the connections we've already closed
+        # Statistics of the connections we've already closed (all added
+        # together, and by the host each one talked to)
         self._closed_stats = NNTPStatistics()
+        self._closed_by_host = {}
 
         # A mapping of active worker threads
         self._workers = []
@@ -359,6 +361,7 @@ class NNTPManager:
 
         # Keep what our connections did before letting them go
         self._closed_stats = self.stats
+        self._closed_by_host = self.stats_by_host()
 
         del self._pool
         del self._workers
@@ -380,12 +383,30 @@ class NNTPManager:
 
         return total
 
-    def add_stats(self, stats):
+    def stats_by_host(self):
+        """
+        Returns {host: NNTPStatistics} of all of our connections (backups
+        included), by the server each one talked to
+        """
+        found = {host: stats.copy()
+                 for host, stats in self._closed_by_host.items()}
+        for connection in self._pool:
+            for each in (connection, *connection._backups):
+                found.setdefault(each.host, NNTPStatistics())
+                found[each.host] += each.stats
+
+        return found
+
+    def add_stats(self, stats, host=None):
         """
         Adds statistics gathered elsewhere (ie: by a connection of your own)
-        to ours, so they are part of our total
+        to ours, so they are part of our total (and of the host's, when
+        given)
         """
         self._closed_stats += stats
+        if host is not None:
+            self._closed_by_host.setdefault(host, NNTPStatistics())
+            self._closed_by_host[host] += stats
 
     def put(self, request):
         """

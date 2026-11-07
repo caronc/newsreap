@@ -23,6 +23,10 @@ from sqlalchemy import DateTime
 
 from .ObjectBase import ObjectBase
 
+# The longest group name and flags kept
+NAME_LENGTH = 128
+FLAGS_LENGTH = 256
+
 
 class Group(ObjectBase):
     """
@@ -39,7 +43,8 @@ class Group(ObjectBase):
     id = Column(Integer, Sequence('id_seq'), primary_key=True)
 
     # group name
-    name = Column(String(128), nullable=False, unique=True, index=True)
+    name = Column(String(NAME_LENGTH), nullable=False, unique=True,
+                  index=True)
 
     # Some statistics that are just fetched from the NNTP Server; this
     # is a lose value since counts will vary across multiple usenet
@@ -47,8 +52,9 @@ class Group(ObjectBase):
     # primary server.
     count = Column(Integer, nullable=False, default=0)
 
-    # group flags (associated with group)
-    flags = Column(String, nullable=False, default='')
+    # group flags (associated with group); ie: y, m, or =another.group
+    # when it is filed under another name (MySQL needs a length)
+    flags = Column(String(FLAGS_LENGTH), nullable=False, default='')
 
     # watch flag
     watch = Column(Boolean, nullable=False, default=False, index=True)

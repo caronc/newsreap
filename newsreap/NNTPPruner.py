@@ -21,15 +21,18 @@ Finds what NewsReap keeps that is no longer needed, and clears it out:
   and finished downloads are never looked at)
 - work files: files left in the work directory for `work` days or more
   (only when the work directory is inside our cache directory)
+- statistics: the daily transfer statistics of each server, older than
+  `statistics` days
 
 Each kind takes its days from the configuration when not given, and 0 days
-leaves that kind alone.  Out of the box only work files are cleared, so
-nothing you may want to keep goes unless you ask for it.
+leaves that kind alone.  Out of the box only work files and statistics are
+cleared, so nothing you may want to keep goes unless you ask for it.
 
 find() says what would go (nothing is changed); clear() removes it.
 """
 
 from collections import namedtuple
+from datetime import timedelta
 from os import listdir
 from os import remove
 from os.path import getmtime
@@ -41,9 +44,13 @@ from os.path import realpath
 from shutil import rmtree
 from time import time
 
+from .Database import DatabaseUnavailable
 from .NNTPDownloader import NNTPDownloader
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPSettings import DEFAULT_DOWNLOAD_VARIABLES
+from .NNTPSettings import DEFAULT_PROCESSING_VARIABLES
+from .NNTPDatabase import UnknownGroups
+from .Utils import utcnow
 
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
@@ -53,7 +60,23 @@ logger = logging.getLogger(NEWSREAP_ENGINE)
 #  - headers: [(group, its cache file, how many headers)]
 #  - downloads: [(staging directory, bytes)]
 #  - work: [(file, bytes)]
-PruneFound = namedtuple('PruneFound', ('headers', 'downloads', 'work'))
+#  - statistics: how many days of server statistics (rows)
+PruneFound = namedtuple(
+    'PruneFound', ('headers', 'downloads', 'work', 'statistics'))
+
+# What prune_group() removed (or would, with dry_run):
+#  - days: how many days were kept (0: the group keeps everything)
+#  - headers, files, posts: how many went (files other groups have too
+#    only lose the group)
+#  - collections: how many were left empty and went (None on a dry run)
+GroupPruned = namedtuple(
+    'GroupPruned', ('days', 'headers', 'files', 'collections', 'posts'))
+
+# What forget_group() removed:
+#  - freed: bytes of cached headers
+#  - files, collections, posts: what was indexed and kept from it
+GroupForgotten = namedtuple(
+    'GroupForgotten', ('freed', 'files', 'collections', 'posts'))
 
 
 def size_of(path):
@@ -80,7 +103,8 @@ class NNTPPruner:
     description
     """
 
-    def __init__(self, settings, headers=None, downloads=None, work=None):
+    def __init__(self, settings, headers=None, downloads=None, work=None,
+                 statistics=None):
         """
         Prepares a pruner; 0 days leaves that kind alone
 
@@ -91,6 +115,8 @@ class NNTPPruner:
           are kept (the prune_downloads setting when not given)
         - work: how many days leftover work files are kept (the prune_work
           setting when not given)
+        - statistics: how many days of transfer statistics are kept (the
+          statistics setting when not given)
         """
         self.settings = settings
         self.headers = headers if headers is not None else self._setting(
@@ -101,6 +127,9 @@ class NNTPPruner:
         self.work = work if work is not None else self._setting(
             settings.nntp_downloads, 'prune_work',
             DEFAULT_DOWNLOAD_VARIABLES['prune_work'])
+        self.statistics = statistics if statistics is not None else \
+            self._setting(settings.nntp_processing, 'statistics',
+                          DEFAULT_PROCESSING_VARIABLES['statistics'])
 
     @staticmethod
     def _setting(section, key, default):
@@ -129,7 +158,8 @@ class NNTPPruner:
             [(path, size_of(path)) for path in NNTPDownloader.stale(
                 self.settings.staging_dir(), self.downloads)]
             if self.downloads else [],
-            [(path, size_of(path)) for path in self._work_files()])
+            [(path, size_of(path)) for path in self._work_files()],
+            self._old_statistics())
 
     def clear(self, found=None):
         """
@@ -161,7 +191,98 @@ class NNTPPruner:
             except OSError as e:
                 logger.warning('Could not remove %s (%s).' % (path, e))
 
+        if found.statistics:
+            self.settings.prune_stats(self.statistics)
+
         return found
+
+    def retention(self, group):
+        """
+        Returns how many days of a group prune_group() keeps: its own
+        retention setting, otherwise the configuration's (0 keeps it all)
+        """
+        own = self.settings.group_options([group])[group]['retention']
+        return own if own is not None else self.settings.retention()
+
+    def prune_group(self, group, days=None, dry_run=False):
+        """
+        Removes what was posted to a group more than `days` days ago (its
+        retention when not given): its cached headers, the scanned files
+        and kept posts (see NNTPIndexer.forget_group()), and collections
+        left empty.  Returns a GroupPruned; with dry_run nothing changes.
+        """
+        if days is None:
+            days = self.retention(group)
+
+        if not days:
+            # Everything is kept
+            return GroupPruned(0, 0, 0, 0, 0)
+
+        from .NNTPIndexer import NNTPIndexer
+
+        before = utcnow() - timedelta(days=days)
+        servers = self.settings.nntp_servers
+        headers = 0
+
+        path = self.settings.group_database(group)
+        if isfile(path):
+            cache = NNTPGroupDatabase.from_file(path)
+            try:
+                # Headers are always fetched from the first server
+                headers = cache.prune(
+                    before, server=servers[0]['host'] if servers else None,
+                    dry_run=dry_run)
+
+            finally:
+                cache.close()
+
+        indexer = NNTPIndexer(self.settings.index_database())
+        try:
+            if dry_run:
+                files, posts = indexer.count_group(group, before=before)
+                collections = None
+
+            else:
+                files, collections, posts = indexer.forget_group(
+                    group, before=before)
+
+        finally:
+            indexer.close()
+
+        return GroupPruned(days, headers, files, collections, posts)
+
+    def forget_group(self, group):
+        """
+        Removes everything kept of a group, watched or not, to free its
+        space: its cached headers, how far it was fetched, and what was
+        indexed and kept from it (see NNTPIndexer.forget_group()).  The
+        group itself, its settings and whether it is watched stay.
+
+        Returns a GroupForgotten; raises UnknownGroups if there is no such
+        group (an alias isn't one).
+        """
+        from .NNTPIndexer import NNTPIndexer
+
+        found = self.settings.groups(group)
+        if group not in found:
+            raise UnknownGroups([group])
+
+        freed = self.settings.group_cache_size(group)
+        path = self.settings.group_database(group)
+        for part in (path, path + '-journal', path + '-wal', path + '-shm'):
+            if isfile(part):
+                remove(part)
+
+        self.settings.forget_tracking([found[group]])
+
+        indexer = NNTPIndexer(self.settings.index_database())
+        try:
+            files, collections, posts = indexer.forget_group(group)
+
+        finally:
+            indexer.close()
+
+        return GroupForgotten(freed, files, collections, posts)
 
     def _old_headers(self):
         """
@@ -187,6 +308,20 @@ class NNTPPruner:
             if count:
                 yield name[:-3], path, count
 
+    def _old_statistics(self):
+        """
+        Returns how many days of server statistics are older than we keep
+        them (0 when there is no database yet)
+        """
+        if not self.statistics:
+            return 0
+
+        try:
+            return self.settings.prune_stats(self.statistics, dry_run=True)
+
+        except DatabaseUnavailable:
+            return 0
+
     def _work_files(self):
         """
         Yields the files left in our work directory long enough to go (only
@@ -211,5 +346,6 @@ class NNTPPruner:
                 pass
 
     def __repr__(self):
-        return '<NNTPPruner headers=%s downloads=%s work=%s />' % (
-            self.headers, self.downloads, self.work)
+        return '<NNTPPruner headers=%s downloads=%s work=%s ' \
+            'statistics=%s />' % (self.headers, self.downloads, self.work,
+                                  self.statistics)

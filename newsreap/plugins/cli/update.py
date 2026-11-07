@@ -24,19 +24,11 @@ import click
 import sys
 
 from os import access
-from os import unlink
 from os import W_OK
 from os.path import isdir
-from os.path import isfile
 from os.path import dirname
 from os.path import abspath
-from datetime import datetime
 from datetime import timedelta
-
-from sqlalchemy import insert
-from sqlalchemy import update as sql_update
-from sqlalchemy.exc import InvalidRequestError
-from sqlalchemy.exc import OperationalError
 
 try:
     from newsreap.Logging import NEWSREAP_CLI
@@ -45,12 +37,10 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
-from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.GroupTrack import GroupTrack
-from newsreap.objects.nntp.Server import Server
 from newsreap.CliOptions import confirmed
-from newsreap.objects.nntp.Common import get_groups
-from newsreap.objects.nntp.Common import get_group_options
+from newsreap.Database import DatabaseUnavailable
+from newsreap.NNTPDatabase import UnknownGroups
+from newsreap.NNTPDatabase import UnknownServer
 
 from newsreap.NNTPConnection import NNTPConnection
 from newsreap.NNTPGroupScanner import NNTPGroupScanner
@@ -58,6 +48,7 @@ from newsreap.NNTPGroupScanner import DEFAULT_BATCH_SIZE
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPArchiver import DEFAULT_ARCHIVE_MAX_SIZE
 from newsreap.NNTPArchiver import NNTPArchiver
+from newsreap.NNTPPruner import NNTPPruner
 from newsreap.NNTPPurger import NNTPPurger
 from newsreap.NNTPNzbReader import NNTPNzbReader
 from newsreap.NNTPFilterRule import parse_time
@@ -66,6 +57,9 @@ from newsreap.Utils import utcnow
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
+
+# What is said when the database can't be used
+NO_DATABASE = "The database isn't set up yet; run 'nr db init' first."
 
 NEWSREAP_CLI_PLUGINS = {
     # format:
@@ -94,17 +88,20 @@ def load_filters(settings):
     return filters if len(filters) else None
 
 
-def lookup_server(session, host):
+def server_id(settings, host):
     """
-    Returns the Server entry for a host (None if it isn't in the database)
+    Returns the database id of a server; exits (saying why) if the
+    database or the server isn't set up yet
     """
     try:
-        return session.query(Server).filter(Server.host == host).first()
+        return settings.server_id(host)
 
-    except (InvalidRequestError, OperationalError):
-        # The database hasn't been set up yet
-        logger.error(
-            "The database is not set up yet; run 'nr db init' first.")
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
+        exit(1)
+
+    except UnknownServer as e:
+        logger.error("%s Run 'nr db init' to add it." % e)
         exit(1)
 
 
@@ -142,23 +139,22 @@ def update_groups(ctx):
     called as often as you wish to re-caches the data in the database.
 
     """
-    # Use our Database first if it exists
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error('Could not acquire a database connection.')
-        exit(1)
+    settings = ctx['NNTPSettings']
 
     # Track whether every server answered
     failed = False
 
     # Get Group Listings for all of our servers
-    for s in ctx['NNTPSettings'].nntp_servers:
-        # get our server (if it's kept in the database)
-        server = lookup_server(session, s['host'])
-        if not server:
-            logger.warning(
-                "The NNTP Server '%s' isn't in the database yet; run "
-                "'nr db init' to add it." % s['host'])
+    for s in settings.nntp_servers:
+        try:
+            settings.server_id(s['host'])
+
+        except DatabaseUnavailable:
+            logger.error(NO_DATABASE)
+            exit(1)
+
+        except UnknownServer as e:
+            logger.warning("%s Run 'nr db init' to add it." % e)
             failed = True
             continue
 
@@ -170,7 +166,7 @@ def update_groups(ctx):
         finally:
             # Our connection's statistics are part of the total
             con.close()
-            ctx['NNTPManager'].add_stats(con.stats)
+            ctx['NNTPManager'].add_stats(con.stats, host=s['host'])
 
         if not results:
             logger.warning(
@@ -178,53 +174,15 @@ def update_groups(ctx):
             failed = True
             continue
 
-        # The groups we already know about (name -> id), read once rather
-        # than once per group
-        known = dict(session.query(Group.name, Group.id))
+        try:
+            new = settings.save_groups(s['host'], results)
 
-        # Sort our listing into new groups and ones to update
-        new_groups = []
-        updates = []
-        watermarks = {}
-        for r in results:
-            name = r['group']
-
-            # Convert flag list back into a string
-            flags = ''.join(r['flags'])
-
-            group_id = known.get(name)
-            if name not in known:
-                # A group we haven't seen before
-                new_groups.append(
-                    {'name': name, 'count': r['count'], 'flags': flags})
-
-                # Servers sometimes list a group twice; only add it once
-                known[name] = None
-
-            elif group_id is not None:
-                # A group we know; refresh its details
-                updates.append(
-                    {'id': group_id, 'count': r['count'], 'flags': flags})
-                watermarks[group_id] = (r['low'], r['high'])
-
-        if new_groups:
-            # Add our new groups all at once
-            session.execute(insert(Group), new_groups)
-
-        if updates:
-            # Update the ones we know all at once
-            session.execute(sql_update(Group), updates)
-
-        # Using our groups; update any tracking settings (if present)
-        for track in session.query(GroupTrack)\
-                .filter(GroupTrack.server_id == server.id):
-            if track.group_id in watermarks:
-                track.low, track.high = watermarks[track.group_id]
-
-        session.commit()
+        except UnknownServer as e:
+            logger.error("%s Run 'nr db init' to add it." % e)
+            exit(1)
 
         click.echo('%s: %d group(s) listed, %d new.' % (
-            s['host'], len(results), len(new_groups)))
+            s['host'], len(results), new))
 
     if failed:
         exit(1)
@@ -275,32 +233,31 @@ def options(*decorators):
 
 def prepare(ctx, groups, watched):
     """
-    Returns (session, groups): our database session and the groups asked
-    for (name -> id); exits if there are none
+    Returns the groups asked for (name -> id); exits if there are none
     """
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error('Could not acquire a database connection.')
+    try:
+        found = ctx['NNTPSettings'].groups(groups, watched=watched)
+
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
         exit(1)
 
-    # Every one given has to be a group (or alias) we know of
-    unknown = [name for name in groups
-               if not get_groups(session=session, lookup=name)]
-    if unknown:
-        for name in unknown:
+    except UnknownGroups as e:
+        # Every one given has to be a group (or alias) we know of
+        for name in e.names:
             logger.error(
                 "There is no group (or alias) named '%s'; see 'nr group "
-                "list' (or fetch the list with 'nr update groups')." % name)
+                "ls --all' (or fetch the list with 'nr update groups')." %
+                name)
         exit(1)
 
-    groups = get_groups(session=session, lookup=groups, watched=watched)
-    if not groups:
+    if not found:
         logger.error(
             "No groups were given; name them (see 'nr group ls'), or use "
             "--watched for the watched ones.")
         exit(1)
 
-    return session, groups
+    return found
 
 
 def header_dates(date_from, date_to, days):
@@ -329,7 +286,7 @@ def header_dates(date_from, date_to, days):
     return date_from, date_to
 
 
-def fetch_headers(ctx, session, groups, date_from=None, date_to=None,
+def fetch_headers(ctx, groups, date_from=None, date_to=None,
                   newest=None, batch_size=None, batches=None, force=False):
     """
     Fetches (and caches) the headers of the groups given (name -> id);
@@ -345,12 +302,7 @@ def fetch_headers(ctx, session, groups, date_from=None, date_to=None,
 
     # Articles are always fetched from our primary server
     s = ctx['NNTPSettings'].nntp_servers[0]
-    server = lookup_server(session, s['host'])
-    if not server:
-        logger.error(
-            "The NNTP Server '%s' isn't in the database yet; run "
-            "'nr db init' to add it." % s['host'])
-        exit(1)
+    server = server_id(ctx['NNTPSettings'], s['host'])
 
     # Get our RamDisk if we got one
     ramdisk = ctx['NNTPSettings'].nntp_processing.get('ramdisk')
@@ -396,7 +348,9 @@ def fetch_headers(ctx, session, groups, date_from=None, date_to=None,
         finally:
             # Even when stopped early, track what we know about the group
             if scanner.low is not None:
-                track(session, group_id, server.id, scanner)
+                ctx['NNTPSettings'].track(
+                    group_id, server, scanner.low, scanner.high,
+                    scanned=bool(scanner.batches))
 
             click.echo(str(scanner))
 
@@ -406,34 +360,42 @@ def fetch_headers(ctx, session, groups, date_from=None, date_to=None,
     return complete
 
 
-def reset_groups(ctx, session, groups):
+def reset_groups(ctx, groups):
     """
     Removes everything kept of the groups given (name -> id): their cached
     headers, how far they were fetched, and what was indexed and kept from
     them (see NNTPIndexer.forget_group())
     """
-    settings = ctx['NNTPSettings']
-    indexer = NNTPIndexer(settings.index_database())
-    try:
-        for name, group_id in groups.items():
-            path = settings.group_database(name)
-            for found in (path, path + '-journal', path + '-wal',
-                          path + '-shm'):
-                if isfile(found):
-                    unlink(found)
+    pruner = NNTPPruner(ctx['NNTPSettings'])
+    for name in groups:
+        found = pruner.forget_group(name)
+        click.echo(
+            '%s: reset (%d file(s), %d collection(s) and %d post(s) '
+            'removed)' % (name, found.files, found.collections, found.posts))
 
-            session.query(GroupTrack)\
-                .filter(GroupTrack.group_id == group_id)\
-                .delete(synchronize_session=False)
-            session.commit()
 
-            files, collections, posts = indexer.forget_group(name)
+def prune_groups(ctx, groups):
+    """
+    Removes what is older than each group's retention (see 'nr group set
+    --retention' and the retention setting), and the server statistics
+    older than the statistics setting; groups that keep everything are left
+    alone
+    """
+    pruner = NNTPPruner(ctx['NNTPSettings'])
+    if pruner.statistics:
+        removed = ctx['NNTPSettings'].prune_stats(pruner.statistics)
+        if removed:
+            click.echo('%d day(s) of server statistics removed (older than '
+                       '%d day(s)).' % (removed, pruner.statistics))
+
+    for name in groups:
+        found = pruner.prune_group(name)
+        if found.days:
             click.echo(
-                '%s: reset (%d file(s), %d collection(s) and %d post(s) '
-                'removed)' % (name, files, collections, posts))
-
-    finally:
-        indexer.close()
+                '%s: pruned to %d day(s) (%d header(s), %d file(s), %d '
+                'collection(s) and %d post(s) removed)' % (
+                    name, found.days, found.headers, found.files,
+                    found.collections, found.posts))
 
 
 @click.command(name='run', hidden=True)
@@ -443,12 +405,12 @@ def reset_groups(ctx, session, groups):
 @click.option('--content/--no-content', default=None,
               help='Also keep what the small articles say (see --max-size) '
                    "so 'nr search --posts' can search their text.  Without "
-                   "either, each group does as 'nr group watch' set (or as "
+                   "either, each group does as 'nr group set' says (or as "
                    "the content setting says).")
 @click.option('--nzb/--no-nzb', default=None,
               help='Also read the NZB files posted (no bigger than '
                    '--max-size) into the index.  Without either, each group '
-                   "does as 'nr group watch' set (or as the nzb setting "
+                   "does as 'nr group set' says (or as the nzb setting "
                    "says).")
 @click.option('--rescore', is_flag=True,
               help="Work every score and tag out again from the saved rules "
@@ -472,10 +434,15 @@ def reset_groups(ctx, session, groups):
 @click.option('--settle', is_flag=True,
               help='Count every group as seen up to now, so collections '
                    'from groups you no longer scan can settle too.')
+@click.option('--prune', is_flag=True,
+              help="Afterwards, remove what is older than each group's "
+                   "retention, and old server statistics (as 'nr prune' "
+                   "does, without asking).")
 @click.pass_obj
 def update_run(ctx, groups, watched, date_from, date_to, days, newest,
                batch_size, batches, content, nzb, rescore, cached, reset,
-               max_size, hooks, no_default_hooks, force, no_index, settle):
+               max_size, hooks, no_default_hooks, force, no_index, settle,
+               prune):
     """
     Fetch what is new in groups, ready to search.
 
@@ -490,11 +457,13 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
          kept, so their text can be searched (nr search --posts)
       4. --nzb: the NZB files posted are read into the index
       5. --rescore: every score and tag is worked out again
+      6. --prune: what is older than each group's retention is removed
+         (and server statistics older than the statistics setting)
 
-    A group can be told to always do steps 3 and 4 ('nr group watch
-    --content --nzb'), or every group can (the content and nzb settings
-    under processing: in the configuration file).  --no-content and
-    --no-nzb leave them out for one run.
+    A group can be told to always do steps 3 and 4 ('nr group set
+    --content yes --nzb yes'), or every group can (the content and nzb
+    settings under processing: in the configuration file).  --no-content
+    and --no-nzb leave them out for one run.
 
     Without dates or counts, a group fetched before carries on from where
     it left off (anything missed, and everything new).  The first time, a
@@ -513,7 +482,7 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
         nr update a.b.test --reset --days 7
 
     """
-    session, groups = prepare(ctx, groups, watched)
+    groups = prepare(ctx, groups, watched)
 
     # No new headers are fetched
     offline = rescore or cached
@@ -530,7 +499,7 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
                      'posts) and start over?' % ', '.join(sorted(groups))):
             click.echo('Nothing was reset.')
             exit(1)
-        reset_groups(ctx, session, groups)
+        reset_groups(ctx, groups)
 
     # Track whether every step could be done
     complete = True
@@ -538,7 +507,7 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
     if not offline:
         date_from, date_to = header_dates(date_from, date_to, days)
         complete = fetch_headers(
-            ctx, session, groups, date_from=date_from, date_to=date_to,
+            ctx, groups, date_from=date_from, date_to=date_to,
             newest=newest, batch_size=batch_size, batches=batches,
             force=force)
 
@@ -546,11 +515,11 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
         # Ready for 'nr search' (whatever was fetched, even if not all of
         # it)
         complete = index_groups(
-            ctx['NNTPSettings'], session, groups, settle=settle) and complete
+            ctx['NNTPSettings'], groups, settle=settle) and complete
 
     # The groups whose content is kept and whose NZB files are read
     settings = ctx['NNTPSettings']
-    options = get_group_options(session, groups.values())
+    options = settings.group_options(groups)
     with_content = chosen(
         groups, options, 'content', content,
         None if rescore else settings.content())
@@ -569,6 +538,9 @@ def update_run(ctx, groups, watched, date_from, date_to, days, newest,
     if rescore:
         rescore_groups(ctx, groups)
 
+    if prune:
+        prune_groups(ctx, groups)
+
     if not complete:
         logger.warning(
             'Not everything was done; run the same command again to do the '
@@ -580,7 +552,7 @@ def chosen(groups, options, name, given, default):
     """
     Returns the groups (name -> id) a step is done for:
     - given: what the command line said (True or False); None if nothing
-    - options: what each group says (see get_group_options())
+    - options: what each group says (see NNTPDatabase.group_options())
     - default: what the configuration file says; None does the step only
       when asked (ie: --rescore runs)
     """
@@ -592,7 +564,7 @@ def chosen(groups, options, name, given, default):
 
     found = {}
     for group, group_id in groups.items():
-        value = options.get(group_id, {}).get(name)
+        value = options.get(group, {}).get(name)
         if value if value is not None else default:
             found[group] = group_id
 
@@ -623,51 +595,22 @@ def update_search(ctx, groups, date_from, date_to, days, newest, batch_size,
     to).  Narrow down what is fetched with the date and count options.
 
     """
-    session, groups = prepare(ctx, groups, watched)
+    groups = prepare(ctx, groups, watched)
     date_from, date_to = header_dates(date_from, date_to, days)
 
     complete = fetch_headers(
-        ctx, session, groups, date_from=date_from, date_to=date_to,
+        ctx, groups, date_from=date_from, date_to=date_to,
         newest=newest, batch_size=batch_size, batches=batches, force=force)
 
     if not no_index:
         # Ready for 'nr search' (whatever was fetched, even if not all of it)
-        index_groups(ctx['NNTPSettings'], session, groups)
+        index_groups(ctx['NNTPSettings'], groups)
 
     if not complete:
         logger.warning(
             'Not everything was fetched; run the same command again to '
             'fetch the rest.')
         exit(1)
-
-
-def track(session, group_id, server_id, scanner):
-    """
-    Updates the GroupTrack entry for a group after a scan
-    """
-    entry = session.query(GroupTrack)\
-        .filter(GroupTrack.group_id == group_id)\
-        .filter(GroupTrack.server_id == server_id).first()
-
-    if not entry:
-        # First time we've scanned this group on this server
-        entry = GroupTrack(
-            group_id=group_id,
-            server_id=server_id,
-            scan_pointer=scanner.low,
-            index_pointer=scanner.low,
-        )
-        session.add(entry)
-
-    # The server's first and last article number
-    entry.low = scanner.low
-    entry.high = scanner.high
-
-    if scanner.batches:
-        # When we last fetched something
-        entry.last_scan = datetime.now()
-
-    session.commit()
 
 
 @click.command(name='index')
@@ -689,13 +632,12 @@ def update_index(ctx, groups, watched, settle):
     turn any of them into an NZB file.
 
     """
-    session, groups = prepare(ctx, groups, watched)
-    if not index_groups(
-            ctx['NNTPSettings'], session, groups, settle=settle):
+    groups = prepare(ctx, groups, watched)
+    if not index_groups(ctx['NNTPSettings'], groups, settle=settle):
         exit(1)
 
 
-def index_groups(settings, session, groups, settle=False):
+def index_groups(settings, groups, settle=False):
     """
     Indexes the articles cached for the groups given (name -> group id);
     returns False if one of them had nothing cached
@@ -740,10 +682,7 @@ def index_groups(settings, session, groups, settle=False):
                         name, removed))
 
             # Track when the group was last indexed
-            session.query(GroupTrack)\
-                .filter(GroupTrack.group_id == group_id)\
-                .update({GroupTrack.last_index: datetime.now()})
-            session.commit()
+            settings.indexed([group_id])
 
         # Work out which collections have formed (across every group)
         if indexer.settle(now=utcnow() if settle else None):
@@ -774,7 +713,7 @@ def update_archive(ctx, groups, watched, max_size, hooks, no_default_hooks,
     fetched again.
 
     """
-    _, groups = prepare(ctx, groups, watched)
+    groups = prepare(ctx, groups, watched)
     if not fetch_content(
             ctx, groups, max_size=max_size, force=force, hooks=hooks,
             default_hooks=not no_default_hooks):
@@ -890,7 +829,7 @@ def update_nzb(ctx, groups, watched, max_size, force):
     does).  Each one is only read once.
 
     """
-    _, groups = prepare(ctx, groups, watched)
+    groups = prepare(ctx, groups, watched)
     if not read_nzbs(ctx, groups, max_size=max_size, force=force):
         exit(1)
 

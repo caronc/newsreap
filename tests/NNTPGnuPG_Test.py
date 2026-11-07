@@ -304,7 +304,7 @@ def test_decrypting_from_the_command_line(tmp_path, server):
         result = nr('update', GROUP, '--content')
         assert result.exit_code == 0, result.output
         assert '3 still locked' in result.output
-        assert 'Not decrypted yet' in nr('status').output
+        assert 'Not decrypted yet' in nr('db', 'status').output
         assert 'no passphrase kept; 3 post(s) not decrypted yet' in nr(
             'pgp', 'show', READER_KEY_ID).output
 
@@ -467,7 +467,7 @@ def test_locked_posts_are_tried_again_a_limited_number_of_times(
                 (WaitReason.Passphrase, tries)}
 
         assert '3 no longer tried on their own' in result.output
-        assert '3 no longer tried by nr update' in nr('status').output
+        assert '3 no longer tried by nr update' in nr('db', 'status').output
 
         # Then left alone
         start = len(server.commands())
@@ -479,7 +479,7 @@ def test_locked_posts_are_tried_again_a_limited_number_of_times(
         result = nr('pgp', 'passphrase', 'reader',
                     input=READER_PASSPHRASE + '\n')
         assert result.exit_code == 0, result.output
-        assert 'nr update tries them again' in nr('status').output
+        assert 'nr update tries them again' in nr('db', 'status').output
 
         history.append(('after the passphrase', [], snapshot(tmp_path)))
         start = len(server.commands())

@@ -1,4 +1,4 @@
-# What 'nr update' does for a group on its own (set with 'nr group watch')
+# How a group is treated on its own (set with 'nr group set')
 #
 # Copyright (C) 2026 Chris Caron <lead2gold@gmail.com>
 #
@@ -22,9 +22,9 @@ from .ObjectBase import ObjectBase
 
 class GroupOption(ObjectBase):
     """
-    The steps 'nr update' always does for a group (without being asked on
-    the command line).  None means the group follows the setting of the
-    same name under processing: in the configuration file.
+    How a group is treated on its own (set with 'nr group set').  None
+    means the group follows the setting of the same name under processing:
+    in the configuration file.
     """
     __tablename__ = 'group_option'
 
@@ -36,6 +36,9 @@ class GroupOption(ObjectBase):
 
     # Read the NZB files posted to it (as 'nr update --nzb')
     nzb = Column(Boolean)
+
+    # Days kept when it is pruned ('nr prune <group>'); 0 keeps everything
+    retention = Column(Integer)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

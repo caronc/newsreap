@@ -161,10 +161,24 @@ processing:
    # the small articles say (as --content does) and read the NZB files
    # posted (as --nzb does).  Keeping content means fetching every small
    # article, which suits discussion groups more than busy binary ones, so
-   # it is usually better set for each group ('nr group watch <group>
-   # --content') than here.  Both are off unless set to yes.
+   # it is usually better set for each group ('nr group set <group>
+   # --content yes') than here.  Both are off unless set to yes.
    # content: yes
    # nzb: yes
+
+   # How many days of a group 'nr prune <group>' (or 'nr update --prune')
+   # keeps: older headers, collections and kept posts are removed.  Nothing
+   # is removed unless you run one of them, and fetching older articles on
+   # purpose ('nr update --days 90') is never stopped by it.  Each group
+   # can say otherwise ('nr group set <group> --retention 30').  0 keeps
+   # everything.
+   retention: 0
+
+   # How much was sent to and received from each server (and how fast) is
+   # kept for every day ('nr db status' shows it).  'nr prune statistics'
+   # (or 'nr prune all', or 'nr update --prune') removes the days older
+   # than this.  0 keeps them all.
+   statistics: 31
 
    # Keep the PGP keys found in the posts 'nr update --content' fetches, and
    # which posts each key signed or was encrypted for, so you can see who

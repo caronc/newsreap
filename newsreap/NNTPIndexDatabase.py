@@ -230,6 +230,55 @@ class NNTPIndexDatabase(Database):
         finally:
             handle.dispose()
 
+    def totals(self):
+        """
+        Returns what the index holds, as a dict:
+
+        - states: {CollectionState: how many collections}
+        - obfuscated: collections put together from how they were posted
+        - from_nzb: collections read from NZB files
+        - files: files in every collection; size: bytes of the collections
+          (deleted ones left out)
+        - kinds: {ArchiveKind: how many posts kept}
+        - ranked: articles with a score or tag
+        - nzb_read, nzb_unusable: NZB files read, and the ones no use
+        """
+        from sqlalchemy import func
+        from .NNTPIndexer import SESSION_KEY
+        from .objects.index.Collection import CollectionSource
+        from .objects.index.Collection import CollectionState
+
+        with self.transaction() as session:
+            def total(query):
+                return query.scalar() or 0
+
+            live = Collection.state != CollectionState.Deleted
+            return {
+                'states': dict(session.query(
+                    Collection.state, func.count(Collection.id))
+                    .group_by(Collection.state)),
+                'obfuscated': total(
+                    session.query(func.count(Collection.id))
+                    .filter(Collection.key.like(SESSION_KEY + '\n%'))
+                    .filter(live)),
+                'from_nzb': total(
+                    session.query(func.count(Collection.id))
+                    .filter(Collection.source == CollectionSource.Nzb)),
+                'files': total(session.query(func.count(CollectionFile.id))),
+                'size': total(session.query(func.sum(Collection.size))
+                              .filter(live)),
+                'kinds': dict(session.query(
+                    ArchivedPost.kind, func.count(ArchivedPost.id))
+                    .group_by(ArchivedPost.kind)),
+                'ranked': total(
+                    session.query(func.count(ArticleRank.message_id))),
+                'nzb_read': total(
+                    session.query(func.count(NzbImport.message_id))),
+                'nzb_unusable': total(
+                    session.query(func.count(NzbImport.message_id))
+                    .filter(NzbImport.collection_id.is_(None))),
+            }
+
     @classmethod
     def from_file(cls, db_file):
         """

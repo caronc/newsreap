@@ -102,6 +102,8 @@ class Utils_Test(TestBase):
         assert strsize_to_bytes("1Mb") == 1000*1000
         assert strsize_to_bytes("1Gb") == 1000*1000*1000
         assert strsize_to_bytes("1Tb") == 1000*1000*1000*1000
+        assert strsize_to_bytes("1Pb") == 1000**5
+        assert strsize_to_bytes("2PB") == 2 * 1024**5
 
         # Garbage Entry
         assert bytes_to_strsize(None) is None
@@ -115,6 +117,16 @@ class Utils_Test(TestBase):
         assert bytes_to_strsize(1024*1024) == "1.00MB"
         assert bytes_to_strsize(1024*1024*1024) == "1.00GB"
         assert bytes_to_strsize(1024*1024*1024*1024) == "1.00TB"
+        assert bytes_to_strsize(2.5 * 1024**5) == "2.50PB"
+        assert bytes_to_strsize(3 * 1024**6) == "3.00EB"
+        assert bytes_to_strsize(5000 * 1024**6) == "5000.00EB"
+
+        # Short: no zeros at the end
+        assert bytes_to_strsize(400 * 1024, short=True) == "400KB"
+        assert bytes_to_strsize(3.4 * 1024**2, short=True) == "3.4MB"
+        assert bytes_to_strsize(3.5 * 1024**4, short=True) == "3.5TB"
+        assert bytes_to_strsize(0, short=True) == "0B"
+        assert bytes_to_strsize(10 * 1024, short=True) == "10KB"
 
         # Support strings too
         assert bytes_to_strsize("0") == "0.00B"

@@ -147,11 +147,6 @@ def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
         logger.debug('The posting password_length is 0; no password is used.')
         generate_password = False
 
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error("The database is not correctly configured.")
-        exit(1)
-
     # If all flags are set to False (their default) then this implies
     # we perform all stages
     all_stages = not (prep or stage or upload or verify or clean)

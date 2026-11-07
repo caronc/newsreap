@@ -52,8 +52,7 @@ from newsreap.NNTPFilterRule import FilterAction
 from newsreap.NNTPFilterRule import GROUP_WILDCARDS
 from newsreap.NNTPFilterRule import NNTPFilterRule
 from newsreap.NNTPPurger import NNTPPurger
-from newsreap.objects.nntp.Common import get_groups
-from newsreap.objects.nntp.Group import Group
+from newsreap.Database import DatabaseUnavailable
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
@@ -218,26 +217,28 @@ def cached_groups(ctx, groups):
     headers are cached; every one of them when none are given
     """
     settings = ctx['NNTPSettings']
-    session = settings.session()
-    if not session:
+    try:
+        known = settings.group_names()
+
+    except DatabaseUnavailable:
         logger.error("The database is not correctly configured.")
         exit(1)
 
     names = set()
     if not groups:
         # Every group we know of
-        names.update(name for name, in session.query(Group.name))
+        names.update(known)
 
     for group in groups:
         if any(c in group for c in GROUP_WILDCARDS):
             # Every group it matches
             pattern = group.lower()
             names.update(
-                name for name, in session.query(Group.name)
+                name for name in known
                 if fnmatchcase(name.lower(), pattern))
             continue
 
-        found = get_groups(session=session, lookup=group)
+        found = settings.groups(group, strict=False)
         if found:
             names.update(found)
 
@@ -255,14 +256,17 @@ def scope(ctx, groups):
     Returns the group names (aliases worked out) a rule given these
     groups applies to, keeping wildcards as they are
     """
-    session = ctx['NNTPSettings'].session()
     found = []
     for group in groups:
-        if any(c in group for c in GROUP_WILDCARDS) or not session:
-            found.append(group)
-            continue
+        names = None
+        if not any(c in group for c in GROUP_WILDCARDS):
+            try:
+                names = ctx['NNTPSettings'].groups(group, strict=False)
 
-        names = get_groups(session=session, lookup=group)
+            except DatabaseUnavailable:
+                # Nothing to work out the aliases from
+                pass
+
         found.extend(sorted(names) if names else [group])
 
     return found

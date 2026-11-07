@@ -19,29 +19,29 @@
 import click
 import sys
 
-from sqlalchemy.exc import InvalidRequestError
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.exc import ProgrammingError
-
 from os.path import abspath
 from os.path import dirname
 
 try:
-    from newsreap.objects.nntp.Group import Group
+    from newsreap.NNTPDatabase import UnknownGroups
 
 except ImportError:
     # Path
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
-    from newsreap.objects.nntp.Group import Group
+    from newsreap.NNTPDatabase import UnknownGroups
 
-from newsreap.objects.nntp.GroupAlias import GroupAlias
-from newsreap.objects.nntp.Common import get_groups
-from newsreap.objects.nntp.Common import missing_groups
+from newsreap.Database import DatabaseUnavailable
+from newsreap.NNTPDatabase import UnknownAlias
+# (not alias_...: every name starting with alias_ becomes a command)
+from newsreap.NNTPDatabase import alias_name as clean_alias
 
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_CLI
 logger = logging.getLogger(NEWSREAP_CLI)
+
+# What is said when the database can't be used
+NO_DATABASE = "The database isn't set up yet; run 'nr db init' first."
 
 NEWSREAP_CLI_PLUGINS = {
     # format:
@@ -87,23 +87,15 @@ def alias_add(ctx, alias, groups):
     could have also just been associated with the word 'test' or even 't'.
 
     """
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error("The database is not correctly configured.")
-        exit(1)
+    try:
+        _alias = clean_alias(alias)
 
-    if not alias:
-        logger.error("You must specify an alias.")
+    except ValueError:
+        logger.error("An invalid alias identifier was specified.")
         exit(1)
 
     if len(groups) == 0:
         logger.error("You must specify at least one group after the alias.")
-        exit(1)
-
-    # Simplify Alias
-    _alias = alias.lower().strip()
-    if not _alias:
-        logger.error("An invalid alias identifier was specified.")
         exit(1)
 
     # 'nr update <alias>' would run that step of update instead
@@ -114,33 +106,24 @@ def alias_add(ctx, alias, groups):
                      "its own." % (_alias, _alias))
         exit(1)
 
-    # A name that matches nothing is most likely a typo; nothing is added
-    missing = missing_groups(session, groups)
-    if missing:
-        logger.error('No group or alias is called %s; nothing was added.' %
-                     ', '.join("'%s'" % name for name in missing))
+    try:
+        added = ctx['NNTPSettings'].alias_add(_alias, groups)
+
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
         exit(1)
 
-    groups = get_groups(session, groups)
-    if not groups:
-        logger.error(
-            "There were no alias/groups found matching your criteria.",
-        )
+    except UnknownGroups as e:
+        # A name that matches nothing is most likely a typo
+        logger.error('%s Nothing was added.' % e)
         exit(1)
 
-    # Track our database updates
-    pending_commits = 0
+    except ValueError as e:
+        logger.error(str(e))
+        exit(1)
 
-    for name, _id in groups.items():
-        if session.merge(GroupAlias(group_id=_id, name=_alias)):
-            logger.debug(
-                "Adding alias '%s' to group '%s'." % (_alias, name),
-            )
-            pending_commits += 1
-
-    if pending_commits > 0:
-        # commit our results
-        session.commit()
+    for name in added:
+        logger.debug("Added alias '%s' to group '%s'." % (_alias, name))
 
 
 @click.command(name='rm')
@@ -155,72 +138,30 @@ def alias_del(ctx, alias, groups):
     the alias in it's entirety (from all group association).
 
     """
+    try:
+        result = ctx['NNTPSettings'].alias_remove(alias, groups)
 
-    if not alias:
-        logger.error("You must specify an alias.")
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
         exit(1)
 
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error("The database is not correctly configured.")
+    except UnknownAlias as e:
+        logger.error(str(e))
         exit(1)
 
-    # Simplify Alias
-    _alias = alias.lower().strip()
-    if not _alias:
+    except ValueError:
         logger.error("An invalid alias identifier was specified.")
         exit(1)
 
-    try:
-        # The groups the alias stands for ({name: id})
-        a_groups = dict(session.query(Group.name, Group.id).join(GroupAlias)
-                        .filter(GroupAlias.group_id == Group.id)
-                        .filter(GroupAlias.name == _alias).all())
+    # What was named is removed; anything that couldn't be is said here
+    for name in result.unknown:
+        logger.error("There is no group (or alias) named '%s'." % name)
 
-    except (InvalidRequestError, OperationalError, ProgrammingError):
-        session.rollback()
-        logger.error("The database isn't set up yet; run 'nr db init' first.")
-        exit(1)
+    for name in result.outside:
+        logger.error("'%s' isn't part of the alias '%s'." % (
+            name, clean_alias(alias)))
 
-    if not a_groups:
-        logger.error("There is no alias '%s'." % _alias)
-        exit(1)
-
-    if len(groups) == 0:
-        # No groups were specified; the alias goes in its entirety
-        session.query(GroupAlias)\
-            .filter(GroupAlias.name == _alias)\
-            .delete(synchronize_session=False)
-        session.commit()
-        return
-
-    # The groups (or the groups of the aliases) named, that this alias has
-    remove_groups = set()
-    failed = False
-    for name in groups:
-        found = get_groups(session, name) or {}
-        if not found:
-            failed = True
-            continue
-
-        for group in found:
-            if group in a_groups:
-                remove_groups.add(a_groups[group])
-
-            else:
-                logger.error("'%s' isn't part of the alias '%s'." % (
-                    group, _alias))
-                failed = True
-
-    if remove_groups:
-        # Only this alias lets go of them; any other alias keeps them
-        session.query(GroupAlias)\
-            .filter(GroupAlias.name == _alias)\
-            .filter(GroupAlias.group_id.in_(remove_groups))\
-            .delete(synchronize_session=False)
-        session.commit()
-
-    if failed:
+    if result.unknown or result.outside:
         exit(1)
 
 
@@ -231,33 +172,18 @@ def alias_list(ctx):
     Lists alias and their associated groups that have been mapped to.
 
     """
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error("The database is not correctly configured.")
-        exit(1)
-
     try:
-        entries = session.query(Group.name, GroupAlias.name)\
-            .join(GroupAlias)\
-            .filter(Group.id == GroupAlias.group_id)\
-            .order_by(GroupAlias.name)\
-            .order_by(Group.name).all()
+        aliases = ctx['NNTPSettings'].aliases()
 
-    except (InvalidRequestError, OperationalError, ProgrammingError):
-        session.rollback()
-        logger.error("The database isn't set up yet; run 'nr db init' first.")
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
         exit(1)
 
-    last = None
-    for entry in entries:
+    for index, (alias, groups) in enumerate(aliases.items()):
+        if index:
+            # A blank line between aliases
+            click.echo()
 
-        if last != entry[1]:
-            if last is not None:
-                # New line
-                print()
-
-            # Store new group
-            last = entry[1]
-            print('%s:' % last)
-
-        print('  - %s' % entry[0])
+        click.echo('%s:' % alias)
+        for group in groups:
+            click.echo('  - %s' % group)

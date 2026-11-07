@@ -124,6 +124,7 @@ from os.path import isfile
 from os.path import dirname
 from os.path import abspath
 from os.path import expanduser
+from os.path import getsize
 from yaml.scanner import ScannerError
 from yaml.parser import ParserError
 from operator import itemgetter
@@ -139,6 +140,7 @@ except ImportError:
     sys.path.insert(0, dirname(NEWSREAP_ROOT))
     from newsreap.NNTPDatabase import NNTPDatabase
 
+from newsreap.Database import database_size
 from newsreap.NNTPFilter import FILTERS_FILE
 from newsreap.NNTPFilter import FILTERS_EXTENSIONS
 from newsreap.NNTPFilter import FILTERS_FOLDER
@@ -416,10 +418,16 @@ DEFAULT_PROCESSING_VARIABLES = {
     # filters.yaml next to the configuration file when not set
     'filters': None,
     # What 'nr update' does for every group that doesn't say otherwise
-    # ('nr group watch --content'): keep what the small articles say, and
+    # ('nr group set --content yes'): keep what the small articles say, and
     # read the NZB files posted; both off unless turned on
     'content': False,
     'nzb': False,
+    # How many days 'nr prune <group>' keeps of a group that doesn't say
+    # otherwise; 0 keeps everything
+    'retention': 0,
+    # How many days of each server's transfer statistics 'nr prune' keeps
+    # (see 'nr db status'); 0 keeps them all
+    'statistics': 31,
     # Keep the PGP keys found in archived posts, and which posts each key
     # signed or was encrypted for (see NNTPKeyring); off unless turned on
     'pgp': False,
@@ -1158,6 +1166,138 @@ class NNTPSettings(NNTPDatabase):
             self.cache_dir, 'search',
             '%s%s' % (safe or '_', SQLITE_DATABASE_EXTENSION))
 
+    def cached_groups(self):
+        """
+        Returns {group: path} of every group with headers cached (the name
+        as its cache file is called; see group_database())
+        """
+        folder = dirname(self.group_database('_'))
+        found = {}
+        if isdir(folder):
+            for filename in sorted(listdir(folder)):
+                if filename.endswith(SQLITE_DATABASE_EXTENSION):
+                    found[filename[:-len(SQLITE_DATABASE_EXTENSION)]] = \
+                        join(folder, filename)
+
+        return found
+
+    def storage(self):
+        """
+        Returns how big each of our databases is, as a dict of
+        (bytes, where) pairs; bytes is None for one on a database server:
+
+        - settings: the main database
+        - index: the index
+        - caches: every group's header cache together (where: the folder)
+        """
+        engine = self.nntp_database.get('engine')
+        caches = self.cached_groups()
+        return {
+            'settings': (database_size(engine), engine)
+            if isinstance(engine, str) else (None, None),
+            'index': (database_size(self.index_database()),
+                      self.index_database()),
+            'caches': (sum(getsize(path) for path in caches.values()),
+                       dirname(self.group_database('_'))),
+        }
+
+    def group_report(self):
+        """
+        Returns what is kept of every group with headers cached (or that is
+        watched), by name; each is a dict:
+
+        - name, watched
+        - headers: how many are cached; size: how big that cache is
+        - collections: how many have something from it (forming: how many
+          of them are still forming)
+        - archived: how many of its posts are kept
+        - scanned, indexed: when it was last fetched and indexed (or None)
+
+        Raises DatabaseUnavailable if the database isn't set up yet.
+        """
+        from sqlalchemy import distinct
+        from sqlalchemy import func
+        from .NNTPGroupDatabase import NNTPGroupDatabase
+        from .NNTPIndexDatabase import NNTPIndexDatabase
+        from .objects.group.Article import Article
+        from .objects.index.ArchiveGroup import ArchiveGroup
+        from .objects.index.Collection import Collection
+        from .objects.index.Collection import CollectionState
+        from .objects.index.CollectionFile import CollectionFile
+        from .objects.index.FileGroup import FileGroup
+
+        watched = set(self.groups(watched=True))
+        tracked = self.tracked()
+        cached = self.cached_groups()
+
+        # What is indexed (and archived) for each group
+        collections = {}
+        archived = {}
+        if NNTPIndexDatabase.exists(self.index_database()):
+            index = NNTPIndexDatabase.from_engine(self.index_database())
+            try:
+                with index.transaction() as session:
+                    for name, state, found in session.query(
+                            FileGroup.name, Collection.state,
+                            func.count(distinct(Collection.id)))\
+                            .join(CollectionFile,
+                                  CollectionFile.id == FileGroup.file_id)\
+                            .join(Collection, Collection.id ==
+                                  CollectionFile.collection_id)\
+                            .group_by(FileGroup.name, Collection.state):
+                        entry = collections.setdefault(name, [0, 0])
+                        entry[0] += found
+                        if state == CollectionState.Forming:
+                            entry[1] += found
+
+                    archived = dict(session.query(
+                        ArchiveGroup.name,
+                        func.count(ArchiveGroup.message_id))
+                        .group_by(ArchiveGroup.name))
+
+            finally:
+                index.close()
+
+        rows = []
+        for name in sorted(set(cached) | watched):
+            headers = 0
+            size = 0
+            if name in cached:
+                size = getsize(cached[name])
+                db = NNTPGroupDatabase.from_file(cached[name])
+                try:
+                    headers = db.session().query(
+                        func.count(Article.message_id)).scalar() or 0
+                finally:
+                    db.close()
+
+            total, forming = collections.get(name, (0, 0))
+            scan, indexed = tracked.get(name, (None, None))
+            rows.append({
+                'name': name, 'watched': name in watched,
+                'headers': headers, 'size': size, 'collections': total,
+                'forming': forming, 'archived': archived.get(name, 0),
+                'scanned': scan, 'indexed': indexed})
+
+        return rows
+
+    def group_cache_size(self, name):
+        """
+        Returns how many bytes a group's cached headers take on disk (0 if
+        nothing is cached)
+        """
+        path = self.group_database(name)
+        size = 0
+        for found in (path, path + '-wal', path + '-shm', path + '-journal'):
+            try:
+                size += getsize(found)
+
+            except OSError:
+                # Not there
+                pass
+
+        return size
+
     def index_database(self):
         """
         Returns where every collection found (across all groups) is kept:
@@ -1182,7 +1322,7 @@ class NNTPSettings(NNTPDatabase):
         """
         Returns True if 'nr update' keeps what the small articles of a group
         say without being asked (the content setting); a group can say
-        otherwise (see 'nr group watch')
+        otherwise (see 'nr group set')
         """
         return parse_bool(self.nntp_processing.get('content'), False)
 
@@ -1190,9 +1330,26 @@ class NNTPSettings(NNTPDatabase):
         """
         Returns True if 'nr update' reads the NZB files posted to a group
         without being asked (the nzb setting); a group can say otherwise
-        (see 'nr group watch')
+        (see 'nr group set')
         """
         return parse_bool(self.nntp_processing.get('nzb'), False)
+
+    def retention(self):
+        """
+        Returns how many days 'nr prune <group>' keeps of a group (the
+        retention setting; 0 keeps everything); a group can say otherwise
+        (see 'nr group set')
+        """
+        try:
+            days = int(self.nntp_processing.get('retention') or 0)
+
+        except (TypeError, ValueError):
+            logger.warning(
+                'The retention setting must be a number of days; '
+                'everything is kept.')
+            return 0
+
+        return max(days, 0)
 
     def pgp_home(self):
         """

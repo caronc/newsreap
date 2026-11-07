@@ -12,20 +12,16 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-# An overview of our setup and of everything kept so far:
+# An overview of our setup, with a few lines on what is kept and how the
+# servers are doing ('nr db status' has the details):
 #   nr status
 
 import logging
 import click
 import sys
 
-from os import listdir
 from os.path import abspath
 from os.path import dirname
-from os.path import getsize
-from os.path import isdir
-from os.path import isfile
-from os.path import join
 
 try:
     from newsreap.Logging import NEWSREAP_CLI
@@ -34,32 +30,16 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
-from sqlalchemy import distinct
-from sqlalchemy import func
-from sqlalchemy.exc import OperationalError
 
 from newsreap import __title__
 from newsreap import __version__
-from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
+from newsreap.Database import DatabaseUnavailable
+from newsreap.NNTPDatabase import failure_share
 from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
-from newsreap.NNTPIndexer import SESSION_KEY
 from newsreap.NNTPKeyring import NNTPKeyring
-from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
 from newsreap.Utils import bytes_to_strsize
-from newsreap.objects.group.Article import Article
-from newsreap.objects.index.ArchiveGroup import ArchiveGroup
 from newsreap.objects.index.ArchivedPost import ArchiveKind
-from newsreap.objects.index.ArchivedPost import ArchivedPost
-from newsreap.objects.index.ArticleRank import ArticleRank
-from newsreap.objects.index.Collection import Collection
-from newsreap.objects.index.Collection import CollectionSource
 from newsreap.objects.index.Collection import CollectionState
-from newsreap.objects.index.CollectionFile import CollectionFile
-from newsreap.objects.index.FileGroup import FileGroup
-from newsreap.objects.index.NzbImport import NzbImport
-from newsreap.objects.nntp.Group import Group
-from newsreap.objects.nntp.GroupAlias import GroupAlias
-from newsreap.objects.nntp.GroupTrack import GroupTrack
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
@@ -101,104 +81,21 @@ def when(value):
     return value.strftime('%Y-%m-%d %H:%M')
 
 
-def cached_files(settings):
+def index_database(settings):
     """
-    Returns group name -> path of every group with headers cached
-    """
-    cache_dir = dirname(settings.group_database('_'))
-    found = {}
-    if isdir(cache_dir):
-        for filename in listdir(cache_dir):
-            if filename.endswith(SQLITE_DATABASE_EXTENSION):
-                found[filename[:-len(SQLITE_DATABASE_EXTENSION)]] = \
-                    join(cache_dir, filename)
-    return found
-
-
-def index_session(settings):
-    """
-    Returns (index, session) of our index database; (None, None) if
-    nothing was ever indexed
+    Returns our NNTPIndexDatabase; None if nothing was ever indexed
     """
     if not NNTPIndexDatabase.exists(settings.index_database()):
-        return None, None
+        return None
 
-    index = NNTPIndexDatabase.from_engine(settings.index_database())
-    return index, index.session()
+    return NNTPIndexDatabase.from_engine(settings.index_database())
 
 
-def group_rows(settings, session, index):
+def show_groups(rows):
     """
-    Returns a dictionary for every group with headers cached (or that is
-    watched): name, watched, headers, size (of its cache), collections,
-    forming, archived, scanned and indexed
+    Shows the group table (see NNTPSettings.group_report()); returns the
+    rows
     """
-    known = {g.name: g for g in session.query(Group)}
-    cached = cached_files(settings)
-
-    names = sorted(set(cached) | {
-        name for name, g in known.items() if g.watch})
-
-    # What is indexed (and archived) for each group
-    collections = {}
-    archived = {}
-    if index is not None:
-        for name, state, found in index.query(
-                FileGroup.name, Collection.state,
-                func.count(distinct(Collection.id)))\
-                .join(CollectionFile,
-                      CollectionFile.id == FileGroup.file_id)\
-                .join(Collection,
-                      Collection.id == CollectionFile.collection_id)\
-                .group_by(FileGroup.name, Collection.state):
-            entry = collections.setdefault(name, [0, 0])
-            entry[0] += found
-            if state == CollectionState.Forming:
-                entry[1] += found
-
-        archived = dict(index.query(
-            ArchiveGroup.name, func.count(ArchiveGroup.message_id))
-            .group_by(ArchiveGroup.name))
-
-    # When each group was last scanned and indexed (on any server)
-    tracked = {}
-    for name, last_scan, last_index in session.query(
-            Group.name, GroupTrack.last_scan, GroupTrack.last_index)\
-            .join(GroupTrack, GroupTrack.group_id == Group.id):
-        scan, indexed = tracked.get(name, (None, None))
-        tracked[name] = (
-            max(filter(None, (scan, last_scan)), default=None),
-            max(filter(None, (indexed, last_index)), default=None))
-
-    rows = []
-    for name in names:
-        headers = 0
-        size = 0
-        if name in cached:
-            size = getsize(cached[name])
-            db = NNTPGroupDatabase.from_file(cached[name])
-            try:
-                headers = db.session().query(
-                    func.count(Article.message_id)).scalar() or 0
-            finally:
-                db.close()
-
-        total, forming = collections.get(name, (0, 0))
-        scan, indexed = tracked.get(name, (None, None))
-        rows.append({
-            'name': name, 'watched': name in known and known[name].watch,
-            'headers': headers, 'size': size, 'collections': total,
-            'forming': forming, 'archived': archived.get(name, 0),
-            'scanned': scan, 'indexed': indexed})
-
-    return rows
-
-
-def show_groups(settings, session, index):
-    """
-    Shows the group table (see group_rows()); returns the rows
-    """
-    rows = group_rows(settings, session, index)
     if not rows:
         click.echo(
             "  Nothing fetched yet; run 'nr update <group> --newest 100000' "
@@ -220,20 +117,6 @@ def show_groups(settings, session, index):
             when(row['indexed'])))
 
     return rows
-
-
-def database_size(url_or_path):
-    """
-    Returns the size of a database: its file's (SQLite), or None for one
-    kept on a database server
-    """
-    path = url_or_path
-    if '://' in path:
-        if not path.startswith('sqlite:'):
-            return None
-        path = path.split(':///', 1)[-1]
-
-    return getsize(path) if isfile(path) else 0
 
 
 def show_setup(ctx):
@@ -261,7 +144,7 @@ def show_setup(ctx):
         detail('Filters', 'unusable: %s' % e)
 
     detail('Always (nr update)', '%s (groups can say otherwise; see nr '
-           'group watch)' % ', '.join(
+           'group set)' % ', '.join(
                name if value else 'no %s' % name for name, value in (
                    ('content', settings.content()), ('nzb', settings.nzb()))))
 
@@ -289,39 +172,32 @@ def show_setup(ctx):
             'primary' if no == 0 else 'backup'))
 
 
-def show_storage(settings, cached):
+def show_storage(settings):
     """
     Shows how big each of our databases is
     """
     heading('Storage')
-    sizes = []
+    found = settings.storage()
 
-    engine = settings.nntp_database.get('engine')
-    if isinstance(engine, str):
-        size = database_size(engine)
-        sizes.append(size)
-        detail('Settings', '%s (%s)' % (
-            bytes_to_strsize(size) if size is not None else 'on a server',
-            engine))
+    for name, key in (('Settings', 'settings'), ('Index', 'index')):
+        size, where = found[key]
+        if where is not None:
+            detail(name, '%s (%s)' % (
+                bytes_to_strsize(size) if size is not None else
+                'on a server', where))
 
-    size = database_size(settings.index_database())
-    sizes.append(size)
-    detail('Index', '%s (%s)' % (
-        bytes_to_strsize(size) if size is not None else 'on a server',
-        settings.index_database()))
-
-    size = sum(getsize(path) for path in cached.values())
-    sizes.append(size)
+    size, folder = found['caches']
     detail('Header caches', '%s (%d group(s), %s)' % (
-        bytes_to_strsize(size), len(cached),
-        dirname(settings.group_database('_'))))
+        bytes_to_strsize(size), len(settings.cached_groups()), folder))
 
-    detail('Total', bytes_to_strsize(sum(s for s in sizes if s)))
+    detail('Total', bytes_to_strsize(sum(
+        size for size, _ in found.values() if size)))
 
 
 def show_index(index, gpg=None, retries=0):
     """
     Shows what the index holds
+    - index: the NNTPIndexDatabase (None if nothing was ever indexed)
     - gpg: the NNTPGnuPG posts are decrypted with (if any)
     - retries: how many times 'nr update' tries them again on its own
     """
@@ -330,8 +206,8 @@ def show_index(index, gpg=None, retries=0):
         click.echo("  Nothing indexed yet.")
         return
 
-    states = dict(index.query(Collection.state, func.count(Collection.id))
-                  .group_by(Collection.state))
+    totals = index.totals()
+    states = totals['states']
     detail('Total', count(sum(
         found for state, found in states.items()
         if state != CollectionState.Deleted)))
@@ -343,68 +219,145 @@ def show_index(index, gpg=None, retries=0):
     detail('Deleted', count(states.get(CollectionState.Deleted)) +
            ' (with nr delete; they stay away)')
 
-    detail('Obfuscated', count(
-        index.query(func.count(Collection.id))
-        .filter(Collection.key.like(SESSION_KEY + '\n%'))
-        .filter(Collection.state != CollectionState.Deleted).scalar()) +
-        ' (put together from how they were posted)')
-    detail('From NZB files', count(
-        index.query(func.count(Collection.id))
-        .filter(Collection.source == CollectionSource.Nzb).scalar()))
-
-    detail('Files', count(index.query(func.count(CollectionFile.id))
-                          .scalar()))
-    size = index.query(func.sum(Collection.size))\
-        .filter(Collection.state != CollectionState.Deleted).scalar()
-    detail('Size of it all', bytes_to_strsize(size or 0))
+    detail('Obfuscated', count(totals['obfuscated']) +
+           ' (put together from how they were posted)')
+    detail('From NZB files', count(totals['from_nzb']))
+    detail('Files', count(totals['files']))
+    detail('Size of it all', bytes_to_strsize(totals['size']))
 
     heading('Articles')
-    kinds = dict(index.query(ArchivedPost.kind, func.count(ArchivedPost.id))
-                 .group_by(ArchivedPost.kind))
+    kinds = totals['kinds']
     detail('Kept (--content)', '%s (%s text, %s binary, %s missing, %s '
            'refused)' % (
                count(sum(kinds.values())), count(kinds.get(ArchiveKind.Text)),
                count(kinds.get(ArchiveKind.Binary)),
                count(kinds.get(ArchiveKind.Missing)),
                count(kinds.get(ArchiveKind.Refused))))
-    detail('Scored or tagged', count(
-        index.query(func.count(ArticleRank.message_id)).scalar()))
+    detail('Scored or tagged', count(totals['ranked']))
 
-    keys, posts = NNTPKeyring.counts(index)
+    session = index.session()
+    keys, posts = NNTPKeyring.counts(session)
     if keys or posts:
         detail('PGP keys', '%s (%s post(s) tied to a key)' % (
             count(keys), count(posts)))
 
     if gpg is not None and gpg.available():
         secret = gpg.secret_keys()
-        waiting = len(NNTPKeyring.locked(index, secret, final=False))
+        waiting = len(NNTPKeyring.locked(session, secret, final=False))
         if waiting:
             # The ones 'nr update' has run out of tries for
             done = waiting - len(NNTPKeyring.locked(
-                index, secret, final=False, retries=retries))
+                session, secret, final=False, retries=retries))
             detail('Not decrypted yet', "%s (%s; see 'nr pgp decrypt')" % (
                 count(waiting),
                 '%s no longer tried by nr update' % count(done) if done
                 else 'nr update tries them again'))
 
-    read = index.query(func.count(NzbImport.message_id)).scalar() or 0
-    unusable = index.query(func.count(NzbImport.message_id))\
-        .filter(NzbImport.collection_id.is_(None)).scalar() or 0
     detail('NZB files read', '%s (%s unusable)' % (
-        count(read), count(unusable)))
+        count(totals['nzb_read']), count(totals['nzb_unusable'])))
 
 
-def show_aliases(session):
+def size(value):
+    """
+    Returns a size kept short (ie: 400KB, 3.4MB, 3.5TB)
+    """
+    return bytes_to_strsize(value or 0, short=True)
+
+
+def speed(value):
+    """
+    Returns a speed (bytes per second) kept short
+    """
+    return '%s/s' % size(value)
+
+
+def moved(stats):
+    """
+    Returns how much was received and sent (ie: 1.2GB down, 4MB up)
+    """
+    return '%s down, %s up' % (size(stats.rx_bytes), size(stats.tx_bytes))
+
+
+def transfer_line(stats):
+    """
+    Returns one period of a server's transfers on a line
+    """
+    if not (stats.commands or stats.total_bytes):
+        return 'nothing'
+
+    text = '%s at %s' % (moved(stats), speed(stats.rate))
+    articles = stats.fetched + stats.posted
+    if articles:
+        text += ', %s article(s)' % count(round(articles))
+
+    failures = failure_share(stats)
+    if failures:
+        text += ', %.1f%% failed' % (failures * 100)
+
+    return text
+
+
+def warning_lines(transfers):
+    """
+    Returns what looks wrong today next to the usual day, one line each
+    """
+    lines = []
+    for what, now, usual in transfers.warnings:
+        if what == 'slow':
+            lines.append('slower than usual: %s today, %s on a usual day' % (
+                speed(now), speed(usual)))
+
+        else:
+            lines.append(
+                'more failures than usual: %.1f%% of commands today, %.1f%% '
+                'on a usual day' % (now * 100, usual * 100))
+    return lines
+
+
+def show_transfers(settings, brief=False):
+    """
+    Shows how much went to and from each server, and how fast (brief: a
+    line or two each)
+    """
+    heading('Transfers')
+    found = settings.transfers()
+    if not found:
+        click.echo('  Nothing yet; every command that talks to a server adds '
+                   'to it.')
+        return
+
+    for transfers in found:
+        if brief:
+            click.echo('  %-18s today %s; %d day(s) %s' % (
+                transfers.host, moved(transfers.today), transfers.days,
+                moved(transfers.kept)))
+
+        else:
+            click.echo('  %s' % transfers.host)
+            for name, stats in (
+                    ('Today', transfers.today),
+                    ('Yesterday', transfers.yesterday),
+                    ('Last 7 days', transfers.week),
+                    ('%d day(s) kept' % transfers.days, transfers.kept)):
+                click.echo('    %-16s %s' % (name, transfer_line(stats)))
+
+            if transfers.usual is not None:
+                click.echo('    %-16s %s' % (
+                    'A usual day', transfer_line(transfers.usual)))
+            click.echo('    %-16s %s' % (
+                'Fastest', speed(transfers.kept.peak_rate)))
+
+        for line in warning_lines(transfers):
+            click.secho('  %s! %s' % ('' if brief else '  ', line),
+                        fg='yellow')
+
+
+def show_aliases(settings):
     """
     Shows the aliases defined (and the groups they stand for)
     """
     heading('Aliases')
-    found = {}
-    for alias, group in session.query(GroupAlias.name, Group.name)\
-            .join(Group, Group.id == GroupAlias.group_id)\
-            .order_by(GroupAlias.name, Group.name):
-        found.setdefault(alias, []).append(group)
-
+    found = settings.aliases()
     if not found:
         click.echo("  None (see 'nr alias add').")
         return
@@ -417,46 +370,62 @@ def show_aliases(session):
 @click.pass_obj
 def status(ctx):
     """
-    Show an overview of our setup and everything kept so far.
+    Show an overview of our setup.
 
-    Where everything is (and how big it is), the servers and filters used,
-    every group with something kept (how many headers are cached, the
-    collections and posts found in it, when it was last fetched and
-    indexed), the aliases defined, and what the index holds.
+    Where everything is, the servers and filters used, the aliases
+    defined, and a few lines on what is kept and how much went to and from
+    each server (with a warning when today looks wrong).
+
+    'nr db status' has the details (every number, and every group with
+    something kept); 'nr group ls' lists the groups and their settings.
 
     """
     settings = ctx['NNTPSettings']
-    session = settings.session()
-    if not session:
-        logger.error('Could not acquire a database connection.')
-        exit(1)
-
     try:
-        groups_known = session.query(func.count(Group.id)).scalar()
-        watched = session.query(func.count(Group.id))\
-            .filter(Group.watch.is_(True)).scalar()
+        groups_known, watched = settings.group_counts()
 
-    except OperationalError:
+    except DatabaseUnavailable:
         click.echo(
             "The database isn't set up yet; run 'nr db init' first.")
         exit(1)
 
     show_setup(ctx)
-    cached = cached_files(settings)
-    show_storage(settings, cached)
+    show_aliases(settings)
 
-    index, index_db = index_session(settings)
+    heading('Kept')
+    detail('Groups', '%s known, %s watched%s' % (
+        count(groups_known), count(watched),
+        '' if groups_known else "; run 'nr update groups' for them"))
+    detail('On disk', size(sum(
+        found for found, _ in settings.storage().values() if found)))
+
+    show_transfers(settings, brief=True)
+
+    click.echo('')
+    click.echo("See 'nr db status' for the details and 'nr group ls' for "
+               "the groups.")
+
+
+def show_details(settings):
+    """
+    Shows every number we keep: storage, transfers, what the index holds
+    and every group with something kept ('nr db status')
+    """
+    groups_known, watched = settings.group_counts()
+    show_storage(settings)
+    show_transfers(settings)
+
+    index = index_database(settings)
     try:
-        heading('Groups')
-        detail('Known', '%s (%s watched)%s' % (
-            count(groups_known), count(watched),
-            '' if groups_known else "; run 'nr update groups' for them"))
-        click.echo('')
-        show_groups(settings, session, index_db)
-
-        show_aliases(session)
-        show_index(index_db, settings.gpg(), settings.pgp_retries())
+        show_index(index, settings.gpg(), settings.pgp_retries())
 
     finally:
         if index is not None:
             index.close()
+
+    heading('Groups')
+    detail('Known', '%s (%s watched)%s' % (
+        count(groups_known), count(watched),
+        '' if groups_known else "; run 'nr update groups' for them"))
+    click.echo('')
+    show_groups(settings.group_report())

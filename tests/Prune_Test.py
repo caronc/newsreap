@@ -40,6 +40,24 @@ def aged(path):
     os.utime(str(path), (LONG_AGO, LONG_AGO))
 
 
+def old_statistics(config, host, days=40):
+    """
+    Adds a day of statistics for a server, `days` days ago
+    """
+    from newsreap.NNTPSettings import NNTPSettings
+    from newsreap.NNTPStatistics import NNTPStatistics
+    from newsreap.Utils import utcnow
+
+    settings = NNTPSettings(cfg_file=config)
+    try:
+        assert settings.record_stats(
+            {host: NNTPStatistics(rx_bytes=1, commands=1)},
+            day=utcnow().date() - timedelta(days=days)) == [host]
+
+    finally:
+        settings.close()
+
+
 def test_what_is_no_longer_needed_is_cleared_out(tmp_path):
     """
     Each kind is cleared out only when asked for: old indexed headers,
@@ -125,14 +143,26 @@ def test_what_is_no_longer_needed_is_cleared_out(tmp_path):
         assert (staging / 'recent-3').exists()
         assert (work / 'left.tmp').exists()
 
-        # All of them, as configured: only work files go out of the box
+        # Transfer statistics older than 31 days (today's stay)
+        old_statistics(config, server.host)
+        result = nr('prune', 'statistics', '--dry-run')
+        assert '1 day(s) of server statistics older than 31 day(s)' in \
+            result.output
+        assert nr('prune', 'statistics', '--days', '50').output.strip() == \
+            'Nothing to clear out.'
+
+        # All of them, as configured: only work files and statistics go
+        # out of the box
         result = nr('-y', 'prune', 'all')
         assert result.exit_code == 0, result.output
         assert 'raw_retention is 0' in result.output
         assert 'prune_downloads is 0' in result.output
         assert '1 leftover work file(s)' in result.output
+        assert '1 day(s) of server statistics' in result.output
         assert not (work / 'left.tmp').exists()
         assert (work / 'busy.tmp').exists()
+        assert 'statistics' not in nr('prune', 'all', '-n').output
+        assert 'Today ' in nr('db', 'status').output
 
         result = nr('prune', 'headers', '--days', '30', '--dry-run')
         assert result.exit_code == 0, result.output
@@ -160,15 +190,18 @@ def test_prune_days_come_from_the_configuration(tmp_path):
     settings = NNTPSettings(cfg_file=config)
     pruner = NNTPPruner(settings)
     assert (pruner.headers, pruner.downloads, pruner.work) == (0, 0, 1)
+    assert pruner.statistics == 31
 
     text = open(config).read()
     text = text.replace('# prune_downloads: 0', 'prune_downloads: 14')
     text = text.replace('# prune_work: 1', "prune_work: 'soon'")
+    text = text.replace('statistics: 31', 'statistics: 0')
     open(config, 'w').write(text)
 
     settings = NNTPSettings(cfg_file=config)
     pruner = NNTPPruner(settings)
-    assert (pruner.downloads, pruner.work) == (14, 1)
+    assert (pruner.downloads, pruner.work, pruner.statistics) == (14, 1, 0)
+    assert pruner.find().statistics == 0
 
     # What is given wins over the configuration
     pruner = NNTPPruner(settings, downloads=0, work=3)

@@ -1436,7 +1436,8 @@ def test_fetched_headers_can_be_searched_right_away(tmp_path):
         # What was fetched and indexed, by group
         result = nr('db', 'status')
         assert result.exit_code == 0
-        line = result.output.splitlines()[1].split()
+        line = next(row for row in result.output.splitlines()
+                    if row.strip().startswith(GROUP)).split()
         assert line[:5] == [GROUP, '7', line[2], '2', '(1']
         assert line[5:7] == ['forming)', '0']
 
@@ -1499,3 +1500,36 @@ def test_articles_not_done_yet_are_read_in_order_without_sorting(paths):
     assert len(plans) >= 2
     for plan in plans:
         assert 'TEMP B-TREE' not in plan, plan
+
+
+def test_old_posts_kept_from_a_group_can_be_let_go(index_engine):
+    """
+    forget_group(before=...) only lets go of the posts older than the date,
+    and keeps one another group has too
+    """
+    from newsreap.objects.index.ArchiveGroup import ArchiveGroup
+    from newsreap.objects.index.ArchivedPost import ArchivedPost
+
+    indexer = NNTPIndexer(index_engine)
+    session = indexer.session(create=True)
+    for message_id, days, groups in (('old@x', 60, (GROUP, )),
+                                     ('new@x', 2, (GROUP, )),
+                                     ('shared@x', 60, (GROUP, OTHER))):
+        session.add(ArchivedPost(
+            message_id=message_id, posted=LATER - timedelta(days=days)))
+        session.flush()
+        session.add_all(ArchiveGroup(message_id=message_id, name=name)
+                        for name in groups)
+    session.commit()
+
+    before = LATER - timedelta(days=30)
+    try:
+        assert indexer.count_group(GROUP, before=before) == (0, 2)
+        assert indexer.forget_group(GROUP, before=before) == (0, 0, 1)
+        assert {p.message_id for p in session.query(ArchivedPost)} == {
+            'new@x', 'shared@x'}
+        assert {(g.message_id, g.name) for g in session.query(
+            ArchiveGroup)} == {('new@x', GROUP), ('shared@x', OTHER)}
+
+    finally:
+        indexer.close()

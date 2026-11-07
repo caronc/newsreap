@@ -177,9 +177,9 @@ def test_one_update_fetches_headers_content_and_nzb_files(tmp_path):
 def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
         tmp_path):
     """
-    A group can be told what nr update always does for it ('nr group watch
-    --content --no-nzb'); the configuration file decides for the rest, and
-    the command line still wins for one run
+    A group can be told what nr update always does for it ('nr group set
+    --content yes --nzb no'); the configuration file decides for the rest,
+    and the command line still wins for one run
     """
     import sqlite3
     from newsreap.cli import cli
@@ -229,7 +229,8 @@ def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
         db.close()
         assert nr('group', 'list').exit_code == 0
 
-        result = nr('group', 'watch', GROUP, '--content', '--no-nzb')
+        assert nr('group', 'watch', GROUP).exit_code == 0
+        result = nr('group', 'set', GROUP, '--content', 'yes', '--nzb', 'no')
         assert result.exit_code == 0, result.output
         assert '%s: content, no nzb' % GROUP in result.output
         assert '(content, no nzb)' in nr('group', 'list').output
@@ -254,14 +255,15 @@ def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
         assert 'NZB file(s)' not in result.output
 
         # Back to what the configuration file says
-        result = nr('group', 'watch', GROUP, '--default')
+        result = nr('group', 'set', GROUP, '--content', 'default',
+                    '--nzb', 'default')
         assert '%s: as the configuration file says' % GROUP in result.output
         result = nr('update', GROUP, '--cached')
         assert result.exit_code == 0, result.output
         assert '1 NZB file(s) read' in result.output
         assert 'article(s) kept' not in result.output
 
-        assert nr('group', 'watch', GROUP, '--default', '--nzb')\
+        assert nr('group', 'set', GROUP, '--retention', 'soon')\
             .exit_code == 1
 
 
@@ -471,6 +473,138 @@ def test_groups_can_be_reset_and_worked_on_offline(tmp_path):
         assert names() == ['Shared', 'Mine']
 
 
+def test_groups_are_pruned_to_their_retention(tmp_path):
+    """
+    - nothing is pruned without a retention, and only when asked
+    - nr prune removes what is older than a group's own retention; other
+      groups keep theirs
+    - a plain update doesn't fetch it again, but asking for those dates
+      does; nr update --prune prunes afterwards
+    - nr group purge frees everything kept of a group
+    """
+    from newsreap.Utils import utcnow
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000008 0000000001 y\n'
+                          '%s 0000000004 0000000001 y\n' % (GROUP, OTHER))
+
+    now = utcnow().replace(microsecond=0)
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        posts = [(now - timedelta(days=60), release('Old', files=2,
+                                                    segments=2)),
+                 (now - timedelta(days=2), release('New', files=2,
+                                                   segments=2))]
+        no = 0
+        for posted, articles in posts:
+            for subject, poster, message_id in articles:
+                no += 1
+                server.add_overview(
+                    GROUP, no, subject, poster,
+                    posted + timedelta(minutes=no), message_id, size=1000)
+
+        for no, (subject, poster, message_id) in enumerate(
+                release('Other', files=2, segments=2), 1):
+            server.add_overview(
+                OTHER, no, subject, poster, now - timedelta(days=60, minutes=no),
+                message_id, size=1000)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
+
+        def names():
+            return {line.split()[-1]
+                    for line in nr('search').output.split('\n') if line}
+
+        def xovers():
+            return len([c for c in server.commands() if 'OVER' in c])
+
+        def clocks():
+            # The groups the index knows how far it has seen
+            from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
+            from newsreap.NNTPSettings import NNTPSettings
+            from newsreap.objects.index.GroupClock import GroupClock
+            settings = NNTPSettings(cfg_file=config)
+            index = NNTPIndexDatabase.from_engine(settings.index_database())
+            try:
+                return {c.name for c in index.session().query(GroupClock)}
+            finally:
+                index.close()
+                settings.close()
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('update', 'groups').exit_code == 0
+        assert nr('update', GROUP, OTHER).exit_code == 0
+        assert names() == {'Old', 'New', 'Other'}
+
+        # Nothing is set, so everything is kept
+        result = nr('-y', 'prune', GROUP)
+        assert result.exit_code == 0, result.output
+        assert 'keeps everything' in result.output
+        assert names() == {'Old', 'New', 'Other'}
+
+        assert nr('group', 'set', GROUP, '--retention', '30').exit_code == 0
+        result = nr('prune', GROUP, OTHER, '--dry-run')
+        assert result.exit_code == 0, result.output
+        assert '%s: 4 header(s), 2 file(s) and 0 post(s) older than 30 ' \
+            'day(s)' % GROUP in result.output
+        assert '%s: keeps everything' % OTHER in result.output
+        assert 'Dry run' in result.output
+
+        result = nr('prune', GROUP, input='n\n')
+        assert 'Nothing was removed.' in result.output
+        assert names() == {'Old', 'New', 'Other'}
+
+        result = nr('-y', 'prune', GROUP)
+        assert result.exit_code == 0, result.output
+        assert '%s: 4 header(s), 2 file(s), 1 collection(s) and 0 post(s) ' \
+            'removed' % GROUP in result.output
+        assert names() == {'New', 'Other'}
+        assert clocks() == {GROUP, OTHER}
+
+        # A plain update doesn't fetch what was pruned again
+        asked = xovers()
+        assert nr('update', GROUP).exit_code == 0
+        assert xovers() == asked
+        assert names() == {'New', 'Other'}
+
+        # Asking for those dates does; --prune takes them away again
+        result = nr('update', GROUP, '--days', '90')
+        assert result.exit_code == 0, result.output
+        assert names() == {'Old', 'New', 'Other'}
+
+        # Old transfer statistics go too
+        from tests.Prune_Test import old_statistics
+        old_statistics(config, server.host)
+
+        result = nr('update', GROUP, '--prune')
+        assert result.exit_code == 0, result.output
+        assert '%s: pruned to 30 day(s)' % GROUP in result.output
+        assert '1 day(s) of server statistics removed (older than 31 ' \
+            'day(s))' in result.output
+        assert names() == {'New', 'Other'}
+
+        # Purging frees everything; the group is no longer listed
+        result = nr('group', 'purge', GROUP, input='n\n')
+        assert result.exit_code == 1
+        assert names() == {'New', 'Other'}
+
+        result = nr('-y', 'group', 'purge', GROUP)
+        assert result.exit_code == 0, result.output
+        assert '%s: purged' % GROUP in result.output
+        assert names() == {'Other'}
+        assert clocks() == {OTHER}
+        listed = nr('group', 'ls').output
+        assert GROUP not in listed and OTHER in listed
+
+        # Its settings stay
+        assert 'keeps 30 days' in nr('group', 'set', GROUP).output
+
+
 def test_status_shows_everything_kept(tmp_path):
     """
     nr status gives an overview (setup, storage, groups, aliases and what
@@ -508,19 +642,45 @@ def test_status_shows_everything_kept(tmp_path):
         # A name that isn't a group (or an alias)
         result = nr('update', 'update')
         assert result.exit_code == 1
-        assert "There is no group (or alias) named 'update'" in result.output
+        assert "There is no group (or alias) named 'update'; see 'nr group " \
+            "ls --all'" in result.output
 
         assert nr('update', GROUP, '--content').exit_code == 0
         assert nr('alias', 'add', 'test', GROUP).exit_code == 0
 
+        # The setup, with a few lines on what is kept
         result = nr('status')
         assert result.exit_code == 0, result.output
         for expected in (
-                'Setup', 'Servers', 'Storage', 'Groups', 'Aliases',
-                'Collections', 'Articles', 'Header caches:',
+                'Setup', 'Servers', 'Aliases', 'Kept', 'Transfers',
                 'test               %s' % GROUP,
+                'Groups:            1 known, 0 watched',
+                "See 'nr db status' for the details"):
+            assert expected in result.output, expected
+
+        # Each server's line: what today moved, and every day kept
+        line = next(row for row in result.output.splitlines()
+                    if row.strip().startswith('127.0.0.1') and
+                    ' today ' in row)
+        assert ' down, ' in line and '1 day(s)' in line
+        assert 'Collections' not in result.output
+
+        # Every number
+        result = nr('db', 'status')
+        assert result.exit_code == 0, result.output
+        for expected in (
+                'Storage', 'Header caches:', 'Transfers', 'Today',
+                'Yesterday        nothing', '1 day(s) kept', 'Fastest',
+                'Collections', 'Articles', 'Groups',
                 'Kept (--content):  3 (1 text, 0 binary'):
             assert expected in result.output, expected
+        assert 'Setup' not in result.output
+
+        # What every connection did is counted (the articles --content
+        # fetched too)
+        line = next(row for row in result.output.splitlines()
+                    if row.strip().startswith('Today'))
+        assert ' down, ' in line and ' article(s)' in line
 
         line = next(row for row in result.output.splitlines()
                     if row.strip().startswith(GROUP))

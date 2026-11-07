@@ -13,6 +13,8 @@
 # GNU Lesser General Public License for more details.
 
 from contextlib import contextmanager
+from os.path import getsize
+from os.path import isfile
 
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
@@ -60,6 +62,20 @@ class DatabaseUnavailable(Exception):
     The database can't be used: it couldn't be opened, or its tables were
     never made (ie: 'nr db init' wasn't run)
     """
+
+
+def database_size(url_or_path):
+    """
+    Returns the size of a database: its file's (SQLite; 0 if it isn't
+    made yet), or None for one kept on a database server
+    """
+    path = url_or_path
+    if '://' in path:
+        if not path.startswith('sqlite:'):
+            return None
+        path = path.split(':///', 1)[-1]
+
+    return getsize(path) if isfile(path) else 0
 
 
 def sqlite_file(engine):

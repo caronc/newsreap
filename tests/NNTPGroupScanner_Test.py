@@ -576,3 +576,78 @@ def test_update_from_the_command_line(tmp_path):
         # Bad dates are refused
         result = nr('update', 'search', 'photos', '--date-from', '!!!')
         assert result.exit_code == 1
+
+
+def headers_cached(tmp_path, days_ago, ranges, server='news'):
+    """
+    Returns a header cache holding one article per entry of days_ago
+    (article numbers 1, 2, ...) and these scanned ranges
+    """
+    db = NNTPGroupDatabase.from_file(str(tmp_path / 'group.db'))
+    session = db.session()
+    now = datetime(2026, 6, 1)
+    for no, days in enumerate(days_ago, 1):
+        session.add(Article(
+            message_id='%d@x' % no, article_no=no, subject='s', poster='p',
+            posted_date=now - timedelta(days=days), indexed=no % 2 == 0))
+    for low, high in ranges:
+        session.add(ScannedRange(server=server, low=low, high=high))
+    session.commit()
+    return db, now
+
+
+def ranges_of(db, server='news'):
+    """
+    Returns the scanned (low, high) ranges of a server, lowest first
+    """
+    return [(r.low, r.high) for r in db.session().query(ScannedRange)
+            .filter(ScannedRange.server == server)
+            .order_by(ScannedRange.low)]
+
+
+def test_pruning_headers_lets_old_ranges_be_fetched_again(tmp_path):
+    """
+    - every header older than the date goes (indexed or not)
+    - the article numbers below what is kept are no longer marked as
+      fetched (other servers' ranges are left alone)
+    - a dry run only counts
+    """
+    db, now = headers_cached(
+        tmp_path, (60, 50, 40, 5, 4, 3), [(1, 4), (5, 6), (8, 9)])
+    db.session().add(ScannedRange(server='other', low=1, high=9))
+    db.session().commit()
+    before = now - timedelta(days=30)
+
+    assert db.prune(before, server='news', dry_run=True) == 3
+    assert ranges_of(db) == [(1, 4), (5, 6), (8, 9)]
+
+    assert db.prune(before, server='news') == 3
+    assert db.session().query(Article).count() == 3
+    assert ranges_of(db) == [(4, 4), (5, 6), (8, 9)]
+    assert ranges_of(db, 'other') == [(1, 9)]
+
+    # Nothing that old is left
+    assert db.prune(before, server='news') == 0
+    db.close()
+
+
+def test_pruning_every_header_remembers_how_far_it_was_fetched(tmp_path):
+    """
+    With nothing kept, the newest article removed still counts as fetched,
+    so a plain update doesn't start the group over
+    """
+    db, now = headers_cached(tmp_path, (60, 50, 40), [(1, 3)])
+    assert db.prune(now - timedelta(days=30), server='news') == 3
+    assert ranges_of(db) == [(3, 3)]
+    db.close()
+
+
+def test_a_wrong_date_only_means_less_is_fetched_again(tmp_path):
+    """
+    An old article posted with a date in the future (it is kept) holds the
+    ranges below it as fetched
+    """
+    db, now = headers_cached(tmp_path, (-900, 60, 50, 5), [(1, 4)])
+    assert db.prune(now - timedelta(days=30), server='news') == 2
+    assert ranges_of(db) == [(1, 4)]
+    db.close()

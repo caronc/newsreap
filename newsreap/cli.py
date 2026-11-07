@@ -155,7 +155,7 @@
 #
 #   # A group can also always keep what its small articles say, or read
 #   # the NZB files posted to it, without --content or --nzb being given
-#   nr group watch test --content --nzb
+#   nr group set test --content yes --nzb yes
 #
 #   # We can now fetch (and index) every watched group:
 #   nr -vvv update --watched
@@ -364,6 +364,11 @@ def cli(ctx, config, verbose, noprompt, statistics, init):
         settings=ctx.obj['NNTPSettings'],
     )
 
+    # Keep what our connections did ('nr db status' shows it); callbacks run
+    # last to first, so this runs once the connections below are closed
+    ctx.call_on_close(lambda: record_statistics(
+        ctx.obj['NNTPSettings'], ctx.obj['NNTPManager']))
+
     # Close our connections once the command is done (even if it ends
     # early)
     ctx.call_on_close(ctx.obj['NNTPManager'].close)
@@ -372,6 +377,25 @@ def cli(ctx, config, verbose, noprompt, statistics, init):
         # Show what our connections did once the command is done (even
         # if it ends early)
         ctx.call_on_close(lambda: show_statistics(ctx.obj['NNTPManager']))
+
+
+def record_statistics(settings, manager):
+    """
+    Adds what our connections did to the day's statistics of each server
+
+    A command that talked to no server writes nothing; one that can't be
+    written (ie: no database yet) is only logged, never failing the command.
+    """
+    by_host = manager.stats_by_host()
+    if not any(stats.commands or stats.total_bytes
+               for stats in by_host.values()):
+        return
+
+    try:
+        settings.record_stats(by_host)
+
+    except Exception as e:
+        logger.debug('The transfer statistics were not kept: %s' % e)
 
 
 def show_statistics(manager):

@@ -15,26 +15,29 @@
 import click
 import sys
 
-from sqlalchemy.exc import OperationalError
-
 from os.path import abspath
 from os.path import dirname
 
 try:
-    from newsreap.objects.nntp.Group import Group
+    from newsreap.NNTPDatabase import UnknownGroups
+
 except ImportError:
     # Path
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
+    from newsreap.NNTPDatabase import UnknownGroups
 
-from newsreap.objects.nntp.Common import get_groups
-from newsreap.objects.nntp.Common import missing_groups
-from newsreap.objects.nntp.Common import get_group_options
-from newsreap.objects.nntp.Common import set_group_options
+from newsreap.Database import DatabaseUnavailable
+from newsreap.CliOptions import confirmed
+from newsreap.NNTPPruner import NNTPPruner
+from newsreap.Utils import bytes_to_strsize
 
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_CLI
 logger = logging.getLogger(NEWSREAP_CLI)
+
+# What is said when the database can't be used
+NO_DATABASE = "The database isn't set up yet; run 'nr db init' first."
 
 NEWSREAP_CLI_PLUGINS = {
     # format:
@@ -51,108 +54,135 @@ NEWSREAP_CLI_PLUGINS = {
 # above or they are simply ignored.
 def describe_options(options):
     """
-    Returns what a group's options say (ie: 'content, no nzb'); empty when
-    it follows the configuration file
+    Returns what a group's own settings say (ie: 'content, no nzb, keeps
+    30 days'); empty when it follows the configuration file
     """
-    return ', '.join(
-        name if options[name] else 'no %s' % name
-        for name in ('content', 'nzb')
-        if options and options.get(name) is not None)
+    said = [name if options[name] else 'no %s' % name
+            for name in ('content', 'nzb')
+            if options and options.get(name) is not None]
+
+    days = (options or {}).get('retention')
+    if days is not None:
+        said.append('keeps %d days' % days if days else 'keeps everything')
+
+    return ', '.join(said)
+
+
+def choice(value):
+    """
+    Turns yes, no or default into True, False or None
+    """
+    return {'yes': True, 'no': False, 'default': None}[value]
+
+
+def days(value):
+    """
+    Turns a number of days (or default) into an int (or None); raises
+    ValueError for anything else
+    """
+    if value.strip().lower() == 'default':
+        return None
+
+    try:
+        found = int(value)
+
+    except ValueError:
+        found = -1
+
+    if found < 0:
+        raise ValueError(
+            "--retention takes a number of days (0 keeps everything) or "
+            "'default'.")
+
+    return found
 
 
 @click.command(name='watch')
 @click.argument('groups', nargs=-1)
-@click.option('--content/--no-content', default=None,
-              help="Always keep what its small articles say when 'nr "
-                   "update' runs (as --content does); --no-content never "
-                   "does.")
-@click.option('--nzb/--no-nzb', default=None,
-              help="Always read the NZB files posted to it when 'nr update' "
-                   "runs (as --nzb does); --no-nzb never does.")
-@click.option('--default', 'defaults', is_flag=True,
-              help='Go back to the content and nzb settings under '
-                   'processing: in the configuration file.')
 @click.pass_obj
-def group_watch(ctx, groups, content, nzb, defaults):
+def group_watch(ctx, groups):
     """
-    Adds a group to a watch list.
+    Adds groups (or aliases) to the watch list.
 
-    'nr update --watched' fetches what is new in every watched group.  A
-    group can also be told what else 'nr update' does for it, so it never
-    has to be asked for:
+    'nr update --watched' fetches what is new in every watched group.  What
+    else 'nr update' does for a group is set with 'nr group set'.
+    """
+    try:
+        added = ctx['NNTPSettings'].watch(groups)
+
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
+        exit(1)
+
+    except UnknownGroups as e:
+        # A name that matches nothing is most likely a typo
+        logger.error('%s Nothing was added.' % e)
+        exit(1)
+
+    except ValueError as e:
+        logger.error(str(e))
+        exit(1)
+
+    for name in added:
+        logger.info("Added the group '%s' to the watchlist." % name)
+
+
+@click.command(name='set')
+@click.argument('groups', nargs=-1)
+@click.option('--content', type=click.Choice(['yes', 'no', 'default']),
+              help="Keep what its small articles say when 'nr update' "
+                   "runs (as --content does).")
+@click.option('--nzb', type=click.Choice(['yes', 'no', 'default']),
+              help="Read the NZB files posted to it when 'nr update' runs "
+                   "(as --nzb does).")
+@click.option('--retention', metavar='DAYS|default',
+              help="How many days 'nr prune' keeps of it (0 keeps "
+                   "everything).")
+@click.pass_obj
+def group_set(ctx, groups, content, nzb, retention):
+    """
+    Show or change the settings of groups (or aliases).
+
+    Each group follows the settings under processing: in the
+    configuration file until it is given its own; 'default' goes back to
+    them.  Watched or not, a group keeps its settings.  The options of
+    'nr update' (ie: --no-content) still win for one run.
 
     \b
-        nr group watch alt.discuss.coffee --content
-        nr group watch a.b.test --nzb --no-content
-
-    Without them, a group follows the content and nzb settings under
-    processing: in the configuration file (both off unless set).  The
-    options of 'nr update' (ie: --no-content) still win for one run.
-
+        nr group set alt.discuss.coffee --content yes
+        nr group set a.b.test --nzb yes --retention 30
+        nr group set a.b.test --retention default
+        nr group set a.b.test
     """
-    if defaults and (content is not None or nzb is not None):
-        logger.error(
-            '--default puts the options back; leave out --content and '
-            '--nzb (or --default).')
+    options = {}
+    if content is not None:
+        options['content'] = choice(content)
+
+    if nzb is not None:
+        options['nzb'] = choice(nzb)
+
+    try:
+        if retention is not None:
+            options['retention'] = days(retention)
+
+        found = ctx['NNTPSettings'].configure(groups, **options)
+
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
         exit(1)
 
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error("The database is not correctly configured.")
+    except UnknownGroups as e:
+        logger.error('%s Nothing was changed.' % e)
         exit(1)
 
-    # Track our database updates
-    pending_commits = 0
-
-    # A name that matches nothing is most likely a typo; nothing is watched
-    missing = missing_groups(session, groups)
-    if missing:
-        logger.error('No group or alias is called %s; nothing was added.' %
-                     ', '.join("'%s'" % name for name in missing))
+    except ValueError as e:
+        logger.error(str(e))
         exit(1)
 
-    groups = get_groups(session, groups)
-    if not groups:
-        logger.error(
-            "There were no alias/groups found matching your criteria.",
-        )
-        exit(1)
-
-    # PEP8 E712 does not allow us to make a comparison to a boolean value
-    # using the == instead of the keyword 'in'.  However SQLAlchemy
-    # requires us to do just because that's how the amazing tool works.
-    # so to get around the pep8 error, we'll just define a variable equal
-    # to True and then we can compare to it
-    pep8_e712 = False
-
-    for name, _id in groups.items():
-        # Remove the entry if we can otherwise we just gracefully move on
-        if session.query(Group).filter(Group.id == _id)\
-                .filter(Group.watch == pep8_e712)\
-                .update({Group.watch: True}):
-            logger.info("Added the group '%s' to the watchlist." % name)
-            pending_commits += 1
-
-    options = {'content': None, 'nzb': None} if defaults else {
-        name: value for name, value in (('content', content), ('nzb', nzb))
-        if value is not None}
-
-    if options:
-        pending_commits += set_group_options(
-            session, groups.values(), **options)
-
-    if pending_commits > 0:
-        # commit our results
-        session.commit()
-
-    if options:
-        found = get_group_options(session, groups.values())
-        for name, _id in groups.items():
-            click.echo('%s: %s' % (
-                name, describe_options(found.get(_id)) or
-                'as the configuration file says'))
-
-    return
+    for name, settings in found.items():
+        click.echo('%s: %s' % (
+            name, describe_options(settings) or
+            'as the configuration file says'))
 
 
 @click.command(name='unwatch')
@@ -162,114 +192,125 @@ def group_unwatch(ctx, groups):
     """
     Remove specified group(s) from a watchlist.
     """
-    session = ctx['NNTPSettings'].session()
-    if not session:
-        logger.error("The database is not correctly configured.")
+    try:
+        result = ctx['NNTPSettings'].unwatch(groups)
+
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
         exit(1)
 
-    # Track our database updates
-    pending_commits = 0
-
-    groups = get_groups(session, groups)
-    if not groups:
-        logger.error(
-            "There were no alias/groups found matching your criteria.",
-        )
+    except ValueError as e:
+        logger.error(str(e))
         exit(1)
 
-    # PEP8 E712 does not allow us to make a comparison to a boolean value
-    # using the == instead of the keyword 'in'.  However SQLAlchemy
-    # requires us to do just because that's how the amazing tool works.
-    # so to get around the pep8 error, we'll just define a variable equal
-    # to True and then we can compare to it
-    pep8_e712 = True
+    for name in result.removed:
+        logger.info("Removed the group '%s' from the watchlist." % name)
 
-    for name, _id in groups.items():
-        # Remove the entry if we can otherwise we just gracefully move on
-        if session.query(Group).filter(Group.id == _id)\
-                .filter(Group.watch == pep8_e712)\
-                .update({Group.watch: False}):
-            logger.info(
-                "Removed the group '%s' from the watchlist." % name,
-            )
-            pending_commits += 1
+    # The others are still removed; a name that matches nothing is said
+    for name in result.unknown:
+        logger.error("There is no group (or alias) named '%s'." % name)
 
-    if pending_commits > 0:
-        # commit our results
-        session.commit()
+    if result.unknown:
+        exit(1)
 
-    return
+
+@click.command(name='purge')
+@click.argument('groups', nargs=-1)
+@click.pass_obj
+def group_purge(ctx, groups):
+    """
+    Free the space of groups (or aliases).
+
+    Everything kept of them goes: their cached headers, how far they were
+    fetched, and the files, collections and posts indexed from them (what
+    other groups have too stays).  The groups themselves, their settings
+    and whether they are watched stay; a watched one starts over the next
+    time 'nr update' runs.  You are asked first (unless -y is given).
+    """
+    settings = ctx['NNTPSettings']
+    try:
+        found = settings.groups(groups)
+
+    except DatabaseUnavailable:
+        logger.error(NO_DATABASE)
+        exit(1)
+
+    except UnknownGroups as e:
+        logger.error('%s Nothing was removed.' % e)
+        exit(1)
+
+    if not found:
+        logger.error('Name the groups (or aliases) to purge.')
+        exit(1)
+
+    for name in sorted(found):
+        size = settings.group_cache_size(name)
+        click.echo('%s: %s of cached headers' % (
+            name, bytes_to_strsize(size) if size else 'nothing'))
+
+    if not confirmed(ctx, 'Remove everything kept of %s?' % ', '.join(
+            sorted(found))):
+        click.echo('Nothing was removed.')
+        exit(1)
+
+    pruner = NNTPPruner(settings)
+    for name in sorted(found):
+        done = pruner.forget_group(name)
+        click.echo(
+            '%s: purged (%s freed; %d file(s), %d collection(s) and %d '
+            'post(s) removed)' % (
+                name, bytes_to_strsize(done.freed), done.files,
+                done.collections, done.posts))
 
 
 @click.command(name='ls')
-@click.option('--all', '-a', is_flag=True, help='Include all.')
+@click.option('--all', '-a', is_flag=True,
+              help='Every group the servers carry.')
 @click.pass_obj
 def group_list(ctx, all):
     """
-    List the watched groups (every group the servers carry with --all).
+    List the groups that are watched or have something kept.
+
+    A * marks the watched ones.  Each shows how much its cached headers
+    take on disk and its own settings (see 'nr group set'); 'nr group
+    purge' frees the space of one you no longer want.  --all lists every
+    group the servers carry instead.
 
     The groups come from the database, so run 'nr update groups' first to
     learn them (and again now and then to keep them current).  With --all
     and nothing set up yet, the first server is asked instead.
     """
-    # PEP8 E712 does not allow us to make a comparison to a boolean value
-    # using the == instead of the keyword 'in'.  However SQLAlchemy
-    # requires us to do just because that's how the amazing tool works.
-    # so to get around the pep8 error, we'll just define a variable equal
-    # to True and then we can compare to it
-    pep8_e712 = True
+    settings = ctx['NNTPSettings']
+    try:
+        results = settings.group_list(all=all)
 
-    results = None
+    except DatabaseUnavailable:
+        if not all:
+            logger.error(NO_DATABASE)
+            exit(1)
 
-    # Use our Database first if it exists
-    session = ctx['NNTPSettings'].session()
-    if session:
+        # Nothing is set up yet; ask the first server instead
+        results = None
 
-        # Used cached copy if we can
-        try:
-            # Check our database for groups to display
-            if all:
-                results = session.query(Group)\
-                    .order_by(Group.name.asc())\
-                    .all()
-            else:
-                results = session.query(Group)\
-                    .filter(Group.watch == pep8_e712)\
-                    .order_by(Group.name.asc())\
-                    .all()
+    if results and not all:
+        for r in results:
+            size = settings.group_cache_size(r['name'])
+            extra = describe_options(r)
+            click.echo('%s %-60s %10s %10s%s' % (
+                '*' if r['watch'] else ' ', r['name'], r['count'],
+                bytes_to_strsize(size) if size else '-',
+                '  (%s)' % extra if extra else ''))
+        return
 
-        except OperationalError:
-            # database isn't initialized; no problem; just continue
-            pass
-
-        if results is not None:
-            # What 'nr update' does for each of them on its own
-            options = get_group_options(
-                session, [r.id for r in results]) if not all else {}
-
-            # Display result fetched from the database
-            for r in results:
-                extra = describe_options(options.get(r.id))
-                print(('%-65s %10s %s%s' % (
-                    r.name,
-                    r.count,
-                    r.flags,
-                    ' (%s)' % extra if extra else '',
-                )))
-            return
+    if results:
+        for r in results:
+            click.echo('%s %-65s %10s %s' % (
+                '*' if r['watch'] else ' ', r['name'], r['count'],
+                r['flags']))
+        return
 
     if all:
-        # Our fallback is to just query our server if we don't have anything in
-        # the databasse.
-        if not results:
-            results = ctx['NNTPManager'].groups()
-
-        if results:
-            results = sorted(results, key=lambda k: k['group'])
-            for r in results:
-                print(('%-65s %10s %s' % (
-                    r['group'],
-                    r['count'],
-                    r['flags'],
-                )))
-    return
+        results = ctx['NNTPManager'].groups()
+        for r in sorted(results or (), key=lambda k: k['group']):
+            click.echo('  %-65s %10s %s' % (
+                r['group'], r['count'], ''.join(r['flags'])))

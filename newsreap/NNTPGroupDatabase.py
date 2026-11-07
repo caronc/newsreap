@@ -130,6 +130,57 @@ class NNTPGroupDatabase(Database):
         session.commit()
         return removed
 
+    def prune(self, before, server=None, dry_run=False):
+        """
+        Removes every cached header posted before `before` (UTC), indexed
+        or not, and returns how many were removed (or would be, with
+        `dry_run`).
+
+        With `server` (the host the headers were fetched from), the article
+        numbers below what is kept are no longer marked as fetched, so
+        asking for those dates again (ie: nr update --days 90) fetches them
+        again.  A plain 'nr update' still carries on from what is kept.
+        """
+        session = self.session()
+        old = session.query(Article).filter(Article.posted_date < before)
+        if dry_run:
+            return old.count()
+
+        newest_gone = session.query(func.max(Article.article_no))\
+            .filter(Article.posted_date < before).scalar()
+        if newest_gone is None:
+            # Nothing that old
+            return 0
+
+        removed = old.delete(synchronize_session=False)
+
+        if server:
+            # Everything up to just before the oldest article kept was let
+            # go of (a post with a wrong date can make that lower, which
+            # only means less is fetched again)
+            oldest_kept = session.query(func.min(Article.article_no))\
+                .scalar()
+            edge = oldest_kept - 1 if oldest_kept is not None \
+                else newest_gone
+
+            ranges = session.query(ScannedRange)\
+                .filter(ScannedRange.server == server)
+            had = ranges.count()
+            for r in ranges.filter(ScannedRange.low <= edge).all():
+                if r.high <= edge:
+                    session.delete(r)
+                else:
+                    r.low = edge + 1
+
+            session.flush()
+            if had and not ranges.count():
+                # Still remember how far the group was fetched, so a plain
+                # update doesn't start it over
+                session.add(ScannedRange(server=server, low=edge, high=edge))
+
+        session.commit()
+        return removed
+
     def caught_up(self, server, checked):
         """
         Remembers that a scan of `server` reached the newest article it had

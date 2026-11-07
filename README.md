@@ -615,8 +615,12 @@ nr update --watched
 
 # A group can always keep its posts' text (--content) or read the NZB
 # files posted to it (--nzb), without being asked each time
-nr group watch alt.discuss.coffee --content
-nr group watch a.b.test2 --nzb
+nr group set alt.discuss.coffee --content yes
+nr group set a.b.test2 --nzb yes
+
+# 'nr group ls' shows every group with something kept (* = watched), how
+# much space its headers take, and its own settings
+nr group ls
 
 # Consider adding this to a crontab:
 cat << _EOF > /etc/cron.d/newsreap
@@ -649,13 +653,16 @@ nr prune work
 # Indexed headers posted over 90 days ago (their collections stay)
 nr prune headers --days 90 --dry-run
 
-# All three, as the configuration says
+# Transfer statistics older than 31 days
+nr prune statistics
+
+# Every kind, as the configuration says
 nr prune all
 ```
-Without `--days`, each one uses the `prune_downloads`, `prune_work` and
-`raw_retention` settings.  Out of the box, downloads and headers are kept
-until you ask, and work files go after a day.  Finished downloads are never
-touched.
+Without `--days`, each one uses the `prune_downloads`, `prune_work`,
+`raw_retention` and `statistics` settings.  Out of the box, downloads and
+headers are kept until you ask, work files go after a day and transfer
+statistics after 31 days.  Finished downloads are never touched.
 
 ## Developers
 Tests, linting and builds are all run through [tox](https://tox.wiki/):

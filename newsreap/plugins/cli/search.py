@@ -39,7 +39,8 @@ except ImportError:
 
 from newsreap.objects.group.Article import Article
 from newsreap.objects.index.Collection import Collection
-from newsreap.objects.nntp.Common import get_groups
+from newsreap.Database import DatabaseUnavailable
+from newsreap.NNTPDatabase import UnknownGroups
 
 import json
 from collections import namedtuple
@@ -205,21 +206,17 @@ def lookup_groups(ctx, groups):
     Returns the names of the groups the aliases or group names given refer
     to (exits if any of them don't exist)
     """
-    session = ctx['NNTPSettings'].session()
-    if not session:
+    try:
+        return dict(ctx['NNTPSettings'].groups(groups))
+
+    except DatabaseUnavailable:
         logger.error("The database is not correctly configured.")
         exit(1)
 
-    names = {}
-    for group in groups:
-        found = get_groups(session=session, lookup=group)
-        if not found:
-            logger.error("The group/alias '%s' does not exist." % group)
-            exit(1)
-
-        names.update(found)
-
-    return names
+    except UnknownGroups as e:
+        for name in e.names:
+            logger.error("The group/alias '%s' does not exist." % name)
+        exit(1)
 
 
 def raw_lines(ctx, groups, keywords, rank, terms, case_sensitive,
@@ -1080,6 +1077,17 @@ def nothing_indexed(ctx):
         "first (see 'nr group ls' for the groups)."
 
 
+def known_group(ctx, name):
+    """
+    Returns True if name is a group (or alias) we know of
+    """
+    try:
+        return bool(ctx['NNTPSettings'].groups(name, strict=False))
+
+    except DatabaseUnavailable:
+        return False
+
+
 def search_hints(ctx, indexer, keywords, forming, options):
     """
     Returns why a search may have found nothing (and what to try instead)
@@ -1088,11 +1096,9 @@ def search_hints(ctx, indexer, keywords, forming, options):
         yield nothing_indexed(ctx)
         return
 
-    session = ctx['NNTPSettings'].session()
     for keyword in keywords:
         # A group given where the keywords go
-        if '.' in keyword and session and \
-                get_groups(session=session, lookup=keyword):
+        if '.' in keyword and known_group(ctx, keyword):
             yield "'%s' is a group; to look in it: nr search -g %s" % (
                 keyword, keyword)
 

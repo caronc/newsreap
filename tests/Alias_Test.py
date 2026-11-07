@@ -84,6 +84,14 @@ def test_removing_a_group_from_one_alias_leaves_the_others(nr):
     assert aliases(nr) == {'both': [OTHER, TEST]}
 
     assert nr('alias', 'rm', 'both', 'alt.binaries.nosuch').exit_code == 1
+
+    # What can be removed still is; the rest is an error
+    assert nr('alias', 'add', 'two', TEST, OTHER).exit_code == 0
+    result = nr('alias', 'rm', 'two', OTHER, 'alt.binaries.nosuch')
+    assert result.exit_code == 1
+    assert "'alt.binaries.nosuch'" in result.output
+    assert aliases(nr)['two'] == [TEST]
+    assert nr('alias', 'rm', 'two').exit_code == 0
     assert nr('alias', 'rm', 'nosuch').exit_code == 1
 
     assert nr('alias', 'add', 'one', TEST).exit_code == 0
@@ -111,6 +119,35 @@ def test_names_that_match_nothing_are_refused(nr):
     result = nr('alias', 'add', 'index', TEST)
     assert result.exit_code == 1
     assert "'index' can't be an alias" in result.output
+
+
+def test_unwatching_skips_a_typo(nr):
+    """
+    - 'group unwatch' still removes the groups it knows, and names the
+      typo as an error
+    - 'group ls' says to set up the database when it isn't
+    """
+    result = nr('group', 'ls')
+    assert result.exit_code == 1
+    assert "run 'nr db init' first" in result.output
+
+    assert nr('db', 'init').exit_code == 0
+    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'watch', TEST, OTHER).exit_code == 0
+    listed = nr('group', 'ls').output.splitlines()
+    assert [line.split()[:2] for line in listed] == [['*', OTHER],
+                                                     ['*', TEST]]
+
+    result = nr('group', 'set', TEST, '--retention', '30', '--nzb', 'yes')
+    assert result.exit_code == 0
+    assert '%s: nzb, keeps 30 days' % TEST in result.output
+    assert '(nzb, keeps 30 days)' in nr('group', 'ls').output
+
+    result = nr('group', 'unwatch', TEST, 'alt.binaries.typo')
+    assert result.exit_code == 1
+    assert "'alt.binaries.typo'" in result.output
+    listed = nr('group', 'ls').output
+    assert TEST not in listed and OTHER in listed
 
 
 def test_resetting_the_database_asks_first(nr):

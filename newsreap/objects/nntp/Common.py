@@ -12,6 +12,8 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from sqlalchemy import inspect
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import ProgrammingError
 
@@ -24,6 +26,9 @@ from newsreap.NNTPGroup import NNTPGroup
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
+
+# The settings each group can have of its own (see GroupOption)
+GROUP_OPTIONS = ('content', 'nzb', 'retention')
 
 
 def get_groups(session, lookup=None, watched=False):
@@ -178,9 +183,9 @@ def _get_groups(session, lookup=None, watched=False):
 
 def get_group_options(session, group_ids):
     """
-    Returns {group id: {'content': ..., 'nzb': ...}} for the groups given
-    that have options set ('nr group watch --content'); a value of None
-    means the group follows the configuration file
+    Returns {group id: {'content': ..., 'nzb': ..., 'retention': ...}} for
+    the groups given that have options set ('nr group set'); a value of
+    None means the group follows the configuration file
     """
     ids = list(group_ids)
     if not session or not ids:
@@ -188,7 +193,8 @@ def get_group_options(session, group_ids):
 
     try:
         return {
-            option.group_id: {'content': option.content, 'nzb': option.nzb}
+            option.group_id: {name: getattr(option, name)
+                              for name in GROUP_OPTIONS}
             for option in session.query(GroupOption)
             .filter(GroupOption.group_id.in_(ids))}
 
@@ -201,13 +207,24 @@ def get_group_options(session, group_ids):
 
 def set_group_options(session, group_ids, **options):
     """
-    Sets options (content=True, nzb=False, ...) on the groups given; an
-    option given as None goes back to following the configuration file.
-    Returns how many groups changed (not committed).
+    Sets options (content=True, nzb=False, retention=30) on the groups
+    given; an option given as None goes back to following the
+    configuration file.  Returns how many groups changed (not committed).
     """
     # A database made before group options existed gets the table now (on
     # our own connection; another would wait on what we haven't committed)
-    GroupOption.__table__.create(bind=session.connection(), checkfirst=True)
+    connection = session.connection()
+    GroupOption.__table__.create(bind=connection, checkfirst=True)
+
+    # One made before a setting existed gets its column
+    have = {c['name'] for c in inspect(connection).get_columns(
+        GroupOption.__tablename__)}
+    for name in GROUP_OPTIONS:
+        if name not in have:
+            column = GroupOption.__table__.c[name]
+            connection.execute(text('ALTER TABLE %s ADD COLUMN %s %s' % (
+                GroupOption.__tablename__, name,
+                column.type.compile(connection.dialect))))
 
     changed = 0
     for group_id in group_ids:
@@ -216,11 +233,11 @@ def set_group_options(session, group_ids, **options):
             option = GroupOption(group_id=group_id)
             session.add(option)
 
-        before = (option.content, option.nzb)
+        before = [getattr(option, name) for name in GROUP_OPTIONS]
         for name, value in options.items():
             setattr(option, name, value)
 
-        if (option.content, option.nzb) != before:
+        if [getattr(option, name) for name in GROUP_OPTIONS] != before:
             changed += 1
 
     return changed

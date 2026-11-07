@@ -249,6 +249,10 @@ def strsize_to_bytes(strsize):
             # We're dealing with Terabytes
             return size * 1073741824 * 1024
 
+        elif unit == 'P':
+            # We're dealing with Petabytes
+            return size * 1073741824 * 1048576
+
     # In Bits
     if unit == 'K':
         # We're dealing with Kilobytes
@@ -266,37 +270,45 @@ def strsize_to_bytes(strsize):
         # We're dealing with Terabytes
         return size * 1e12
 
+    elif unit == 'P':
+        # We're dealing with Petabytes
+        return size * 1e15
+
     # Unsupported Type
     return None
 
 
-def bytes_to_strsize(byteval):
-    """
-    This function returns the string size equivalent (as a string) that best
-    represents the integer (in bytes) passed in.
+# The units sizes are shown in, smallest first (each 1024 of the one
+# before)
+SIZE_UNITS = ('B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB')
 
+
+def bytes_to_strsize(byteval, short=False):
     """
-    unit = 'B'
+    Returns a size (in bytes) as text in the unit that suits it best (ie:
+    1.50MB), up to exabytes (EB)
+
+    - short: leave out zeros at the end (400KB, 3.4MB rather than 400.00KB,
+      3.40MB)
+    - None is returned if it isn't a number
+    """
     try:
         byteval = float(byteval)
 
-    except(ValueError, TypeError):
+    except (ValueError, TypeError):
         return None
 
-    if byteval >= 1024.0:
-        byteval = byteval / 1024.0
-        unit = 'KB'
-        if byteval >= 1024.0:
-            byteval = byteval / 1024.0
-            unit = 'MB'
-            if byteval >= 1024.0:
-                byteval = byteval / 1024.0
-                unit = 'GB'
-                if byteval >= 1024.0:
-                    byteval = byteval / 1024.0
-                    unit = 'TB'
+    unit = SIZE_UNITS[0]
+    for unit in SIZE_UNITS:
+        if abs(byteval) < 1024.0 or unit == SIZE_UNITS[-1]:
+            break
+        byteval /= 1024.0
 
-    return '%.2f%s' % (round(byteval, 2), unit)
+    text = '%.2f' % round(byteval, 2)
+    if short:
+        text = text.rstrip('0').rstrip('.')
+
+    return text + unit
 
 
 def stat(path, fsinfo=True, mime=True):

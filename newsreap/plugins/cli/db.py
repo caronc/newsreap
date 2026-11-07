@@ -23,20 +23,17 @@ from os.path import dirname
 from os.path import join
 from os.path import isdir
 from os.path import isfile
-from sqlalchemy.exc import OperationalError
+
 try:
-    from newsreap.objects.nntp.Server import Server
+    from newsreap.CliOptions import confirmed
 
 except ImportError:
     # Path
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
-    from newsreap.objects.nntp.Server import Server
+    from newsreap.CliOptions import confirmed
 
-from newsreap.objects.nntp.Group import Group
-
-from newsreap.plugins.cli.status import index_session
-from newsreap.plugins.cli.status import show_groups
-from newsreap.CliOptions import confirmed
+from newsreap.plugins.cli.status import show_details
+from newsreap.Database import DatabaseUnavailable
 from newsreap.Database import sqlite_file
 from newsreap.Database import sqlite_optimize
 from newsreap.NNTPSettings import SQLITE_DATABASE_EXTENSION
@@ -60,37 +57,16 @@ NEWSREAP_CLI_PLUGINS = {
 
 def __db_prep(ctx):
     """
-    A generic database initialization
+    Adds the servers in our configuration that the database doesn't have
+    yet
     """
+    settings = ctx['NNTPSettings']
+    try:
+        settings.add_servers(s['host'] for s in settings.nntp_servers)
 
-    session = ctx['NNTPSettings'].session()
-    if not session:
+    except DatabaseUnavailable:
         logger.error('Could not acquire a database connection.')
         exit(1)
-
-    changes = False
-    # Get Group Listings for all of our servers
-    for s in ctx['NNTPSettings'].nntp_servers:
-        # get our server (if it's kept in the database)
-        server = session.query(Server)\
-            .filter(Server.host == s['host']).first()
-
-        if not server:
-            # Add it if it doesn't exist
-            session.add(Server(
-                # The name field is for display purposes only; for now we just
-                # use the hostname.
-                name=s['host'],
-
-                # Define our host
-                host=s['host'],
-            ))
-
-            # Toggle change flag
-            changes = True
-
-    if changes:
-        session.commit()
 
 
 # Define our functions below
@@ -187,32 +163,25 @@ def database_reset(ctx):
 @click.pass_obj
 def database_status(ctx):
     """
-    Show what has been fetched and indexed so far (by group).
+    Show everything kept so far, in numbers.
 
-    For every group with cached headers (or that is watched): how many
-    headers are cached, how big that cache is, how many collections and
-    archived posts have something from it, and when it was last scanned
-    and indexed.  W marks a watched group.  See 'nr status' for more.
+    \b
+    - how big each database is
+    - how much went to and from each server, and how fast: today,
+      yesterday, the last 7 days and every day kept, next to a usual day
+      (a warning shows when today is much slower, or fails much more)
+    - what the index holds (collections, files, kept posts)
+    - every group with cached headers (or that is watched): its headers,
+      cache size, collections and archived posts, and when it was last
+      scanned and indexed (W marks a watched group)
 
+    See 'nr status' for the setup, and 'nr group ls' for the groups and
+    their settings.
     """
-    settings = ctx['NNTPSettings']
-    session = settings.session()
-    if not session:
-        logger.error('Could not acquire a database connection.')
-        exit(1)
-
     try:
-        session.query(Group.id).first()
+        show_details(ctx['NNTPSettings'])
 
-    except OperationalError:
+    except DatabaseUnavailable:
         click.echo(
             "The database isn't set up yet; run 'nr db init' first.")
         exit(1)
-
-    index, index_db = index_session(settings)
-    try:
-        show_groups(settings, session, index_db)
-
-    finally:
-        if index is not None:
-            index.close()

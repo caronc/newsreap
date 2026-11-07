@@ -39,7 +39,8 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
-from newsreap.objects.nntp.Common import get_groups
+from newsreap.Database import DatabaseUnavailable
+from newsreap.NNTPDatabase import UnknownGroups
 from newsreap.CliOptions import matching
 from newsreap.CliOptions import ranked
 from newsreap.NNTPIndexer import NNTPIndexer
@@ -65,21 +66,17 @@ def lookup_groups(ctx, groups):
     Returns the names of the groups the aliases or group names given refer
     to (exits if any of them don't exist)
     """
-    session = ctx['NNTPSettings'].session()
-    if not session:
+    try:
+        return set(ctx['NNTPSettings'].groups(groups))
+
+    except DatabaseUnavailable:
         logger.error("The database is not correctly configured.")
         exit(1)
 
-    names = set()
-    for group in groups:
-        found = get_groups(session=session, lookup=group)
-        if not found:
-            logger.error("The group/alias '%s' does not exist." % group)
-            exit(1)
-
-        names.update(found)
-
-    return names
+    except UnknownGroups as e:
+        for name in e.names:
+            logger.error("The group/alias '%s' does not exist." % name)
+        exit(1)
 
 
 def open_index(ctx):
