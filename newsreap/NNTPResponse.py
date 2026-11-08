@@ -209,8 +209,9 @@ class NNTPResponse:
         """
 
         if multiline is None:
-            # any 200 reponse is good
-            return self.code // 200 == 1
+            # Any 2xx answer; a 3xx one only means more is wanted from us
+            # (ie: 340 send the article)
+            return isinstance(self.code, int) and 200 <= self.code < 300
 
         elif multiline is True:
             # Check multiline only

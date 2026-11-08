@@ -17,6 +17,7 @@ from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
 from sqlalchemy import SmallInteger
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -82,7 +83,7 @@ class PGPWait(ObjectBase):
 
     # The post
     message_id = Column(
-        String(250), ForeignKey('archive_post.message_id'),
+        Key(250), ForeignKey('archive_post.message_id'),
         primary_key=True)
 
     # Why it couldn't be decrypted the last time (see WaitReason)

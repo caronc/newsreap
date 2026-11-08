@@ -879,3 +879,67 @@ def test_rules_read_their_settings_from_yaml():
     assert rule.after == datetime(2026, 1, 1)
     assert rule.size_over == 10 * 1024 * 1024
     assert rule.groups == ('alt.binaries.*', )
+
+
+def test_crossposted_groups_share_the_rules_that_apply_to_them():
+    """
+    Items crossposted to different sets of groups get the rules made for
+    any of their groups (and the ones for every group); sets that the same
+    rules apply to share one plan
+    """
+    from newsreap.NNTPFilter import NNTPFilter
+    from newsreap.NNTPFilterRule import NNTPFilterRule
+
+    filters = NNTPFilter(rules=[
+        NNTPFilterRule(name='all', subject={'contains': 'x'}, score='1'),
+        NNTPFilterRule(name='tv', groups=['alt.binaries.tv*'],
+                       subject={'contains': 'x'}, score='10'),
+    ])
+
+    def score(*groups):
+        return filters.check(groups, subject='x').score
+
+    assert score('alt.binaries.tv') == 11
+    assert score('alt.binaries.other', 'alt.binaries.tv.hd') == 11
+    assert score('alt.binaries.other') == 1
+    assert score('alt.binaries.a', 'alt.binaries.b') == 1
+    assert score() == 1
+    assert len(filters._plans) == 2
+
+
+def test_a_saved_search_regex_matches_the_way_the_search_did():
+    """
+    A regular expression given on the command line (ie: --iregex-body) is
+    saved as a whole match where a dot also matches line endings, as the
+    search option does
+    """
+    from types import SimpleNamespace
+    from newsreap.NNTPFilterRule import FilterAction
+    from newsreap.NNTPFilterRule import FilterItem
+    from newsreap.plugins.cli.filter import CONDITION_OPTIONS
+    from newsreap.plugins.cli.filter import make_rule
+
+    def rule(regex):
+        conditions = dict.fromkeys(CONDITION_OPTIONS)
+        conditions.update(groups=(), tagged=(), match_any=False, terms=[
+            SimpleNamespace(kind='regex', original=regex, negate=False,
+                            case_sensitive=False, field='body')])
+        return make_rule({}, FilterAction.Drop, conditions)
+
+    assert rule('hello.*world').matches(FilterItem(body='Hello\nthere world'))
+    assert not rule('hello').matches(FilterItem(body='hello\n'))
+    assert not rule('hello').matches(FilterItem(body='hello there'))
+
+
+def test_a_quoted_true_or_false_in_a_rule_is_an_error():
+    """
+    not: and case_sensitive: have to be true or false; quoted ('false') is
+    an error rather than turning the rule around
+    """
+    from newsreap.NNTPFilterRule import NNTPFilterRule
+
+    for option in ('not', 'case_sensitive'):
+        with pytest.raises(ValueError) as found:
+            NNTPFilterRule.from_dict({
+                'name': 'x', 'subject': {'glob': 'Casino*', option: 'false'}})
+        assert '%s must be true or false' % option in str(found.value)

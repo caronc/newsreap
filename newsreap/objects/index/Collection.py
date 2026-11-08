@@ -18,6 +18,7 @@ from sqlalchemy import Integer
 from sqlalchemy import SmallInteger
 from sqlalchemy import String
 from sqlalchemy import DateTime
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -63,7 +64,7 @@ class Collection(ObjectBase):
 
     It keeps everything an NZB file needs (with its files, segments and
     CollectionMeta), so it can be saved as one long after the article
-    headers it was built from are gone.  The counts are kept up to date by `nr update index`,
+    headers it was built from are gone.  The counts are kept up to date by `nr update`,
     so listing collections never has to count their segments.
     """
 
@@ -75,13 +76,13 @@ class Collection(ObjectBase):
     # What its articles have in common (the poster, its name and how many
     # files it has); a repost long after the first gets a collection of
     # its own with the same key
-    key = Column(String(512), nullable=False, index=True)
+    key = Column(Key(512), nullable=False, index=True)
 
     # A lasting id given once it has formed: the md5 of the Message-ID of
     # the first segment of its first file (files sorted by subject).  The
     # same post always gets the same one, wherever it was found (an NZB
     # file of it gets the same one too).
-    gid = Column(String(32), unique=True)
+    gid = Column(Key(32), unique=True)
 
     # Where it came from (see CollectionSource)
     source = Column(

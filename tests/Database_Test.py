@@ -131,16 +131,24 @@ def test_database_passwords_are_never_logged(caplog):
     assert 'secret' not in caplog.text
 
 
-def test_sqlite_refuses_to_remove_rows_still_pointed_to(tmp_path):
+@pytest.mark.parametrize('kept', ['file', 'memory'])
+def test_sqlite_refuses_to_remove_rows_still_pointed_to(tmp_path, kept):
     """
-    SQLite enforces foreign keys as the database servers do: a collection
-    can't be removed while its files still point to it
+    SQLite enforces foreign keys as the database servers do (in a file or
+    in memory): a collection can't be removed while its files still point
+    to it
     """
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError
     from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
+    from newsreap.objects.index.ObjectBase import ObjectBase
 
-    db = NNTPIndexDatabase.from_file(str(tmp_path / 'index.db'))
+    if kept == 'file':
+        db = NNTPIndexDatabase.from_file(str(tmp_path / 'index.db'))
+
+    else:
+        db = NNTPIndexDatabase(engine='sqlite://', reset=False)
+        ObjectBase.metadata.create_all(db._engine)
     session = db.session()
     try:
         session.execute(text(
@@ -315,3 +323,98 @@ def test_connections_a_database_server_dropped_are_replaced(index_db):
         session.add(index_db.Vsp(group='test', key='a', value='1'))
 
     assert saved(index_db, 'a') == '1'
+
+
+def test_numbers_that_pass_two_billion_fit_on_database_servers():
+    """
+    Article numbers, file sizes and file ids are 64 bit on PostgreSQL and
+    MySQL; on SQLite a file id is still numbered for us
+    """
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.dialects import sqlite
+    from sqlalchemy.schema import CreateTable
+    from newsreap.objects.index.ArchiveFile import ArchiveFile
+    from newsreap.objects.index.ArchivedPost import ArchivedPost
+    from newsreap.objects.index.CollectionFile import CollectionFile
+    from newsreap.objects.index.FileGroup import FileGroup
+    from newsreap.objects.index.Segment import Segment
+    from newsreap.objects.nntp.Group import Group
+    from newsreap.objects.nntp.GroupTrack import GroupTrack
+
+    wanted = {
+        GroupTrack: ('low', 'high', 'index_pointer', 'scan_pointer'),
+        Group: ('count', ), ArchivedPost: ('size', ),
+        ArchiveFile: ('size', ), CollectionFile: ('id', ),
+        Segment: ('file_id', ), FileGroup: ('file_id', )}
+
+    for dialect in (postgresql.dialect(), mysql.dialect()):
+        for table, columns in wanted.items():
+            for column in columns:
+                assert table.__table__.c[column].type.compile(
+                    dialect=dialect) == 'BIGINT', (table, column)
+
+    ddl = str(CreateTable(CollectionFile.__table__).compile(
+        dialect=sqlite.dialect()))
+    assert 'id INTEGER NOT NULL' in ddl
+
+
+def test_keys_are_matched_exactly_on_mysql():
+    """
+    Message-IDs, keys and group names are compared exactly on MySQL (its
+    default treats 'A.rar' and 'a.rar' as the same); other databases
+    already do
+    """
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.dialects import sqlite
+    from newsreap.objects.index.Collection import Collection
+    from newsreap.objects.index.CollectionFile import CollectionFile
+    from newsreap.objects.index.Segment import Segment
+    from newsreap.objects.nntp.Group import Group
+
+    for column in (Segment.__table__.c.message_id, CollectionFile.__table__.c.key,
+                   Collection.__table__.c.key, Group.__table__.c.name):
+        assert 'COLLATE utf8mb4_bin' in column.type.compile(
+            dialect=mysql.dialect())
+        for dialect in (sqlite.dialect(), postgresql.dialect()):
+            assert 'COLLATE' not in column.type.compile(dialect=dialect)
+
+    # A subject is still searched without minding case
+    assert 'COLLATE' not in Collection.__table__.c.name.type.compile(
+        dialect=mysql.dialect())
+
+
+def test_opening_a_database_leaves_nothing_waiting(index_engine):
+    """
+    Opening an existing database reads its version without leaving that
+    read open (a server would hold it, and its locks, until our next
+    commit)
+    """
+    from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
+
+    NNTPIndexDatabase.from_engine(index_engine).close()
+    db = NNTPIndexDatabase.from_engine(index_engine)
+    try:
+        assert db.session() is not None
+        assert not db.session().in_transaction()
+    finally:
+        db.close()
+
+
+def test_message_ids_differing_in_case_are_kept_apart(index_db):
+    """
+    Two Message-IDs that only differ in case (or accents) are two
+    articles on every database
+    """
+    from newsreap.objects.index.ArticleRank import ArticleRank
+
+    with index_db.transaction() as session:
+        session.add_all([ArticleRank(message_id='Ab@x', score=1),
+                         ArticleRank(message_id='ab@x', score=2),
+                         ArticleRank(message_id='áb@x', score=3)])
+
+    with index_db.transaction() as session:
+        assert dict(session.query(
+            ArticleRank.message_id, ArticleRank.score)) == {
+                'Ab@x': 1, 'ab@x': 2, 'áb@x': 3}

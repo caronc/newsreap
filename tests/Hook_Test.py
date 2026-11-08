@@ -134,9 +134,9 @@ class Hook_Test(TestBase):
             # iterates over our functions
             assert(callable(function))
 
-        # Test our length; 16 functions where one of them is registered
+        # Test our length; 17 functions where one of them is registered
         # under 2 different hook names
-        assert(len(hookx) == 17)
+        assert(len(hookx) == 18)
 
         # We can delete too
         del hooka['good_entry']

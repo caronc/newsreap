@@ -123,19 +123,6 @@ def post_staged_segment(**kwargs):
 
 
 @hook()
-def post_staged_nzb(**kwargs):
-    """
-    this function gets called after a NZB-File has been staged for saving
-
-    """
-    logger.info(
-        'DEBUG HOOK post_staged_nzb()\n{kwargs}'.format(
-            kwargs=pformat(kwargs, indent=4, depth=2),
-        )
-    )
-
-
-@hook()
 def post_stage(session, **kwargs):
     """
     this function gets called prior to an issued stage
@@ -180,9 +167,48 @@ def upload_article(**kwargs):
 
 
 @hook()
+def pre_nzb(**kwargs):
+    """
+    this function gets called once everything is uploaded, just before the
+    NZB-File is written
+
+    - nzb: set its meta (ie: nzb.meta['title']) or add files of your own
+      (nzb.add(post)); the staged files aren't in it yet (see nzb_file)
+
+    If you return False here, no NZB-File is written
+    """
+    logger.info(
+        'DEBUG HOOK pre_nzb()\n{kwargs}'.format(
+            kwargs=pformat(kwargs, indent=4, depth=2),
+        )
+    )
+
+
+@hook()
+def nzb_file(**kwargs):
+    """
+    this function gets called for each staged file as it is written into
+    the NZB-File
+
+    - post: the file (its subject, poster, groups and articles); change it
+      as you like
+
+    If you return False from this function, the file is left out of the
+    NZB-File
+    """
+    logger.info(
+        'DEBUG HOOK nzb_file()\n{kwargs}'.format(
+            kwargs=pformat(kwargs, indent=4, depth=2),
+        )
+    )
+
+
+@hook()
 def post_upload(**kwargs):
     """
     this function gets called after an upload has completed
+
+    - nzb: the NZB-File written (None if none was)
 
     """
     logger.info(

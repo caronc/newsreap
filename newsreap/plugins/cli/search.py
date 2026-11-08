@@ -39,6 +39,7 @@ except ImportError:
 
 from newsreap.objects.group.Article import Article
 from newsreap.objects.index.Collection import Collection
+from newsreap.objects.index.ArchiveGroup import ArchiveGroup
 from newsreap.Database import DatabaseUnavailable
 from newsreap.NNTPDatabase import UnknownGroups
 
@@ -46,6 +47,7 @@ import json
 from collections import namedtuple
 from itertools import chain
 from itertools import islice
+from tempfile import TemporaryFile
 from types import SimpleNamespace
 
 from sqlalchemy import and_
@@ -55,6 +57,7 @@ from sqlalchemy import literal
 
 from newsreap.NNTPArchiver import DEFAULT_ARCHIVE_MAX_SIZE
 from newsreap.NNTPArchiver import NNTPArchiver
+from newsreap.NNTPArticleBatches import NNTPArticleBatches
 from newsreap.NNTPDownloader import tidy_name
 from newsreap.NNTPFetcher import NNTPFetcher
 from newsreap.NNTPFetcher import replace_if_changed
@@ -62,6 +65,9 @@ from newsreap.Utils import start_program
 from newsreap.Utils import bytes_to_strsize
 from newsreap.NNTPGroupDatabase import NNTPGroupDatabase
 from newsreap.NNTPIndexer import NNTPIndexer
+from newsreap.NNTPIndexer import Purged
+from newsreap.NNTPIndexer import STREAM_SIZE
+from newsreap.NNTPIndexer import chunked
 from newsreap.NNTPArticleRanks import NNTPArticleRanks
 from newsreap.NNTPFilterRule import tags_to_text
 from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
@@ -404,30 +410,44 @@ def post_lines(ctx, keywords, groups, limit, rank, terms, case_sensitive,
         found = archiver.find(
             keywords, groups=groups, limit=limit,
             case_sensitive=case_sensitive, terms=terms, oldest=oldest,
-            key_ids=key_ids, **rank)
+            key_ids=key_ids, stream=True, **rank)
 
-        # Their scores and tags (kept with every article's)
-        ranks = NNTPArticleRanks.load(
-            archiver.session(), [post.message_id for post in found])
+        # Read a few at a time, with their scores and tags (kept with
+        # every article's)
+        for chunk in chunked(found, STREAM_SIZE):
+            ids = [post.message_id for post in chunk]
+            ranks = NNTPArticleRanks.load(archiver.session(), ids)
 
-        for post in found:
-            score, tags = ranks.get(post.message_id, (0, frozenset()))
-            lines = ['%s  %-24.24s  %s%s' % (
-                post.posted.strftime('%Y-%m-%d %H:%M') if post.posted
-                else '????-??-?? ??:??', post.poster, post.subject,
-                rank_text(SimpleNamespace(
-                    score=score, tags=tags_to_text(tags)))),
-                '    <%s>' % post.message_id]
+            # A group each was posted to (the first by name), so its parts
+            # are only put together with others from the same group
+            posted_in = {}
+            for message_id, name in archiver.session().query(
+                    ArchiveGroup.message_id, ArchiveGroup.name)\
+                    .filter(ArchiveGroup.message_id.in_(ids))\
+                    .order_by(ArchiveGroup.name):
+                posted_in.setdefault(message_id, name)
 
-            snippet = archiver.snippet(post, keywords, terms)
-            if snippet:
-                lines.append('    %s' % snippet)
+            for post in chunk:
+                score, tags = ranks.get(post.message_id, (0, frozenset()))
+                lines = ['%s  %-24.24s  %s%s' % (
+                    post.posted.strftime('%Y-%m-%d %H:%M') if post.posted
+                    else '????-??-?? ??:??', post.poster, post.subject,
+                    rank_text(SimpleNamespace(
+                        score=score, tags=tags_to_text(tags)))),
+                    '    <%s>' % post.message_id]
 
-            yield Found(post.message_id, lines, {
-                'kind': 'post', 'message_id': post.message_id,
-                'subject': post.subject, 'poster': post.poster,
-                'posted': post.posted.isoformat() if post.posted else None,
-                'size': post.size, 'score': score, 'tags': sorted(tags)})
+                snippet = archiver.snippet(post, keywords, terms)
+                if snippet:
+                    lines.append('    %s' % snippet)
+
+                yield Found(post.message_id, lines, {
+                    'kind': 'post', 'message_id': post.message_id,
+                    'group': posted_in.get(post.message_id),
+                    'subject': post.subject, 'poster': post.poster,
+                    'posted': post.posted.isoformat() if post.posted
+                    else None,
+                    'size': post.size, 'score': score,
+                    'tags': sorted(tags)})
 
     finally:
         archiver.close()
@@ -741,42 +761,87 @@ def collection_found(entry):
                               .split()))})
 
 
+class Spool:
+    """
+    What a search found, kept in a temporary file (a line of JSON each)
+    rather than in memory, so a search finding millions can still be shown,
+    confirmed and then acted on a chunk at a time
+
+    - counts: how many of each kind ({kind: count}, in the order found)
+    - size: their size added together
+    """
+
+    def __init__(self, fields=None):
+        """
+        - fields: the details kept of each (all of them if None)
+        """
+        self.fields = fields
+        self.counts = {}
+        self.size = 0
+        self._file = TemporaryFile('w+', encoding='utf-8')
+
+    def add(self, entry):
+        data = entry.data if self.fields is None else {
+            key: entry.data[key] for key in self.fields if key in entry.data}
+        # Always at the end (a reader may have stopped part way)
+        self._file.seek(0, 2)
+        self._file.write(json.dumps([entry.key, data]) + '\n')
+
+        kind = entry.data['kind']
+        self.counts[kind] = self.counts.get(kind, 0) + 1
+        self.size += entry.data.get('size') or 0
+
+    def entries(self, kind=None):
+        """
+        Yields what was found (of one kind when given), one at a time
+        """
+        self._file.seek(0)
+        for line in self._file:
+            key, data = json.loads(line)
+            if kind is None or data['kind'] == kind:
+                yield Found(key, (), data)
+
+    def chunks(self, kind, size=STREAM_SIZE):
+        """
+        Yields what was found of one kind, a list of at most `size` at a
+        time
+        """
+        return chunked(self.entries(kind), size)
+
+    def what(self):
+        """
+        How it is said (ie: '2 collection(s), 4 article(s)')
+        """
+        return ', '.join('%d %s(s)' % (count, kind)
+                         for kind, count in self.counts.items())
+
+    def close(self):
+        self._file.close()
+
+    def __len__(self):
+        return sum(self.counts.values())
+
+
 def shown(found, show=True, fields=None):
     """
     Prints what a search found and returns its results (not its headings)
-    with only what is needed to act on them, so a big search isn't held in
-    memory with all of its printed lines
+    in a Spool, with only what is needed to act on them; a big search is
+    never held in memory
 
     - show: print the lines (a quiet run only gathers)
     - fields: the details kept of each result (all of them if None)
     """
-    kept = []
+    kept = Spool(fields=fields)
     for entry in found:
         if show:
             for line in entry.lines:
                 click.echo(line)
 
-        if entry.key is None:
-            # A heading
-            continue
-
-        kept.append(Found(entry.key, (), entry.data if fields is None else {
-            key: entry.data[key] for key in fields if key in entry.data}))
+        if entry.key is not None:
+            # Not a heading
+            kept.add(entry)
 
     return kept
-
-
-def counted(entries):
-    """
-    Returns what search results are, by kind ({kind: [entry]}), and how
-    that is said (ie: '2 collection(s), 4 article(s)')
-    """
-    kinds = {}
-    for entry in entries:
-        kinds.setdefault(entry.data['kind'], []).append(entry)
-
-    return kinds, ', '.join('%d %s(s)' % (len(found), kind)
-                            for kind, found in kinds.items())
 
 
 def download(ctx, found, wanted, download_dir, delete, quiet, title,
@@ -790,15 +855,28 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title,
     - retry_missing: ask again for articles no server had (see NNTPRetry)
     """
     entries = shown(found, show=not quiet)
+    try:
+        return downloaded(ctx, entries, wanted, download_dir, delete, title,
+                          retry_missing=retry_missing)
+
+    finally:
+        entries.close()
+
+
+def downloaded(ctx, entries, wanted, download_dir, delete, title,
+               retry_missing=False):
+    """
+    Downloads what a search found (a Spool; see download()) once the user
+    says so; returns how many couldn't all be saved
+    """
     if not entries:
         click.echo('Nothing found.')
         return 0
 
-    kinds, what = counted(entries)
-    size = sum(entry.data.get('size') or 0 for entry in entries)
+    kinds = entries.counts
     if not ctx.get('noprompt') and not click.confirm(
             'Download %s (%s)%s?' % (
-                what, bytes_to_strsize(size),
+                entries.what(), bytes_to_strsize(entries.size),
                 ' and then remove them' if delete else ''), default=False):
         click.echo('Nothing was downloaded.')
         return 0
@@ -843,10 +921,10 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title,
         retry_missing=retry_missing)
 
     # What was all saved (and so may be removed), and what wasn't
-    saved = []
+    saved = Spool(fields=('kind', 'group'))
     failed = 0
     try:
-        for entry in kinds.get('collection', []):
+        for entry in entries.entries('collection'):
             name = entry.data['name'] or 'collection-%s' % entry.key
             done = True
             if fetching:
@@ -867,7 +945,7 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title,
                     done = False
 
             if done:
-                saved.append(entry)
+                saved.add(entry)
             else:
                 failed += 1
 
@@ -881,42 +959,9 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title,
                 if not title else title if len(
                     {'article', 'post'} & set(kinds)) == 1 \
                 else '%s %ss' % (title, kind)
-            ids = [entry.key for entry in kinds[kind]]
-            files, known = indexer.fetch_files(message_ids=ids) \
-                if indexer.session() is not None else ([], {})
 
-            # The ones that aren't indexed are put together by their
-            # subjects
-            indexed = {m for f in files for _, m in f['segments']}
-            files.extend(NNTPFetcher.files_of(
-                {**entry.data, 'message_id': entry.key}
-                for entry in kinds[kind] if entry.key not in indexed))
-
-            # Each article is saved (or not) on its own
-            unfinished = set()
-            if fetching and not keep(
-                    ctx, fetcher, indexer, name, files, known,
-                    texts=post_texts(ctx, ids) if kind == 'post' and
-                    wanted['text'] else None):
-                unfinished = fetcher.unfinished
-
-            if wanted['nzb']:
-                makedirs(folder, exist_ok=True)
-                path = join(folder, '%s.nzb' % tidy_name(name))
-                if NNTPFetcher.write_nzb(path, files, title=name,
-                                         work_dir=settings.work_dir):
-                    click.echo('%s: saved %s' % (name, path))
-
-                else:
-                    logger.error('%s: the NZB file could not be written.' %
-                                 name)
-                    unfinished = set(ids)
-
-            for entry in kinds[kind]:
-                if entry.key in unfinished:
-                    failed += 1
-                else:
-                    saved.append(entry)
+            failed += loose(ctx, entries.entries(kind), name, kind, wanted,
+                            folder, indexer, fetcher, saved)
 
     except KeyboardInterrupt:
         # What came is kept; nothing is removed
@@ -928,11 +973,17 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title,
         if archiver is not None:
             archiver.close()
 
-    if delete and saved:
-        unremoved = forget(ctx, counted(saved)[0])
-        failed += unremoved
-        if not unremoved:
-            click.echo('Removed %s.' % counted(saved)[1])
+    try:
+        if delete and saved:
+            unremoved, purged = forget(ctx, saved)
+            failed += unremoved
+            if not unremoved:
+                click.echo('Removed %s.' % saved.what())
+            if str(purged):
+                click.echo('Also removed %s.' % (purged, ))
+
+    finally:
+        saved.close()
 
     if failed:
         logger.error('%d of them could not all be saved; running this again '
@@ -942,11 +993,73 @@ def download(ctx, found, wanted, download_dir, delete, quiet, title,
     return failed
 
 
-def keep(ctx, fetcher, indexer, name, files, known, texts=None):
+def loose(ctx, found, name, kind, wanted, folder, indexer, fetcher, saved):
+    """
+    Downloads the articles or posts a search found (see downloaded()): they
+    all go in one folder and one NZB file called `name`, and are fetched a
+    batch of whole files at a time (see NNTPArticleBatches), so memory
+    stays the same however many there are.  What was all saved is added
+    to `saved`; returns how many weren't.
+    """
+    settings = ctx['NNTPSettings']
+    fetching = wanted['files'] or wanted['text'] or wanted['articles']
+    batches = NNTPArticleBatches(indexer, size=settings.batch_size())
+    try:
+        batches.add({**entry.data, 'message_id': entry.key}
+                    for entry in found)
+
+        # The NZB file is written first, a file at a time; if it can't be,
+        # none of them count as saved (so none are removed)
+        listed = True
+        if wanted['nzb']:
+            makedirs(folder, exist_ok=True)
+            path = join(folder, '%s.nzb' % tidy_name(name))
+            if NNTPFetcher.write_nzb(
+                    path, (f for batch in batches
+                           for f in batches.files(batch)[0]),
+                    title=name, work_dir=settings.work_dir):
+                click.echo('%s: saved %s' % (name, path))
+
+            else:
+                logger.error('%s: the NZB file could not be written.' % name)
+                listed = False
+
+        failed = 0
+        total = len(batches)
+        for no, batch in enumerate(batches, 1):
+            # Each article is saved (or not) on its own
+            unfinished = set()
+            if fetching:
+                files, known = batches.files(batch)
+                ids = [article['message_id'] for article in batch]
+                if not keep(
+                        ctx, fetcher, indexer, name, files, known,
+                        texts=post_texts(ctx, ids) if kind == 'post' and
+                        wanted['text'] else None,
+                        label=name if total == 1 else
+                        '%s (batch %d of %d)' % (name, no, total)):
+                    unfinished = fetcher.unfinished
+
+            for article in batch:
+                if not listed or article['message_id'] in unfinished:
+                    failed += 1
+                else:
+                    saved.add(Found(article['message_id'], (), article))
+
+        return failed
+
+    finally:
+        batches.close()
+
+
+def keep(ctx, fetcher, indexer, name, files, known, texts=None, label=None):
     """
     Fetches what is wanted of the files given and keeps what was learned
     in the index; returns True when it was all saved
+
+    - label: how it is called in what is printed (its name when not given)
     """
+    label = label or name
     try:
         done = fetcher.fetch(name, files, known, texts=texts)
 
@@ -960,9 +1073,9 @@ def keep(ctx, fetcher, indexer, name, files, known, texts=None):
                        'index, so running this again may fetch some '
                        'articles to find out what they hold.', err=True)
 
-    click.echo('%s: %s' % (name, fetcher))
+    click.echo('%s: %s' % (label, fetcher))
     if not done:
-        logger.error('%s: %s.' % (name, fetcher.problem))
+        logger.error('%s: %s.' % (label, fetcher.problem))
         if fetcher.staging and isdir(fetcher.staging):
             click.echo('What was downloaded is kept in %s (running this '
                        'again carries on from there)' % fetcher.staging)
@@ -998,71 +1111,77 @@ def remove(ctx, found, groups, pager):
     """
     # Removing only needs what each is and where it is kept
     wanted = shown(found, fields=('kind', 'group'))
-    if not wanted:
-        click.echo('Nothing found.')
-        return
+    try:
+        if not wanted:
+            click.echo('Nothing found.')
+            return
 
-    kinds, what = counted(wanted)
-    if not ctx.get('noprompt') and not click.confirm(
-            'Remove %s?' % what, default=False):
-        click.echo('Nothing was removed.')
-        return
+        if not ctx.get('noprompt') and not click.confirm(
+                'Remove %s?' % wanted.what(), default=False):
+            click.echo('Nothing was removed.')
+            return
 
-    if forget(ctx, kinds):
-        exit(1)
-    click.echo('Removed %s.' % what)
+        failed, purged = forget(ctx, wanted)
+        if not failed:
+            click.echo('Removed %s.' % wanted.what())
+        if str(purged):
+            click.echo('Also removed %s.' % (purged, ))
+        if failed:
+            exit(1)
+
+    finally:
+        wanted.close()
 
 
-def forget(ctx, kinds):
+def forget(ctx, found):
     """
-    Removes search results ({kind: [entry]}; see counted()) everywhere
-    they are kept; returns how many couldn't be
+    Removes search results (a Spool) everywhere they are kept, a chunk at
+    a time, with everything kept of them (see NNTPIndexer.purge()).
+    Returns (failed, purged): how many couldn't be, and what else went (see
+    Purged; what was asked for itself isn't counted in it)
     """
     failed = 0
     settings = ctx['NNTPSettings']
-    if 'collection' in kinds:
-        indexer = NNTPIndexer(settings.index_database())
-        try:
-            for entry in kinds['collection']:
-                if not indexer.delete(entry.key):
-                    logger.error(
-                        'Could not remove collection %s.' % entry.key)
-                    failed += 1
+    kinds = found.counts
 
-        finally:
-            indexer.close()
+    # Everything kept of what goes goes with it (see NNTPIndexer.purge()):
+    # the cached headers of its articles, the posts the archive kept, their
+    # scores and tags, and the files and collections nothing is left of
+    purged = Purged(0, 0, 0, 0, 0)
+    indexer = NNTPIndexer(settings.index_database())
+    try:
+        for entry in found.entries('collection'):
+            if not indexer.delete(
+                    entry.key, group_database=settings.group_database):
+                logger.error('Could not remove collection %s.' % entry.key)
+                failed += 1
+                continue
 
-    if 'post' in kinds:
-        archiver = NNTPArchiver(settings.index_database(), default_hooks=False)
-        try:
-            archiver.forget([entry.key for entry in kinds['post']])
+            # Its files and articles went with the collection asked for;
+            # only what was kept of them elsewhere is said below
+            purged = purged.plus(indexer.purged._replace(
+                articles=0, files=0, collections=0))
 
-        finally:
-            archiver.close()
+        for kind in ('post', 'article'):
+            for chunk in found.chunks(kind):
+                removed = indexer.purge(
+                    [entry.key for entry in chunk],
+                    group_database=settings.group_database,
+                    groups={entry.data.get('group') for entry in chunk
+                            if entry.data.get('group')})
 
-    if 'article' in kinds:
-        # From the cache of each group they were found in, with their scores
-        # and tags
-        by_group = {}
-        for entry in kinds['article']:
-            by_group.setdefault(entry.data['group'], []).append(entry.key)
+                # A post found is the post kept, and an article found its
+                # header in the group it was found in
+                purged = purged.plus(
+                    removed._replace(posts=max(
+                        0, removed.posts - len(chunk))) if kind == 'post'
+                    else removed._replace(headers=max(
+                        0, removed.headers - len(chunk))))
 
-        for name, ids in by_group.items():
-            cache = NNTPGroupDatabase.from_file(settings.group_database(name))
-            try:
-                cache.forget(ids)
+    finally:
+        indexer.close()
 
-            finally:
-                cache.close()
-
-        indexer = NNTPIndexer(settings.index_database())
-        try:
-            indexer.forget_ranks([entry.key for entry in kinds['article']])
-
-        finally:
-            indexer.close()
-
-    return failed
+    return failed, purged
 
 
 def nothing_indexed(ctx):
@@ -1071,7 +1190,7 @@ def nothing_indexed(ctx):
     """
     cache_dir = dirname(ctx['NNTPSettings'].group_database('_'))
     if isdir(cache_dir) and listdir(cache_dir):
-        return "Nothing indexed yet; run 'nr update index' first."
+        return "Nothing indexed yet; run 'nr update' first."
 
     return "Nothing fetched yet; run 'nr update <group> --newest 100000' " \
         "first (see 'nr group ls' for the groups)."

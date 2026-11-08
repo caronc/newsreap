@@ -142,3 +142,20 @@ class CodecFile_Test(TestBase):
         assert content.filepath in results
         assert article_content.filepath in results
         assert sub_dir in results
+
+
+def test_a_directory_takes_in_only_what_is_inside_it(tmp_path):
+    """
+    Paths inside a directory that was given too are left out; unrelated
+    directories, and files that only start with a directory's name, stay
+    """
+    for name in ('movie/a.mkv', 'movie/sub/b.srt', 'movie.nfo',
+                 'other/c.txt'):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes(b'x')
+
+    paths = CodecFile().get_paths([
+        str(tmp_path / name) for name in (
+            'movie', 'movie/a.mkv', 'movie/sub', 'movie.nfo', 'other')])
+    assert sorted(paths) == sorted(
+        str(tmp_path / name) for name in ('movie', 'movie.nfo', 'other'))

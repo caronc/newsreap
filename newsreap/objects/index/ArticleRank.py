@@ -15,6 +15,7 @@
 from sqlalchemy import Column
 from sqlalchemy import Integer
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -32,7 +33,7 @@ class ArticleRank(ObjectBase):
     __tablename__ = 'article_rank'
 
     # The article's Message-ID (without its < and >)
-    message_id = Column(String(250), primary_key=True)
+    message_id = Column(Key(250), primary_key=True)
 
     # Its score and tags (space separated)
     score = Column(Integer, nullable=False, default=0, index=True)

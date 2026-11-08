@@ -12,7 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 """
-Fetches the small articles of a group (the ones 'nr update search' cached
+Fetches the small articles of a group (the ones 'nr update' cached
 the headers of) and keeps what they say, so a group full of discussion can
 be read and searched offline.
 
@@ -36,7 +36,6 @@ be read and searched offline.
 
 
 import re
-from collections import deque
 from os.path import abspath
 from os.path import dirname
 from os.path import isfile
@@ -44,6 +43,7 @@ from os.path import join
 from tempfile import gettempdir
 from time import monotonic
 
+from gevent import wait
 from sqlalchemy import and_
 from sqlalchemy import literal
 from sqlalchemy import literal_column
@@ -65,6 +65,7 @@ from .NNTPIndexDatabase import PG_POST_DOCUMENT
 from .NNTPIndexer import FILENAME_CODECS
 from .NNTPIndexer import MAX_MESSAGE_ID
 from .NNTPIndexer import NNTPIndexer
+from .NNTPIndexer import streamed
 from .NNTPIndexer import SegmentNote
 from .NNTPIndexer import chunked
 from .NNTPIndexer import TERM_PARAMS
@@ -205,8 +206,12 @@ class NNTPArchiver:
     def session(self, create=False):
         """
         Returns a session to the index database; None if it doesn't exist
-        yet (unless `create` is set)
+        yet (unless `create` is set), or when we have none (only our hooks
+        are used)
         """
+        if self.db_file is None:
+            return None
+
         if self._db is None:
             if not create and not NNTPIndexDatabase.exists(self.db_file):
                 # Nothing was ever kept
@@ -735,8 +740,9 @@ class NNTPArchiver:
     def _fetch(manager, wanted, work_dir, group, window, decoders=False):
         """
         Fetches the articles wanted, keeping `window` of them asked for at
-        once; yields ((message_id, row), (article, status)) in the order
-        given: the article (None if it wasn't fetched) and how the fetch
+        once; yields ((message_id, row), (article, status)) as they come
+        back (a slow one never holds up the rest): the article (None if it
+        wasn't fetched) and how the fetch
         went ('found', 'missing', 'denied' or 'failed'; see
         NNTPConnection.fetch_status())
 
@@ -747,7 +753,7 @@ class NNTPArchiver:
         asked for are still yielded (for up to STOP_WAIT seconds), then
         KeyboardInterrupt is raised.  Pressing it again stops at once.
         """
-        pending = deque()
+        pending = []
         todo = iter(wanted)
 
         # When we stop waiting (once Ctrl-C was pressed)
@@ -773,13 +779,14 @@ class NNTPArchiver:
         try:
             submit()
             while pending:
-                # Handle them in the order we asked
-                entry, request = pending[0]
+                # Whichever are back first
+                requests = [request for _, request in pending]
                 try:
                     if stop_at is None:
-                        request.wait()
+                        wait(requests, count=1)
 
-                    elif not request.wait(max(0.0, stop_at - monotonic())):
+                    elif not wait(requests, count=1, timeout=max(
+                            0.0, stop_at - monotonic())):
                         # Out of time; the rest is asked for next time
                         break
 
@@ -791,13 +798,18 @@ class NNTPArchiver:
                     stop_at = monotonic() + STOP_WAIT
                     continue
 
-                pending.popleft()
+                ready, waiting = [], []
+                for each in pending:
+                    (ready if each[1].is_set() else waiting).append(each)
+                pending[:] = waiting
+
                 if stop_at is None:
-                    # Keep our connections busy while this one is kept
+                    # Keep our connections busy while these are kept
                     submit()
 
-                results = list(request.response) + [None, None]
-                yield entry, (results[0], results[1] or 'failed')
+                for entry, request in ready:
+                    results = list(request.response) + [None, None]
+                    yield entry, (results[0], results[1] or 'failed')
 
             if stop_at is not None:
                 raise KeyboardInterrupt
@@ -810,7 +822,8 @@ class NNTPArchiver:
     def find(self, keywords=(), groups=None, kinds=ARCHIVE_SEARCHED,
              limit=None, case_sensitive=False, tags=None, without_tags=None,
              min_score=None, max_score=None, terms=None, scores=None,
-             after=None, before=None, oldest=False, key_ids=None):
+             after=None, before=None, oldest=False, key_ids=None,
+             stream=False):
         """
         Returns the posts (newest first) with every keyword in their
         subject, text or file names (see keyword_choices(); 'a|b' finds
@@ -836,6 +849,8 @@ class NNTPArchiver:
         - oldest: oldest first (instead of newest first)
         - key_ids: only posts naming one of these PGP key IDs (signed by
           it, encrypted for it or carrying it; see NNTPKeyring.resolve())
+        - stream: read them a few at a time as they are used (a list
+          otherwise), so a search finding millions doesn't hold them all
         """
         session = self.session()
         if session is None:
@@ -893,7 +908,10 @@ class NNTPArchiver:
             else query.order_by(
                 ArchivedPost.posted.desc(), ArchivedPost.id.desc())
 
-        return query.limit(limit).all() if limit else query.all()
+        if limit:
+            query = query.limit(limit)
+
+        return streamed(query) if stream else query.all()
 
     def _term(self, session, no, term):
         """

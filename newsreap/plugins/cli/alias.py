@@ -98,14 +98,6 @@ def alias_add(ctx, alias, groups):
         logger.error("You must specify at least one group after the alias.")
         exit(1)
 
-    # 'nr update <alias>' would run that step of update instead
-    root = click.get_current_context().find_root()
-    update = root.command.get_command(root, 'update')
-    if update is not None and _alias in update.list_commands(root):
-        logger.error("'%s' can't be an alias; 'nr update %s' is a command of "
-                     "its own." % (_alias, _alias))
-        exit(1)
-
     try:
         added = ctx['NNTPSettings'].alias_add(_alias, groups)
 

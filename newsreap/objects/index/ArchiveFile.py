@@ -16,6 +16,8 @@ from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
+from newsreap.objects import BigNumber
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -33,7 +35,7 @@ class ArchiveFile(ObjectBase):
 
     # The article it was found in
     message_id = Column(
-        String(250), ForeignKey('archive_post.message_id'), nullable=False,
+        Key(250), ForeignKey('archive_post.message_id'), nullable=False,
         index=True)
 
     # The file's name
@@ -46,7 +48,7 @@ class ArchiveFile(ObjectBase):
     content_type = Column(String(128), nullable=False, default='')
 
     # The size of the whole file (in bytes) when known
-    size = Column(Integer)
+    size = Column(BigNumber)
 
     # Which part of the file this article holds, and of how many
     part = Column(Integer)

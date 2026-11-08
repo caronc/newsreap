@@ -28,6 +28,7 @@ from cryptography.hazmat.backends import default_backend
 
 from os.path import isfile
 from datetime import datetime
+from time import monotonic
 
 import errno
 
@@ -288,27 +289,20 @@ class SocketBase:
         """ Socket Wrapper for people using this class as if it were just
             a python socket class
             """
-        data = b''
-
-        # Close socket and exit gracefully as retry count was met
         if self.socket is not None:
-            # Copy rest of input buffer
+            # Tell the other side we're done, then let go of the socket
             try:
-                data = self.socket.recv()
-                if data is None:
-                    data = b''
+                self.socket.shutdown(socket.SHUT_RDWR)
 
-            except Exception:
+            except OSError:
+                # Already gone
                 pass
 
             try:
-                self.socket.shutdown()
-            except:
-                # Close connection
-                try:
-                    self.socket.close()
-                except:
-                    pass
+                self.socket.close()
+
+            except OSError:
+                pass
 
             # Call a close hook
             self.hooks.call(
@@ -338,9 +332,7 @@ class SocketBase:
         self._remote_addr = None
         self._remote_port = None
 
-        # return any lingering data in buffer
-        if data:
-            return data
+        # Nothing is read back while closing
         return b''
 
     def bind(self, timeout=None, retries=3, retry_wait=10.0,
@@ -447,7 +439,7 @@ class SocketBase:
         logger.debug("Socket timeout set to :%ds" % (timeout))
 
         # Get reference time
-        cur_time = datetime.now()
+        cur_time = monotonic()
 
         while True:
             try:
@@ -472,6 +464,12 @@ class SocketBase:
                     # Keep alive flag
                     self.socket.setsockopt(
                         socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+                    # Send what we write right away; otherwise the end of
+                    # each posted article waits on the server to
+                    # acknowledge what came before it (up to 40ms each)
+                    self.socket.setsockopt(
+                        socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     self.socket.settimeout(timeout)
 
                     try:
@@ -520,28 +518,14 @@ class SocketBase:
                 break
 
             except ssl.SSLError as e:
-                # Secure Connection Failed
+                # This attempt can't be secured (a later connect() starts
+                # over)
                 self.close()
-                logger.warning(
+                raise SocketRetryLimit(
                     "Failed to secure connection using %s: %s" % (
                         SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
                         e.reason or e,
-                    ),
-                )
-
-                if self.secure is True:
-                    # Fetch next (but only if nothing was explicitly
-                    # specified)
-                    self.__ssl_version(try_next=True)
-                    continue
-
-                # If we reach here, we had a problem with our secure connection
-                # handshaking and we were explicitly told to only use 1 (one)
-                # protocol.  Thus there is nothing more to retry.  So throwing
-                # a SocketException() is not a good idea.  Instead, we throw
-                # a SocketRetryLimit() so it can be handled differently
-                # upstream
-                raise SocketRetryLimit('There are no protocols left to try.')
+                    ))
 
             except socket.error as e:
                 logger.debug("Socket exception received: %s" % (e))
@@ -564,9 +548,7 @@ class SocketBase:
             if timeout:
                 # Compare reference time with time now and sleep for the
                 # difference defined by timeout
-                delta_time = datetime.now() - cur_time
-                delta_time = (delta_time.days * 86400) + delta_time.seconds \
-                    + (delta_time.microseconds / 1e6)
+                delta_time = monotonic() - cur_time
 
                 if delta_time >= timeout:
                     # Connection timeout elapsed
@@ -634,7 +616,7 @@ class SocketBase:
         (self._local_addr, self._local_port) = self.socket.getsockname()
 
         # Get reference time
-        cur_time = datetime.now()
+        cur_time = monotonic()
         while True:
             try:
                 conn, (self._remote_addr, self._remote_port) = \
@@ -674,9 +656,7 @@ class SocketBase:
             if timeout:
                 # Compare reference time with time now and sleep for the
                 # difference defined by timeout
-                delta_time = datetime.now() - cur_time
-                delta_time = (delta_time.days * 86400) + delta_time.seconds \
-                    + (delta_time.microseconds / 1e6)
+                delta_time = monotonic() - cur_time
 
                 if delta_time >= timeout:
                     # Connection timeout elapsed
@@ -729,7 +709,7 @@ class SocketBase:
             # so let's go ahead and break out of our connection loop
 
         except ssl.SSLError as e:
-            # Secure Connection Failed
+            # This connection can't be secured
             logger.debug(
                 "Failed to secure connection using %s / errno=%s" % (
                     SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][1],
@@ -737,19 +717,7 @@ class SocketBase:
                 ),
             )
             self.close()
-
-            if self.secure is True:
-                # Fetch next (but only if nothing was explicitly
-                # specified)
-                self.__ssl_version(try_next=True)
-                raise SocketException('Secure Connection Failed')
-
-            # If we reach here, we had a problem with our secure connection
-            # handshaking and we were explicitly told to only use 1 (one)
-            # protocol.  Thus there is nothing more to retry.  So throwing
-            # a SocketException() is not a good idea.  Instead, we throw
-            # a SocketRetryLimit() so it can be handled differently upstream
-            raise SocketRetryLimit('There are no protocols left to try.')
+            raise SocketException('Secure Connection Failed')
 
         except socket.error as e:
             # logger.debug("Exception received: %s " % (e));
@@ -797,7 +765,7 @@ class SocketBase:
         total_data = []
 
         # Get reference time
-        cur_time = datetime.now()
+        cur_time = monotonic()
 
         # track bytes read
         bytes_read = 0
@@ -827,9 +795,7 @@ class SocketBase:
             # as well.
 
             # Update Elapsed Time
-            elapsed_time = datetime.now() - cur_time
-            elapsed_time = (elapsed_time.days * 86400) \
-                + elapsed_time.seconds + (elapsed_time.microseconds / 1e6)
+            elapsed_time = monotonic() - cur_time
 
             if timeout and elapsed_time > timeout:
                 # Time is up; return what we have
@@ -849,11 +815,7 @@ class SocketBase:
                     total_data.append(data)
 
                     # Get our elapsed transfer time
-                    elapsed_xfer_time = datetime.now() - cur_time
-                    elapsed_xfer_time = (
-                        (elapsed_xfer_time.days * 86400) +
-                        elapsed_xfer_time.seconds +
-                        (elapsed_xfer_time.microseconds / 1e6)) - elapsed_time
+                    elapsed_xfer_time = monotonic() - cur_time - elapsed_time
 
                     # Call read hook
                     self.hooks.call(
@@ -955,7 +917,7 @@ class SocketBase:
         tot_bytes = 0
 
         # Get reference time
-        cur_time = datetime.now()
+        cur_time = monotonic()
 
         # Current elapsed time
         elapsed_time = 0.0
@@ -983,9 +945,7 @@ class SocketBase:
             stale_timer = Timeout(stale_timeout)
 
             # Update Elapsed Time
-            elapsed_time = datetime.now() - cur_time
-            elapsed_time = (elapsed_time.days * 86400) \
-                + elapsed_time.seconds + (elapsed_time.microseconds / 1e6)
+            elapsed_time = monotonic() - cur_time
 
             try:
                 # Start stale_timer
@@ -998,11 +958,7 @@ class SocketBase:
                 stale_timer.cancel()
 
                 # Get our elapsed transfer time
-                elapsed_xfer_time = datetime.now() - cur_time
-                elapsed_xfer_time = (
-                    (elapsed_xfer_time.days * 86400) +
-                    elapsed_xfer_time.seconds +
-                    (elapsed_xfer_time.microseconds / 1e6)) - elapsed_time
+                elapsed_xfer_time = monotonic() - cur_time - elapsed_time
 
                 if not bytes_sent:
                     self.close()
@@ -1087,24 +1043,6 @@ class SocketBase:
 
         return (self._remote_addr, self._remote_port)
 
-    def __ssl_version(self, try_next=False):
-        """
-        Returns an SSL Context Object while handling the many
-        supported protocols
-        """
-
-        if try_next:
-            # Increment version
-            self.secure_protocol_idx += 1
-
-        while self.secure_protocol_idx < len(SECURE_PROTOCOL_PRIORITY):
-            # Now return it
-            return SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][0]
-
-        # If we reach here, we had a problem; use SocketRetryLimit() instead
-        # of SocketException() since we're at the end of the line now.
-        raise SocketRetryLimit('There are no protocols left to try.')
-
     def __encrypt_socket(self, timeout=None, retry_wait=1.00,
                          verify=True, server_side=False):
         """
@@ -1131,8 +1069,7 @@ class SocketBase:
             # Nothing to do if we have no socket to work with
             raise SocketException("No connection")
 
-        # Make sure we still have a protocol left to try
-        self.__ssl_version()
+        # The oldest TLS version we accept
         version = SECURE_PROTOCOL_PRIORITY[self.secure_protocol_idx][2]
 
         if server_side:
@@ -1194,108 +1131,66 @@ class SocketBase:
             suppress_ragged_eofs=True,
         )
 
-        # Get reference time
-        cur_time = datetime.now()
-
+        # The handshake takes turns with the other side; it gives up once
+        # the timeout (if one was given) has passed
+        deadline = monotonic() + timeout if timeout else None
         while True:
-            # Infinit loop is nessisary for do_handshake() wrapping
-            # we'll either exit this loop with a secure connection
-            # or we'll time out and gracefully exit.
             try:
-                # This command does a lot of the magic
-                try:
-                    self.socket.do_handshake()
-
-                except ssl.SSLCertVerificationError as e:
-                    # Trying again (or another protocol) won't help
-                    self.close()
-                    raise SocketRetryLimit(
-                        "The certificate of %s could not be verified (%s); "
-                        "if it is self signed, set ca_certs to it (or "
-                        "verify_cert to False)" % (
-                            self.host, e.verify_message or e.reason))
-
-                logger.info("Secured connection using %s." % (
-                    self.socket.version()))
-
-                if not server_side:
-                    # Store our peer certificate
-                    try:
-                        # self.peer_certificate = \
-                        #    self.socket.getpeercert(binary_form=False)
-                        # Returns None if there is no certificate for the peer
-                        # on the other end; there is always a binary form, but
-                        # not always the non-binary version
-                        binary_cert = self.socket.getpeercert(binary_form=True)
-
-                    except ValueError:
-                        # SSL Handshaking hasn't completed yet; this is a
-                        # horrible state to be in if this is the case because
-                        # we're only at this part of the code because this
-                        # handshaking is presumed to have already been
-                        # complete.
-
-                        # Fail at this point for the reason there is something
-                        # wrong with our SSL.
-                        raise SocketException('Secure handshaking failure')
-
-                    try:
-                        # load_der_x509_certificate() also throws a ValueError
-                        # if it couldn't parse the certificate. So we need a
-                        # separate try/except after acquiring the binary
-                        # certificate
-                        self.peer_certificate = x509.load_der_x509_certificate(
-                            binary_cert,
-                            default_backend(),
-                        )
-                    except ValueError:
-                        # we couldn't acquire the certificate
-                        self.peer_certificate = None
-                        if verify:
-                            raise SocketRetryLimit(
-                                "Could not acquire site certificate.",
-                            )
-                        logger.warning("Could not acquire site certificate.")
-
-                # We're done
-                self.connected = True
-                return
+                self.socket.do_handshake()
+                break
 
             except ssl.SSLWantReadError:
-                # SSL Connection will block until it is ready
-                # The problem with this is can_read() and can_write()
-                # all return True.  the socket needs more time
-                # though to initialize so we have to call sleep here
-                if self.can_read(retry_wait) is None:
-                    self.close()
-                    raise SocketException('Connection broken')
-                continue
+                ready = self.can_read
 
             except ssl.SSLWantWriteError:
-                # SSL Connection will block until it is ready
-                # The problem with this is can_read() and can_write()
-                # all return True.  the socket needs more time
-                # though to initialize so we have to call sleep here
-                if self.can_write(retry_wait) is None:
+                ready = self.can_write
+
+            except ssl.SSLCertVerificationError as e:
+                # Trying again won't help
+                self.close()
+                raise SocketRetryLimit(
+                    "The certificate of %s could not be verified (%s); "
+                    "if it is self signed, set ca_certs to it (or "
+                    "verify_cert to False)" % (
+                        self.host, e.verify_message or e.reason))
+
+            wait = retry_wait
+            if deadline is not None:
+                wait = min(wait, deadline - monotonic())
+                if wait <= 0:
                     self.close()
-                    raise SocketException('Connection broken')
-                continue
+                    raise SocketException('Secure Connection Timeout')
 
-            if timeout:
-                # Update Elapsed Time
-                elapsed_time = datetime.now() - cur_time
-                elapsed_time = (elapsed_time.days * 86400) \
-                    + elapsed_time.seconds + (elapsed_time.microseconds / 1e6)
+            if ready(wait) is None:
+                self.close()
+                raise SocketException('Connection broken')
 
-                if elapsed_time > timeout:
-                    # Times up
-                    self.close()
-                    raise SocketException(
-                        'Secure Connection Timeout')
+        logger.info("Secured connection using %s." % self.socket.version())
 
-        # This code is unreachable but just to satisify standards
-        # we'll put a return statement here
-        return
+        if not server_side:
+            # Store our peer certificate (there is always a binary form)
+            try:
+                binary_cert = self.socket.getpeercert(binary_form=True)
+
+            except ValueError:
+                # The handshake didn't really finish
+                raise SocketException('Secure handshaking failure')
+
+            try:
+                self.peer_certificate = x509.load_der_x509_certificate(
+                    binary_cert,
+                    default_backend(),
+                )
+            except (TypeError, ValueError):
+                # we couldn't acquire the certificate
+                self.peer_certificate = None
+                if verify:
+                    raise SocketRetryLimit(
+                        "Could not acquire site certificate.",
+                    )
+                logger.warning("Could not acquire site certificate.")
+
+        self.connected = True
 
     def __del__(self):
         """

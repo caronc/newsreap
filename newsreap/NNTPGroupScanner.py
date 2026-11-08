@@ -24,7 +24,6 @@ group's own database so they can be searched offline.
 """
 
 
-from collections import deque
 from datetime import timedelta
 from itertools import islice
 from os import makedirs
@@ -36,11 +35,13 @@ from os.path import isfile
 from os.path import join
 from shutil import copyfile
 
+from gevent import wait
 from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 
 from .NNTPArticleRanks import NNTPArticleRanks
 from .NNTPFilterRule import NNTPFilterRule
+from .Database import SQLITE_SIDE_FILES
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPIndexDatabase import NNTPIndexDatabase
 from .codecs.CodecArticleIndex import XoverGrouping
@@ -392,7 +393,7 @@ class NNTPGroupScanner:
             'OR REPLACE' if force else 'OR IGNORE')
 
         # Requests that are waiting on (or holding) results
-        outstanding = deque()
+        outstanding = []
 
         def submit():
             # Top our requests back up to our window size
@@ -407,40 +408,20 @@ class NNTPGroupScanner:
         try:
             submit()
             while outstanding:
-                # Handle our requests in the order we made them
-                low, high, request = outstanding.popleft()
-                request.wait()
+                # Whichever batches are back first (each one is saved on
+                # its own, so the order doesn't matter); a slow one never
+                # holds up the rest
+                wait([request for _, _, request in outstanding], count=1)
+                ready, waiting = [], []
+                for entry in outstanding:
+                    (ready if entry[2].is_set() else waiting).append(entry)
+                outstanding[:] = waiting
 
-                # Keep our connections busy while we save this batch
+                # Keep our connections busy while we save these
                 submit()
 
-                result = request.response[0] if len(request) else None
-                if result is None:
-                    # This batch is fetched again on our next scan
-                    logger.warning(
-                        'Could not fetch articles %d-%d from %s.' % (
-                            low, high, self.group))
-                    self.failed += 1
-                    continue
-
-                rows = self._rows(result.values())
-
-                if rows:
-                    # Save our articles
-                    session.execute(insert, rows)
-
-                # Remember this range together with its articles, so a scan
-                # that stops part way picks up where it left off
-                self.mark(session, low, high)
-                session.commit()
-                self._save_ranks()
-
-                self.articles += len(rows)
-                self.batches += 1
-                done += high - low + 1
-
-                logger.debug('Cached %d article(s) from %d-%d (%s).' % (
-                    len(rows), low, high, self.group))
+                for low, high, request in ready:
+                    done += self._save(session, insert, low, high, request)
 
         finally:
             # Anything not handled yet (ie: Ctrl-C) is no longer wanted
@@ -454,6 +435,45 @@ class NNTPGroupScanner:
                 self._index = None
 
         return done
+
+    def _save(self, session, insert, low, high, request):
+        """
+        Saves a batch that came back (and marks its range as fetched);
+        returns how many article numbers it covered (0 when it failed and is
+        fetched again on our next scan)
+        """
+        result = request.response[0] if len(request) else None
+        if result is None:
+            logger.warning(
+                'Could not fetch articles %d-%d from %s.' % (
+                    low, high, self.group))
+            self.failed += 1
+            return 0
+
+        rows = self._rows(result.values())
+        if rows:
+            session.execute(insert, rows)
+
+        # Their scores and tags first (saving them again does no harm); if
+        # that fails, the batch is let go of and fetched again next time
+        try:
+            self._save_ranks()
+
+        except Exception:
+            session.rollback()
+            raise
+
+        # Remember this range together with its articles, so a scan that
+        # stops part way picks up where it left off
+        self.mark(session, low, high)
+        session.commit()
+
+        self.articles += len(rows)
+        self.batches += 1
+
+        logger.debug('Cached %d article(s) from %d-%d (%s).' % (
+            len(rows), low, high, self.group))
+        return high - low + 1
 
     def _rows(self, articles):
         """
@@ -631,4 +651,9 @@ class _GroupDatabase:
             staged = '%s.new' % self.db_file
             copyfile(self.work_file, staged)
             replace(staged, self.db_file)
-            unlink(self.work_file)
+
+            # The copy, and what SQLite kept beside it
+            for path in (self.work_file, *(
+                    self.work_file + side for side in SQLITE_SIDE_FILES)):
+                if isfile(path):
+                    unlink(path)

@@ -15,6 +15,7 @@
 from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -31,7 +32,7 @@ class GroupClock(ObjectBase):
     __tablename__ = 'group_clock'
 
     # The group's name
-    name = Column(String(128), primary_key=True)
+    name = Column(Key(128), primary_key=True)
 
     # Everything posted before this has been seen
     seen = Column(DateTime, nullable=False)

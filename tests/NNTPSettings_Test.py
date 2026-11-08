@@ -13,6 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 import sys
+import pytest
 from os.path import join
 from os.path import dirname
 from os.path import abspath
@@ -470,13 +471,9 @@ class NNTPSettings_Test(TestBase):
         assert(settings.apply_mask('%{work_dir}', lazy=True) ==
                join(self.tmp_dir, 'blah'))
 
-        # Caching will cause the old directory to still be returned
+        # The current values are always used
         settings.work_dir = '%{base_dir}/new_dir'
         assert(settings.apply_mask('%{work_dir}', lazy=True) ==
-               join(self.tmp_dir, 'blah'))
-
-        # But toggling the lazy flag will fix this
-        assert(settings.apply_mask('%{work_dir}', lazy=False) ==
                join(self.tmp_dir, 'new_dir'))
 
         # We can do custom mapping too
@@ -485,15 +482,11 @@ class NNTPSettings_Test(TestBase):
                 mask_map={'%{custom0}': 'boo', '%{test}': 'hoo'}) ==
                join(self.tmp_dir, 'new_dir', '{0}-{1}'.format('boo', 'hoo')))
 
-        # Recursion loops occur if we define a variable we have no lookup for
-        try:
-            settings.apply_mask('%{work_dir}/%{invalid}/')
-            # We should never get here
-            assert(False)
-
-        except AttributeError:
-            # recursion error occured
-            assert(True)
+        # A mask we don't know (or one naming itself) is left as it is
+        assert settings.apply_mask('%{work_dir}/%{invalid}/') == \
+            join(self.tmp_dir, 'new_dir', '%{invalid}/')
+        settings.work_dir = '%{work_dir}/x'
+        assert settings.apply_mask('%{work_dir}').startswith('%{work_dir}/x')
 
 
 def test_sections_that_are_not_settings_are_ignored(tmp_path):
@@ -523,3 +516,153 @@ def test_sections_that_are_not_settings_are_ignored(tmp_path):
 
         finally:
             settings.close()
+
+
+def test_servers_are_told_apart_by_user_host_and_port():
+    """
+    server_key() names a server by its user, host and port (the usual port
+    is left out)
+    """
+    from newsreap.Utils import server_key
+
+    assert server_key('News.Example.com') == 'news.example.com'
+    assert server_key('news.example.com', 119) == 'news.example.com'
+    assert server_key('news.example.com', 563, secure=True) == \
+        'news.example.com'
+    assert server_key('news.example.com', 563) == 'news.example.com:563'
+    assert server_key('news.example.com', '8119', 'me') == \
+        'me@news.example.com:8119'
+    assert server_key(**{'host': 'news.example.com', 'username': 'me',
+                         'port': 563, 'secure': True, 'priority': 1}) == \
+        'me@news.example.com'
+
+
+def test_two_accounts_on_one_server_are_both_used(tmp_path, caplog):
+    """
+    Two accounts on the same host are two servers; one listed twice is
+    only used once (and said so)
+    """
+    from newsreap.Utils import server_key
+
+    path = tmp_path / 'config.yaml'
+    path.write_text(
+        'servers:\n'
+        '  - host: news.example.com\n'
+        '    username: first\n'
+        '  - host: news.example.com\n'
+        '    username: second\n'
+        '  - host: News.Example.com\n'
+        '    username: first\n')
+
+    settings = NNTPSettings(cfg_file=str(path))
+    assert [server_key(**s) for s in settings.nntp_servers] == [
+        'first@news.example.com', 'second@news.example.com']
+    assert 'first@news.example.com is listed more than once' in caplog.text
+    settings.close()
+
+
+def test_the_download_batch_size_falls_back_when_it_isnt_a_count(
+        tmp_path, caplog):
+    """
+    batch_size is 10,000 unless set; one that isn't a count of articles
+    (ie: 0 or a word) is an error and 10,000 is used
+    """
+    cfg_file = tmp_path / 'config.yaml'
+    for value, expected, error in (
+            (None, 10000, False), (500, 500, False), ("'250'", 250, False),
+            (0, 10000, True), ('lots', 10000, True)):
+        cfg_file.write_text('' if value is None else
+                            'downloads:\n  batch_size: %s\n' % value)
+        settings = NNTPSettings(cfg_file=str(cfg_file))
+        caplog.clear()
+        assert settings.batch_size() == expected
+        assert any(r.levelname == 'ERROR' for r in caplog.records) is error
+
+
+def test_a_mistyped_mask_is_reported_not_a_crash(tmp_path, caplog):
+    """
+    A configuration with a mask we don't know (ie: %{datadir}) loads (the
+    mask is said to be wrong), a %{ that isn't a mask is left alone, and
+    %{ramdisk} is the processing: ramdisk setting
+    """
+    path = tmp_path / 'config.yaml'
+    path.write_text(
+        'global:\n'
+        '   base_dir: %s\n'
+        '   work_dir: "%%{datadir}/tmp"\n'
+        'processing:\n'
+        '   ramdisk: /dev/shm/nr\n'
+        'database:\n'
+        "   engine: 'sqlite:///%%{base_dir}/a%%{b.db'\n"
+        'servers:\n'
+        '  - host: localhost\n'
+        '    username: me\n'
+        '    password: "p%%{x"\n' % tmp_path)
+
+    settings = NNTPSettings(cfg_file=str(path))
+    assert settings.is_valid()
+    assert settings.work_dir.endswith('%{datadir}/tmp')
+    assert '%{datadir}' in caplog.text
+    assert settings.nntp_database['engine'] == \
+        'sqlite:///%s/a%%{b.db' % tmp_path
+    assert settings.apply_mask('%{ramdisk}/x') == '/dev/shm/nr/x'
+
+
+def write_config(tmp_path, text):
+    """
+    Writes a configuration holding one server (and `text`); returns its path
+    """
+    path = tmp_path / 'config.yaml'
+    path.write_text(
+        'global:\n'
+        '   base_dir: %s\n'
+        '%s'
+        'servers:\n'
+        '  - host: localhost\n'
+        '    username: me\n' % (tmp_path, text))
+    return str(path)
+
+
+@pytest.mark.parametrize('text', [
+    # An alias that was never defined
+    'processing:\n   threads: *nothing\n',
+    # A tag YAML can't build
+    'processing:\n   threads: !!python/object:os.system x\n',
+])
+def test_a_broken_configuration_is_refused_not_a_crash(tmp_path, text,
+                                                       caplog):
+    """
+    Whatever the YAML reader can't make sense of is an error saying so
+    """
+    settings = NNTPSettings(cfg_file=write_config(tmp_path, text))
+    assert not settings.is_valid()
+    assert 'Failed to interpret YAML configuration' in caplog.text
+
+
+@pytest.mark.parametrize('engine', [
+    'not a url at all', 'nosuchdatabase://x/y', 'postgresql+nosuchdriver://x/y'])
+def test_a_database_that_cant_be_used_is_an_error(tmp_path, engine, caplog):
+    """
+    A database URL that isn't one (or whose driver isn't installed) is an
+    error saying so, never a crash
+    """
+    settings = NNTPSettings(cfg_file=write_config(
+        tmp_path, "database:\n   engine: '%s'\n" % engine))
+    assert settings.session() is None
+    assert "can't be used" in caplog.text
+
+
+def test_the_main_database_is_a_file_unless_one_is_named(tmp_path):
+    """
+    Without a database engine, the main database is newsreap.db in our data
+    directory (never one in memory), and a server's host can be a number
+    """
+    path = tmp_path / 'config.yaml'
+    path.write_text(
+        'global:\n   base_dir: %s\n'
+        'servers:\n  - host: 1234\n    username: me\n' % tmp_path)
+    settings = NNTPSettings(cfg_file=str(path))
+    assert settings.is_valid()
+    assert settings.nntp_servers[0]['host'] == '1234'
+    assert settings.nntp_database['engine'] == \
+        'sqlite:///%s' % (tmp_path / 'newsreap.db')

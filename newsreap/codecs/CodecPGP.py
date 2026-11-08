@@ -756,8 +756,10 @@ class CodecPGP(CodecBase):
                         key['key_id'] = digest[-16:]
 
                     elif body[0] in (5, 6):
+                        # RFC 9580 (v6) and LibrePGP (v5) start the hash
+                        # with 0x9B and 0x9A
                         digest = sha256(
-                            bytes((0x94 + body[0], )) +
+                            bytes((0x95 + body[0], )) +
                             len(body).to_bytes(4, 'big') +
                             body).hexdigest().upper()
                         key['fingerprint'] = digest

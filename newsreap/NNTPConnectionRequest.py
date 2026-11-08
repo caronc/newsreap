@@ -56,6 +56,10 @@ class NNTPConnectionRequest(NNTPRequest):
         # Store our actions
         self.actions = actions
 
+        # What went wrong with each action (its exception), lined up with
+        # response; None for each that ran without one
+        self.errors = []
+
 
     def run(self, connection, *args, **kwargs):
         """
@@ -102,20 +106,22 @@ class NNTPConnectionRequest(NNTPRequest):
             except IndexError:
                 _kwargs = dict()
 
+            error = None
             try:
                 result = getattr(connection, _name)(*_args, **_kwargs)
 
             except Exception as e:
                 # A failed action has no result; keep going with the rest
-                logger.warning('NNTP %s() request failed.' % _name)
+                logger.error('NNTP %s() request failed: %s' % (_name, e))
                 logger.debug('Request exception: %s' % str(e), exc_info=True)
-                result = None
+                result, error = None, e
 
             if self.is_set():
                 # Aborted while it ran; abort() already answered it
                 return False
 
             self.append(result)
+            self.errors.append(error)
 
         # Return that we've set content okay
         return True
@@ -129,6 +135,8 @@ class NNTPConnectionRequest(NNTPRequest):
         if not self.is_set():
             self.response.extend(
                 [None] * (len(self.actions) - len(self.response)))
+            self.errors.extend(
+                [None] * (len(self.actions) - len(self.errors)))
         super().abort()
 
 

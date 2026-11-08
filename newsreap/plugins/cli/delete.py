@@ -12,12 +12,14 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-# Removes collections 'nr update index' found (the ones you don't want to
+# Removes collections 'nr update' found (the ones you don't want to
 # see again):
 #   nr delete <id|gid> [<id|gid> ...]
 #
-# The collection is remembered as deleted, so articles that belong to it
-# (or an NZB file of it) don't bring it back.
+# Everything kept of its articles goes with it: their cached headers, the
+# posts the archive kept, and their scores and tags.  The collection is
+# remembered as deleted, so articles that belong to it (or an NZB file of
+# it) don't bring it back.
 
 import logging
 import click
@@ -35,6 +37,7 @@ except ImportError:
 
 from newsreap.CliOptions import confirmed
 from newsreap.NNTPIndexer import NNTPIndexer
+from newsreap.NNTPIndexer import Purged
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
@@ -56,11 +59,14 @@ def delete(ctx, ids):
     """
     Remove indexed collections.
 
-    Use the ids 'nr nzb ls' shows (or a collection's GID).
+    Use the ids 'nr nzb ls' shows (or a collection's GID).  Everything kept
+    of their articles goes too: the cached headers, the posts kept
+    offline, and their scores and tags.
 
     """
-    # Track how many we removed
+    # Track how many we removed, and what else went with them
     removed = 0
+    purged = Purged(0, 0, 0, 0, 0)
 
     indexer = NNTPIndexer(ctx['NNTPSettings'].index_database())
     try:
@@ -84,9 +90,12 @@ def delete(ctx, ids):
 
         for collection_id, title in found.items():
 
-            if indexer.delete(collection_id):
+            if indexer.delete(collection_id, group_database=ctx[
+                    'NNTPSettings'].group_database):
                 click.echo('Removed [%d] %s' % (collection_id, title))
                 removed += 1
+                purged = purged.plus(indexer.purged._replace(
+                    articles=0, files=0, collections=0))
 
             else:
                 logger.error(
@@ -94,6 +103,9 @@ def delete(ctx, ids):
 
     finally:
         indexer.close()
+
+    if str(purged):
+        click.echo('Also removed %s.' % (purged, ))
 
     if removed < len(set(ids)):
         exit(1)

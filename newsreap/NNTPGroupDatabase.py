@@ -73,9 +73,6 @@ class NNTPGroupDatabase(Database):
         makedirs(dirname(db_file), exist_ok=True)
         db = cls(engine='sqlite:///%s' % db_file, reset=False)
 
-        # Older databases may not have every table yet
-        ObjectBase.metadata.create_all(db._engine)
-
         # A scan stopped hard (ie: killed) while filling a new database may
         # have left it without the indexes it drops for speed
         for index in Article.__table__.indexes:

@@ -293,6 +293,10 @@ def test_an_unknown_action_is_answered_with_nothing(tmp_path):
             assert len(request) == 2
             assert request.response[0] is None
 
+            # What went wrong is kept, one entry per action like the answers
+            assert isinstance(request.errors[0], AttributeError)
+            assert request.errors[1] is None
+
         finally:
             manager.close()
             settings.close()
@@ -348,4 +352,222 @@ def test_closing_wakes_whoever_waits_on_a_queued_request(tmp_path):
             assert request.response == [None]
 
         finally:
+            settings.close()
+
+
+def test_workers_share_the_connections_a_server_allows(tmp_path,
+                                                       monkeypatch):
+    """
+    - two workers never use more of a server's connections together than
+      it allows (connections: 3)
+    - one with none waits for one (and uses one anyway after a while, so
+      it is never stuck)
+    - closing gives them back; without a database each worker uses them
+      all
+    """
+    from newsreap.NNTPClaims import NNTPClaims
+
+    # The package has a class of the same name
+    module = sys.modules['newsreap.NNTPManager']
+
+    monkeypatch.setattr(module, 'SLOT_RETRY', 0)
+    monkeypatch.setattr(module, 'SLOT_WAIT', 0.05)
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings = NNTPSettings(cfg_file=config_for(
+            server, tmp_path / 'config.yaml', connections=3))
+
+        # Without a database, nothing is shared
+        alone = NNTPManager(settings, claims=NNTPClaims(settings))
+        alone.spawn_workers(count=3)
+        assert len(alone._pool) == 3
+        alone.close()
+
+        settings.open(reset=True)
+        first = NNTPManager(settings, claims=NNTPClaims(settings))
+        second = NNTPManager(settings, claims=NNTPClaims(settings))
+        try:
+            first.spawn_workers(count=2)
+            assert len(first._pool) == 2
+
+            second.spawn_workers(count=3)
+            assert len(second._pool) == 1
+            assert len(settings.claims('connection:')) == 3
+
+            # The first can't take more until the second gives its back
+            assert first.spawn_workers(count=1) is False
+            assert len(first._pool) == 2
+            second.close()
+            first.spawn_workers(count=1)
+            assert len(first._pool) == 3
+
+            # With none free, the second waits, then uses one anyway
+            second.spawn_workers(count=1)
+            assert len(second._pool) == 1
+            assert len(settings.claims('connection:')) == 3
+
+        finally:
+            first.close()
+            second.close()
+            settings.close()
+
+        assert settings.claims() == {}
+
+
+def test_a_connection_of_our_own_shares_the_servers_limit(tmp_path,
+                                                         monkeypatch):
+    """
+    manager.connection() (ie: listing a server's groups) takes one of the
+    connections the server allows, gives it back afterwards, and what it
+    did is part of our statistics (under the server's key)
+    """
+    from newsreap.NNTPClaims import NNTPClaims
+    from newsreap.Utils import server_key
+
+    module = sys.modules['newsreap.NNTPManager']
+    monkeypatch.setattr(module, 'SLOT_RETRY', 0)
+    monkeypatch.setattr(module, 'SLOT_WAIT', 0.05)
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings = NNTPSettings(cfg_file=config_for(
+            server, tmp_path / 'config.yaml', connections=2))
+        settings.open(reset=True)
+        s = settings.nntp_servers[0]
+        key = server_key(**s)
+
+        manager = NNTPManager(settings, claims=NNTPClaims(settings))
+        other = NNTPManager(settings, claims=NNTPClaims(settings))
+        try:
+            with manager.connection(s) as connection:
+                assert connection.key == key
+                assert connection.groups() is not None
+                assert len(settings.claims('connection:')) == 1
+
+                # Another worker only gets what is left
+                other.spawn_workers(count=2)
+                assert len(other._pool) == 1
+
+            # Given back
+            assert len(settings.claims('connection:')) == 1
+            assert manager._slots == []
+            assert manager.stats_by_host()[key].commands > 0
+
+        finally:
+            other.close()
+            manager.close()
+            settings.close()
+
+
+def test_each_part_gets_decoders_of_its_own(tmp_path):
+    """
+    Decoders handed to the manager for a post are copied for each part
+    (they keep what they decode, and the parts are fetched at once)
+    """
+    from newsreap.NNTPArticle import NNTPArticle
+    from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+    from newsreap.codecs.CodecHeader import CodecHeader
+
+    with FakeNNTPServer(join_group=False) as server:
+        stored(server, tmp_path, '<a@example.com>', '<b@example.com>')
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            post = NNTPSegmentedPost('file.bin')
+            for no, message_id in enumerate(
+                    ('<a@example.com>', '<b@example.com>'), 1):
+                post.add(NNTPArticle(id=message_id, no=no))
+
+            decoder = CodecHeader(work_dir=str(tmp_path))
+            requests = manager.get(post, str(tmp_path), decoders=[decoder],
+                                   block=False)
+            given = [request.actions[0][2]['decoders'][0]
+                     for request in requests]
+            assert len({id(d) for d in given}) == 2
+            assert decoder not in given
+            assert all(isinstance(d, CodecHeader) for d in given)
+
+            for request in requests:
+                request.wait()
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_the_overview_format_and_any_command_go_through_the_pool(tmp_path):
+    """
+    overview_format() and send() are asked of one of the manager's
+    connections; send() can join a group first (and says when it can't)
+    """
+    from newsreap.NNTPResponse import NNTPResponseCode
+
+    with FakeNNTPServer(join_group=True) as server:
+        server.add_group('alt.binaries.test')
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            assert isinstance(manager.overview_format(), tuple)
+
+            request = manager.overview_format(block=False)
+            request.wait()
+            assert request.response[0] == manager.overview_format()
+
+            assert manager.send('MODE READER').code == 200
+
+            response = manager.send('MODE READER', group='alt.binaries.test')
+            assert response.code == 200
+            assert 'GROUP alt.binaries.test' in server.commands()
+
+            response = manager.send('MODE READER', group='alt.no.such')
+            assert response.code == NNTPResponseCode.INVALID_GROUP
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_a_server_with_no_connections_free_doesnt_hold_up_another(tmp_path):
+    """
+    Finding every connection of one server taken only waits on that
+    server; another server's connection is still claimed right away
+    """
+    class Claims:
+        def claim(self, names, limit=1):
+            # The first server's are all taken
+            return [] if 'busy.example.com' in names[0] else names[:limit]
+
+        def release(self, names):
+            pass
+
+    with FakeNNTPServer(join_group=False) as server:
+        settings = NNTPSettings(cfg_file=config_for(
+            server, tmp_path / 'config.yaml'))
+        manager = NNTPManager(settings, claims=Claims())
+        try:
+            assert manager._slot({'host': 'busy.example.com'}) is False
+            assert manager._slot({'host': 'free.example.com'}) is True
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_a_command_isnt_sent_when_its_group_cant_be_joined(tmp_path):
+    """
+    send() with a group that doesn't exist answers INVALID_GROUP without
+    sending the command (it would run in whatever group was used last)
+    """
+    from newsreap.NNTPResponse import NNTPResponseCode
+
+    with FakeNNTPServer(join_group=True) as server:
+        server.add_group('alt.binaries.test')
+        server.on(r'^DATE$', '111 20260101000000')
+        settings, manager = manager_for(server, tmp_path)
+        try:
+            assert manager.send('DATE', group='alt.binaries.test').code \
+                == 111
+
+            response = manager.send('DATE', group='alt.no.such')
+            assert response.code == NNTPResponseCode.INVALID_GROUP
+            assert server.commands().count('DATE') == 1
+
+        finally:
+            manager.close()
             settings.close()

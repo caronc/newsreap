@@ -13,6 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 from sqlalchemy import Column
+from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import UnicodeText
@@ -31,6 +32,11 @@ class StagedArticle(ObjectBase):
     """
 
     __tablename__ = 'staged_article'
+
+    # Articles are read back in the order they are posted, a page at a time
+    __table_args__ = (
+        Index('ix_staged_article_order', 'sort_no', 'sequence_no'),
+    )
 
     # Our unique identifier
     id = Column(

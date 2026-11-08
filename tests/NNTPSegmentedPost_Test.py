@@ -198,3 +198,26 @@ class NNTPSegmentedPost_Test(TestBase):
         assert(segobj.apply_template() is True)
 
         segobj.deobsfucate()
+
+
+def test_template_directives_are_read_in_any_case(tmp_path):
+    """
+    A directive can be written in any case, and a numbered one names the
+    file it numbers
+    """
+    from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+
+    for name in ('a.rar', 'b.par2'):
+        (tmp_path / name).write_bytes(b'x' * 10)
+
+    post = NNTPSegmentedPost(
+        str(tmp_path / 'a.rar'),
+        subject='{{FileName}} {{filename002}} ({{INDEX}}/{{count}})'
+        ' {{custom}}{{unknown}}', poster='me@{{Domain}}',
+        work_dir=str(tmp_path))
+    article = post.articles[0]
+    article.add(str(tmp_path / 'b.par2'))
+    assert post.apply_template({'{{domain}}': 'example.com',
+                                '{{Custom}}': 'x'}) is True
+    assert article.subject == 'a.rar b.par2 (1/1) x'
+    assert article.poster == 'me@example.com'

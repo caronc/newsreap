@@ -16,8 +16,10 @@ from sqlalchemy import Column
 from sqlalchemy import Sequence
 from sqlalchemy import Integer
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
+from ...Utils import normal_server_key
 
 
 class Server(ObjectBase):
@@ -34,14 +36,24 @@ class Server(ObjectBase):
     name = Column(String(256), nullable=False)
 
     # NNTP Host Identifier
-    host = Column(String(128), index=True,
-                  nullable=False, unique=True)
+    host = Column(String(128), index=True, nullable=False)
+
+    # What tells it apart from our other servers: [user@]host[:port] (see
+    # Utils.server_key()); the same as the host for a plain one
+    key = Column(Key(256), index=True, nullable=False, unique=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # Kept the same way however they were given (see
+        # normal_server_key())
+        if self.host is not None:
+            self.host = self.host.strip().lower()
+        self.key = normal_server_key(
+            self.key if self.key is not None else self.host)
 
     def __repr__(self):
         """
         Printable string
         """
-        return "<Server(id=%s, host='%s')>" % (self.id, self.host)
+        return "<Server(id=%s, key='%s')>" % (self.id, self.key)

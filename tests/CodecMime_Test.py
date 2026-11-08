@@ -418,3 +418,33 @@ def test_nr_fetch_saves_attachments(tmp_path):
         assert result.exit_code == 0, result.output
         assert result.output.splitlines() == [str(out / 'data.bin')]
         assert (out / 'data.bin').read_bytes() == DATA
+
+
+def test_nr_fetch_fails_when_any_article_couldnt_be_had(tmp_path):
+    """
+    nr fetch exits with 1 when an article couldn't be fetched, even when
+    another held more than one file
+    """
+    from newsreap.cli import cli
+
+    two = MULTIPART.replace(b'--==XYZ==--\r\n', (
+        b'--==XYZ==\r\n'
+        b'Content-Type: application/octet-stream; name="more.bin"\r\n'
+        b'Content-Transfer-Encoding: base64\r\n'
+        b'Content-Disposition: attachment; filename="more.bin"\r\n'
+        b'\r\n' + b64(DATA) + b'--==XYZ==--\r\n'))
+
+    with FakeNNTPServer(join_group=False) as server:
+        path = tmp_path / 'mime.msg'
+        path.write_bytes(two)
+        server.add_article('mime@x', str(path), GROUP)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        out = tmp_path / 'out'
+        result = CliRunner().invoke(cli, [
+            '--config', config, 'fetch', 'mime@x', 'gone@x', '-o',
+            str(out)], obj={})
+
+        assert str(out / 'data.bin') in result.output
+        assert str(out / 'more.bin') in result.output
+        assert result.exit_code == 1

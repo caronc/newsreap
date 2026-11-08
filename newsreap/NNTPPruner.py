@@ -40,11 +40,13 @@ from os.path import getsize
 from os.path import isdir
 from os.path import isfile
 from os.path import join
+from os.path import commonpath
 from os.path import realpath
 from shutil import rmtree
 from time import time
 
 from .Database import DatabaseUnavailable
+from .Database import SQLITE_SIDE_FILES
 from .NNTPDownloader import NNTPDownloader
 from .NNTPGroupDatabase import NNTPGroupDatabase
 from .NNTPSettings import DEFAULT_DOWNLOAD_VARIABLES
@@ -269,7 +271,7 @@ class NNTPPruner:
 
         freed = self.settings.group_cache_size(group)
         path = self.settings.group_database(group)
-        for part in (path, path + '-journal', path + '-wal', path + '-shm'):
+        for part in (path, *(path + side for side in SQLITE_SIDE_FILES)):
             if isfile(part):
                 remove(part)
 
@@ -329,9 +331,13 @@ class NNTPPruner:
         touched)
         """
         work_dir = self.settings.work_dir
-        if not self.work or not work_dir or not isdir(work_dir) or \
-                not realpath(work_dir).startswith(
-                    realpath(self.settings.cache_dir)):
+        if not self.work or not work_dir or not isdir(work_dir):
+            return
+
+        # Inside it (a folder of its own), not just named like it (ie:
+        # cache-old next to cache) or the cache directory itself
+        work, cache = realpath(work_dir), realpath(self.settings.cache_dir)
+        if work == cache or commonpath([work, cache]) != cache:
             return
 
         oldest = time() - self.work * 86400

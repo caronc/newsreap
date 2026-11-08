@@ -312,3 +312,88 @@ class NNTPCryptography_Test(TestBase):
         obj = NNTPCryptography()
         assert obj.load('not a private key') is False
         assert obj.load(b'not a private key either') is False
+
+    def test_keys_given_when_created_are_loaded(self):
+        """
+        Keys passed to NNTPCryptography() are loaded straight away; a
+        public key that belongs to another private key is refused
+        """
+        import pytest
+
+        obj_a = NNTPCryptography()
+        obj_a.genkeys()
+        obj_b = NNTPCryptography()
+        obj_b.genkeys()
+
+        obj = NNTPCryptography(private_key=obj_a.private_pem())
+        assert obj == obj_a
+        assert obj.verify() is True
+
+        obj = NNTPCryptography(
+            private_key=obj_a.private_key, public_key=obj_a.public_pem())
+        assert obj == obj_a
+
+        with pytest.raises(ValueError):
+            NNTPCryptography(
+                private_key=obj_a.private_key, public_key=obj_b.public_key)
+
+        obj = NNTPCryptography()
+        assert obj.load(obj_a.private_key, obj_b.public_key) is False
+        assert obj.keys() == (None, None)
+        assert obj.verify() is False
+
+    def test_loading_keeps_the_hashes_chosen(self):
+        """
+        Loading a key keeps the hashes the object was made with, so what
+        depends on them (ie: chunk_size()) still works
+        """
+        obj_a = NNTPCryptography()
+        obj_a.genkeys()
+
+        obj = NNTPCryptography(alg=HashType.SHA512, mgf1=HashType.SHA512)
+        assert obj.load(obj_a.private_key) is True
+        assert (obj.alg, obj.mgf1) == (HashType.SHA512, HashType.SHA512)
+        assert obj.chunk_size() == \
+            CRYPTOGRAPHY_HASH_MAP[HashType.SHA512]['max_chunk']
+        assert obj.decrypt(obj.encrypt(b'hello')) == b'hello'
+
+        # Or the ones asked for
+        assert obj.load(obj_a.private_key, alg=HashType.SHA256) is True
+        assert obj.alg == HashType.SHA256
+
+
+def test_a_private_key_is_saved_for_our_eyes_only(tmp_path, monkeypatch):
+    """
+    A private key file can only be read by us (even one that was there
+    before), ~ is our home, and a folder that can't be written is an error
+    rather than a crash
+    """
+    import os
+    import stat
+
+    monkeypatch.setenv('HOME', str(tmp_path))
+    old = tmp_path / 'key.pem'
+    old.write_bytes(b'old')
+    old.chmod(0o644)
+
+    crypto = NNTPCryptography()
+    crypto.genkeys()
+    assert crypto.save('~/key.pem') is True
+    assert stat.S_IMODE(os.stat(old).st_mode) == 0o600
+    assert (tmp_path / 'key.pem.pub').is_file()
+    assert crypto.save(str(tmp_path / 'missing' / 'key.pem')) is False
+
+
+def test_keys_that_cant_be_read_are_refused(tmp_path):
+    """
+    A password given for a key that needs none, or an encoded key that
+    isn't one, is refused instead of crashing
+    """
+    crypto = NNTPCryptography()
+    prv, _ = crypto.genkeys()
+    pem = crypto.private_pem()
+
+    assert NNTPCryptography().load(private_key=pem, password='x') is False
+    assert NNTPCryptography().decode_private_key('bm90IGd6aXA=') is False
+    assert NNTPCryptography().decode_public_key('bm90IGd6aXA=') is False
+    assert NNTPCryptography().decode_public_key('!!') is False

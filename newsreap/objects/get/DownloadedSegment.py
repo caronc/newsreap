@@ -12,6 +12,8 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from itertools import batched
+
 from sqlalchemy import BigInteger
 from sqlalchemy import Boolean
 from sqlalchemy import Column
@@ -19,6 +21,9 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 
 from .ObjectBase import ObjectBase
+
+# How many Message-IDs are looked up per query
+LOOKUP_CHUNK = 2000
 
 
 class DownloadedSegment(ObjectBase):
@@ -55,6 +60,18 @@ class DownloadedSegment(ObjectBase):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def noted(cls, session, message_ids):
+        """
+        Returns {message_id: row} of the Message-IDs given that have a row
+        (looked up a couple thousand at a time)
+        """
+        rows = {}
+        for chunk in batched(message_ids, LOOKUP_CHUNK):
+            rows.update((row.message_id, row) for row in session.query(
+                cls).filter(cls.message_id.in_(chunk)))
+        return rows
 
     def __repr__(self):
         return "<DownloadedSegment(message_id='%s', filename='%s', " \

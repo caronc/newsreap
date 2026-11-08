@@ -12,7 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-# Lists the collections 'nr update index' found, saves them as NZB files and
+# Lists the collections 'nr update' found, saves them as NZB files and
 # adds NZB files to the index:
 #   nr nzb ls [keywords] [--group <group|alias>]
 #   nr nzb save <id|gid> [<id|gid> ...] [--output <file or directory>]
@@ -130,7 +130,7 @@ def nzb_list(ctx, keywords, groups, complete, forming, limit,
     try:
         if indexer.session() is None:
             click.echo(
-                "Nothing indexed yet; run 'nr update index' first.")
+                "Nothing indexed yet; run 'nr update' first.")
             return
 
         for entry in indexer.find(
@@ -268,13 +268,17 @@ def nzb_import(ctx, paths, name, merge):
 
             click.echo("[%6d] %s (%s)" % (entry.id, entry.name, status))
 
-            if indexer.left_out:
-                logger.warning(
+            if indexer.left_out_count:
+                logger.error(
                     "'%s' lists %d file(s) collection #%d doesn't have; "
                     "use --merge to add them:" % (
-                        path, len(indexer.left_out), entry.id))
+                        path, indexer.left_out_count, entry.id))
                 for subject in indexer.left_out:
-                    logger.warning('  %s' % subject)
+                    logger.error('  %s' % subject)
+
+                if indexer.left_out_count > len(indexer.left_out):
+                    logger.error('  ... and %d more' % (
+                        indexer.left_out_count - len(indexer.left_out)))
 
         # Scanned collections that lost articles to an NZB file form again
         indexer.settle()

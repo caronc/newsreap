@@ -202,3 +202,62 @@ def test_every_address_of_a_host_is_tried():
         host='no-such-host.invalid', port=119, username='valid',
         password='valid', secure=False, join_group=False)
     assert sock.connect(timeout=5.0) is False
+
+
+def test_a_silent_secure_server_times_out():
+    """
+    A server that accepts the connection but never answers the TLS
+    handshake is given up on once the timeout passes
+    """
+    import socket
+    import time
+    from newsreap.SocketBase import SocketException
+
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    try:
+        sock = SocketBase(host='127.0.0.1', port=listener.getsockname()[1],
+                          secure=True)
+        started = time.monotonic()
+        with pytest.raises(SocketException):
+            sock.connect(timeout=1.5, retry_wait=0.25)
+        assert time.monotonic() - started < 10
+    finally:
+        listener.close()
+
+
+def test_a_failed_handshake_doesnt_stop_later_connections():
+    """
+    A connection that couldn't be secured fails that attempt only; the next
+    one tries again (and says why it failed, every time)
+    """
+    import socket
+    import threading
+    from newsreap.SocketBase import SocketRetryLimit
+
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(4)
+
+    def answer():
+        # Plain text where a TLS handshake is expected
+        for _ in range(2):
+            try:
+                client, _ = listener.accept()
+            except OSError:
+                return
+            client.sendall(b'200 not tls at all\r\n' * 20)
+            client.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    try:
+        sock = SocketBase(host='127.0.0.1', port=listener.getsockname()[1],
+                          secure=True)
+        for _ in range(2):
+            with pytest.raises(SocketRetryLimit) as found:
+                sock.connect(timeout=5, retry_wait=0.25)
+            assert 'no protocols left' not in str(found.value)
+            assert sock.secure_protocol_idx == 0
+    finally:
+        listener.close()

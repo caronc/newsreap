@@ -16,6 +16,7 @@ from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -33,7 +34,7 @@ class CollectionAlias(ObjectBase):
     __tablename__ = 'collection_alias'
 
     # The other NZB file's GID
-    gid = Column(String(32), primary_key=True)
+    gid = Column(Key(32), primary_key=True)
 
     # The collection it is a copy of
     collection_id = Column(

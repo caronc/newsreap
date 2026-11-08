@@ -13,6 +13,7 @@
 # GNU Lesser General Public License for more details.
 
 import sys
+import pytest
 import unittest
 import os
 
@@ -400,3 +401,42 @@ class CodecRar_Test(TestBase):
         assert isinstance(content[0], NNTPBinaryContent) is True
         # Content is always attached
         assert content[0].is_attached() is True
+
+
+@pytest.mark.parametrize('codec', ['CodecRar', 'Codec7Zip'])
+def test_an_empty_password_is_no_password(tmp_path, monkeypatch, codec):
+    """
+    An empty password is passed on as no password (a bare -p would have
+    rar or 7z wait for one to be typed)
+    """
+    import importlib
+
+    module = importlib.import_module('newsreap.codecs.%s' % codec)
+    commands = []
+
+    class Ran:
+        def __init__(self, command, *args, **kwargs):
+            commands.append(command)
+
+        def start(self):
+            pass
+
+        def join(self, *args, **kwargs):
+            pass
+
+        def is_complete(self, *args, **kwargs):
+            return True
+
+        def successful(self):
+            return False
+
+    monkeypatch.setattr(module, 'SubProcess', Ran)
+    monkeypatch.setattr(module.CodecFile, 'can_exe', lambda *a: True)
+
+    (tmp_path / 'a.txt').write_bytes(b'x')
+    found = getattr(module, codec)(work_dir=str(tmp_path / 'w'), password='')
+    found.add(str(tmp_path / 'a.txt'))
+    found.encode()
+    found.test(str(tmp_path / 'a.txt'), password='')
+    assert commands
+    assert all('-p' not in command for command in commands)

@@ -292,7 +292,7 @@ def test_decrypting_from_the_command_line(tmp_path, server):
     home = tmp_path / 'pgp'
     try:
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         result = nr('pgp', 'import', str(secret))
         assert result.exit_code == 0, result.output
@@ -354,7 +354,7 @@ def command_line(tmp_path, server, **processing):
     secret = tmp_path / 'secret.asc'
     secret.write_bytes(sample('reader-secret.asc'))
     assert nr('db', 'init').exit_code == 0
-    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'refresh').exit_code == 0
     assert nr('pgp', 'import', str(secret)).exit_code == 0
     return nr
 

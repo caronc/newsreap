@@ -17,6 +17,8 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import SmallInteger
 from sqlalchemy import String
+from newsreap.objects import BigNumber
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -34,11 +36,11 @@ class Segment(ObjectBase):
     __tablename__ = 'segment'
 
     # The article's Message-ID (without its < and >)
-    message_id = Column(String(250), primary_key=True)
+    message_id = Column(Key(250), primary_key=True)
 
     # The file it belongs to (many segments : one file)
     file_id = Column(
-        Integer, ForeignKey('collection_file.id'), nullable=False,
+        BigNumber, ForeignKey('collection_file.id'), nullable=False,
         index=True)
 
     # Which part of the file it is (ie: 3 of (3/50))

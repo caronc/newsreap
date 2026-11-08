@@ -147,10 +147,10 @@ def test_crossposted_articles_are_judged_the_same_everywhere(tmp_path):
             return runner.invoke(cli, ['--config', config, *args], obj={})
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         # Scanned in the group the rules don't name, but posted to it too
-        result = nr('update', 'search', GROUP)
+        result = nr('update', GROUP)
         assert result.exit_code == 0, result.output
         assert '1 article(s) cached, 1 dropped by filters' in result.output
 
@@ -160,7 +160,7 @@ def test_crossposted_articles_are_judged_the_same_everywhere(tmp_path):
         db.close()
         assert found == {'g@x': '%s %s' % (OTHER, GROUP)}
 
-        result = nr('update', 'search', OTHER)
+        result = nr('update', OTHER)
         assert result.exit_code == 0, result.output
 
         index = NNTPIndexDatabase.from_engine(

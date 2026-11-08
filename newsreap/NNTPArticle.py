@@ -361,7 +361,7 @@ class NNTPArticle:
         content = next((
             c for c in self.decoded if isinstance(c, NNTPContent)), None)
 
-        if not content:
+        if content is None:
             # Well this isn't good; we have decoded entries that are not
             # of type NNTPContent.
             return None
@@ -537,7 +537,7 @@ class NNTPArticle:
         Returns a key that can be used for sorting with:
             lambda x : x.key()
         """
-        return '%.5d%s' % (self.no, self.id)
+        return '%.10d%s' % (self.no, self.id)
 
     def detach(self):
         """

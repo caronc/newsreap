@@ -27,6 +27,8 @@ except ImportError:
     from newsreap.NNTPDatabase import UnknownGroups
 
 from newsreap.Database import DatabaseUnavailable
+from newsreap.Utils import server_key
+from newsreap.NNTPDatabase import UnknownServer
 from newsreap.CliOptions import confirmed
 from newsreap.NNTPPruner import NNTPPruner
 from newsreap.Utils import bytes_to_strsize
@@ -104,7 +106,7 @@ def group_watch(ctx, groups):
     """
     Adds groups (or aliases) to the watch list.
 
-    'nr update --watched' fetches what is new in every watched group.  What
+    'nr update' fetches what is new in every watched group.  What
     else 'nr update' does for a group is set with 'nr group set'.
     """
     try:
@@ -243,6 +245,15 @@ def group_purge(ctx, groups):
         logger.error('Name the groups (or aliases) to purge.')
         exit(1)
 
+    # One another worker is updating is left alone
+    ours, busy = ctx['NNTPClaims'].groups(sorted(found))
+    for name in busy:
+        logger.error('%s: another worker is updating it; it was left '
+                     'alone.' % name)
+    if not ours:
+        exit(1)
+    found = {name: found[name] for name in ours}
+
     for name in sorted(found):
         size = settings.group_cache_size(name)
         click.echo('%s: %s of cached headers' % (
@@ -262,6 +273,65 @@ def group_purge(ctx, groups):
                 name, bytes_to_strsize(done.freed), done.files,
                 done.collections, done.posts))
 
+    if busy:
+        # Not everything asked for was done
+        exit(1)
+
+
+@click.command(name='refresh')
+@click.pass_obj
+def group_refresh(ctx):
+    """
+    Fetch the list of groups every server carries.
+
+    Only the names (and how many articles each holds) are fetched, never
+    their headers; 'nr group ls --all' shows them, and 'nr group watch'
+    picks the ones 'nr update' fetches.  Run it again now and then to learn
+    of new groups.
+    """
+    settings = ctx['NNTPSettings']
+
+    # Track whether every server answered
+    failed = False
+
+    for s in settings.nntp_servers:
+        key = server_key(**s)
+        try:
+            settings.server_id(key)
+
+        except DatabaseUnavailable:
+            logger.error(NO_DATABASE)
+            exit(1)
+
+        except UnknownServer as e:
+            logger.error("%s Run 'nr db init' to add it." % e)
+            failed = True
+            continue
+
+        # One of the connections the server allows (shared with any other
+        # worker); what it did is part of our statistics
+        with ctx['NNTPManager'].connection(s) as con:
+            results = con.groups()
+
+        if not results:
+            logger.error(
+                "Could not fetch the group listing from '%s'." % key)
+            failed = True
+            continue
+
+        try:
+            new = settings.save_groups(key, results)
+
+        except UnknownServer as e:
+            logger.error("%s Run 'nr db init' to add it." % e)
+            exit(1)
+
+        click.echo('%s: %d group(s) listed, %d new.' % (
+            key, len(results), new))
+
+    if failed:
+        exit(1)
+
 
 @click.command(name='ls')
 @click.option('--all', '-a', is_flag=True,
@@ -276,7 +346,7 @@ def group_list(ctx, all):
     purge' frees the space of one you no longer want.  --all lists every
     group the servers carry instead.
 
-    The groups come from the database, so run 'nr update groups' first to
+    The groups come from the database, so run 'nr group refresh' first to
     learn them (and again now and then to keep them current).  With --all
     and nothing set up yet, the first server is asked instead.
     """

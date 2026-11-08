@@ -15,6 +15,7 @@
 from sqlalchemy import Column
 from sqlalchemy import Integer
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -33,7 +34,7 @@ class Vsp(ObjectBase):
     group = Column(String(256), nullable=False, index=True)
 
     # Hash Key
-    key = Column(String(256), nullable=False)
+    key = Column(Key(256), nullable=False)
 
     # Key Value
     value = Column(String(512))

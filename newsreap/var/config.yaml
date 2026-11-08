@@ -42,7 +42,9 @@ global:
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 # You can define as many servers as you like.  The first one is your main
 # server; any others are used as backups for content the main one is
-# missing.
+# missing.  The same host can be listed once per account (username) or
+# port; each is a server of its own, with its own connections and
+# statistics.
 servers:
   - host: my.server.here
     # 563 is the usual port for secure (TLS) connections; 119 is the usual
@@ -82,7 +84,8 @@ servers:
 
     # How many connections your provider lets you make at once (check your
     # account).  Leave one or two spare for your newsreader.  Without it,
-    # connections: under processing: is used.
+    # connections: under processing: is used.  Several 'nr update' running
+    # at once share them (see 'Several Workers at Once' in the README).
     # connections: 10
 
     # How many times a failed download is retried before giving up, and
@@ -118,6 +121,8 @@ processing:
    # happen at once (each server can set its own with connections:).
    # More helps until your bandwidth is full; fetching headers rarely gets
    # faster past about 8.  Don't go higher than your provider allows.
+   # Several 'nr update' running at once (sharing a database) share these
+   # between them.
    connections: 4
 
    # How many headers are processed at a time when indexing a group.
@@ -149,10 +154,10 @@ processing:
    # removed once they are indexed and older than this many days.  The
    # collections keep everything needed to make their NZB files.  0 keeps
    # every header (needed by 'nr search --articles').  Archive a group ('nr
-   # update archive') before its headers are removed.
+   # update --content') before its headers are removed.
    raw_retention: 0
 
-   # 'nr update archive' fetches the articles no bigger than this and keeps
+   # 'nr update --content' fetches the articles no bigger than this and keeps
    # what they say, so a group full of discussion can be searched offline
    # ('nr search --posts').  Files they hold are only noted, never kept.
    archive_max_size: 64KB
@@ -175,9 +180,8 @@ processing:
    retention: 0
 
    # How much was sent to and received from each server (and how fast) is
-   # kept for every day ('nr db status' shows it).  'nr prune statistics'
-   # (or 'nr prune all', or 'nr update --prune') removes the days older
-   # than this.  0 keeps them all.
+   # kept for every day ('nr db status' shows it).  'nr prune' (or 'nr
+   # update --prune') removes the days older than this.  0 keeps them all.
    statistics: 31
 
    # Keep the PGP keys found in the posts 'nr update --content' fetches, and
@@ -233,13 +237,13 @@ downloads:
    # (it is always kept when something couldn't be opened)
    # cleanup: yes
 
-   # 'nr prune downloads' removes downloads that didn't finish (kept so
+   # 'nr prune' removes downloads that didn't finish (kept so
    # they can carry on) once nothing has touched them for this many days.
    # 0 keeps them until you remove them yourself.  Finished downloads are
    # never touched.
    # prune_downloads: 0
 
-   # 'nr prune work' removes files left in the work directory (ie: by a
+   # 'nr prune' removes files left in the work directory (ie: by a
    # run that was stopped) this many days or more; 0 keeps them
    # prune_work: 1
 
@@ -248,6 +252,11 @@ downloads:
    # post takes a while to reach every server), or once you add a server.
    # --retry-missing asks again regardless.
    # retry_window: 60
+
+   # Loose articles a search finds (nr search --articles or --posts with
+   # -d) are downloaded this many at a time, so even a whole group never
+   # fills your memory.  A file is never split between two batches.
+   # batch_size: 10000
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 #   Posting to your NNTP Server

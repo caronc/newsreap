@@ -40,19 +40,21 @@ def aged(path):
     os.utime(str(path), (LONG_AGO, LONG_AGO))
 
 
-def old_statistics(config, host, days=40):
+def old_statistics(config, days=40):
     """
-    Adds a day of statistics for a server, `days` days ago
+    Adds a day of statistics for our (first) server, `days` days ago
     """
     from newsreap.NNTPSettings import NNTPSettings
     from newsreap.NNTPStatistics import NNTPStatistics
+    from newsreap.Utils import server_key
     from newsreap.Utils import utcnow
 
     settings = NNTPSettings(cfg_file=config)
     try:
+        key = server_key(**settings.nntp_servers[0])
         assert settings.record_stats(
-            {host: NNTPStatistics(rx_bytes=1, commands=1)},
-            day=utcnow().date() - timedelta(days=days)) == [host]
+            {key: NNTPStatistics(rx_bytes=1, commands=1)},
+            day=utcnow().date() - timedelta(days=days)) == [key]
 
     finally:
         settings.close()
@@ -85,10 +87,11 @@ def test_what_is_no_longer_needed_is_cleared_out(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         assert nr('update', GROUP).exit_code == 0
 
-        assert nr('prune', 'work').output.strip() == 'Nothing to clear out.'
+        assert nr('prune', '--only', 'work').output.strip() == \
+            'Nothing to clear out.'
 
         # Downloads that didn't finish: one stale, one being run, one recent
         staging = tmp_path / 'cache' / 'downloads'
@@ -106,35 +109,46 @@ def test_what_is_no_longer_needed_is_cleared_out(tmp_path):
         aged(work / 'left.tmp')
         (work / 'busy.tmp').write_bytes(b'z')
 
-        # On its own, prune only shows how it is used
-        result = nr('-y', 'prune')
-        assert 'Usage:' in result.output
-        assert 'Cleared out.' not in result.output
+        # On its own, prune does what the configuration says (a dry run
+        # here, so nothing goes yet)
+        result = nr('prune', '-n')
+        assert result.exit_code == 0, result.output
+        assert '1 leftover work file(s)' in result.output
+        assert 'Dry run: nothing was changed.' in result.output
         assert (staging / 'stale-1').exists()
         assert (work / 'left.tmp').exists()
 
         # Downloads and headers are kept until asked for
-        result = nr('-y', 'prune', 'downloads')
+        result = nr('-y', 'prune', '--only', 'downloads')
         assert result.exit_code == 1
         assert 'prune_downloads is 0' in result.output
-        assert nr('-y', 'prune', 'headers').exit_code == 1
+        assert nr('-y', 'prune', '--only', 'headers').exit_code == 1
+        assert (staging / 'stale-1').exists()
+
+        # --only can't be added to the watched groups (it would be passed
+        # over)
+        result = nr('-y', 'prune', '-w', '--only', 'downloads', '--days', '1')
+        assert result.exit_code == 1
+        assert 'not both' in result.output
         assert (staging / 'stale-1').exists()
 
         with open(str(staging / 'running-2' / '.lock')) as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-            result = nr('prune', 'downloads', '--days', '7', '--dry-run')
+            result = nr('prune', '--only', 'downloads', '--days', '7',
+                        '--dry-run')
             assert result.exit_code == 0, result.output
             assert 'stale-1' in result.output
             assert 'running-2' not in result.output
             assert 'recent-3' not in result.output
             assert 'Dry run: nothing was changed.' in result.output
 
-            result = nr('prune', 'downloads', '--days', '7', input='n\n')
+            result = nr('prune', '--only', 'downloads', '--days', '7',
+                        input='n\n')
             assert 'Nothing was removed.' in result.output
             assert (staging / 'stale-1').exists()
 
-            result = nr('-y', 'prune', 'downloads', '--days', '7')
+            result = nr('-y', 'prune', '--only', 'downloads', '--days', '7')
             assert result.exit_code == 0, result.output
             assert 'Cleared out.' in result.output
 
@@ -144,16 +158,16 @@ def test_what_is_no_longer_needed_is_cleared_out(tmp_path):
         assert (work / 'left.tmp').exists()
 
         # Transfer statistics older than 31 days (today's stay)
-        old_statistics(config, server.host)
-        result = nr('prune', 'statistics', '--dry-run')
+        old_statistics(config)
+        result = nr('prune', '--only', 'statistics', '--dry-run')
         assert '1 day(s) of server statistics older than 31 day(s)' in \
             result.output
-        assert nr('prune', 'statistics', '--days', '50').output.strip() == \
-            'Nothing to clear out.'
+        assert nr('prune', '--only', 'statistics', '--days',
+                  '50').output.strip() == 'Nothing to clear out.'
 
         # All of them, as configured: only work files and statistics go
         # out of the box
-        result = nr('-y', 'prune', 'all')
+        result = nr('-y', 'prune')
         assert result.exit_code == 0, result.output
         assert 'raw_retention is 0' in result.output
         assert 'prune_downloads is 0' in result.output
@@ -161,19 +175,49 @@ def test_what_is_no_longer_needed_is_cleared_out(tmp_path):
         assert '1 day(s) of server statistics' in result.output
         assert not (work / 'left.tmp').exists()
         assert (work / 'busy.tmp').exists()
-        assert 'statistics' not in nr('prune', 'all', '-n').output
+        assert 'statistics' not in nr('prune', '-n').output
         assert 'Today ' in nr('db', 'status').output
 
-        result = nr('prune', 'headers', '--days', '30', '--dry-run')
+        result = nr('prune', '--only', 'headers', '--days', '30',
+                    '--dry-run')
         assert result.exit_code == 0, result.output
         assert '%s: 2 header(s) older than 30 day(s)' % GROUP in \
             result.output
 
-        assert nr('-y', 'prune', 'headers', '--days', '30').exit_code == 0
+        assert nr('-y', 'prune', '--only', 'headers', '--days',
+                  '30').exit_code == 0
 
         # The headers went, and the collection they made is still there
         assert nr('search', '--articles', '-g', GROUP, '-q').output == ''
         assert nr('search', 'holiday', '-q').output.strip()
+
+
+def test_prune_works_before_the_database_is_set_up(tmp_path):
+    """
+    Work files and downloads can be cleared before 'nr db init'; only
+    asking for groups needs the database
+    """
+    from newsreap.cli import cli
+
+    with FakeNNTPServer() as server:
+        config = config_for(server, tmp_path / 'config.yaml')
+
+    work = tmp_path / 'cache' / 'tmp'
+    work.mkdir(parents=True, exist_ok=True)
+    (work / 'left.tmp').write_bytes(b'y')
+    aged(work / 'left.tmp')
+
+    def nr(*args):
+        return CliRunner().invoke(cli, ['--config', config, *args], obj={})
+
+    result = nr('-y', 'prune')
+    assert result.exit_code == 0, result.output
+    assert '1 leftover work file(s)' in result.output
+    assert not (work / 'left.tmp').exists()
+
+    result = nr('prune', '--only', 'groups')
+    assert result.exit_code == 1
+    assert "run 'nr db init' first" in result.output
 
 
 def test_prune_days_come_from_the_configuration(tmp_path):
@@ -247,4 +291,36 @@ def test_a_download_started_after_finding_is_left_alone(tmp_path):
     # Once nothing uses it, it goes
     pruner.clear(found)
     assert not staging.exists()
+    settings.close()
+
+
+def test_work_files_are_only_cleared_inside_our_cache(tmp_path):
+    """
+    Work files are only cleared from a folder inside our cache directory;
+    one next to it with a similar name (ie: cache-old), or the cache
+    directory itself, is left alone
+    """
+    from newsreap.NNTPPruner import NNTPPruner
+    from newsreap.NNTPSettings import NNTPSettings
+
+    with FakeNNTPServer() as server:
+        config = config_for(server, tmp_path / 'config.yaml')
+
+    settings = NNTPSettings(cfg_file=config)
+    cache = settings.cache_dir
+    for folder in (cache + '-old', cache, os.path.join(cache, 'tmp')):
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, 'left.tmp')
+        open(path, 'wb').close()
+        aged(path)
+
+    found = {}
+    for folder in (cache + '-old', cache, os.path.join(cache, 'tmp')):
+        settings.work_dir = folder
+        found[folder] = list(NNTPPruner(settings, work=1)._work_files())
+
+    assert found[cache + '-old'] == []
+    assert found[cache] == []
+    assert found[os.path.join(cache, 'tmp')] == [
+        os.path.join(cache, 'tmp', 'left.tmp')]
     settings.close()

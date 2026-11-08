@@ -114,7 +114,7 @@ def test_one_update_fetches_headers_content_and_nzb_files(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         # Every switch at once
         result = nr('update', GROUP, '--content', '--nzb')
@@ -154,7 +154,7 @@ def test_one_update_fetches_headers_content_and_nzb_files(tmp_path):
         assert fetched(server) == count
 
         # Unless asked to
-        result = nr('update', 'nzb', GROUP, '--force')
+        result = nr('update', '--cached', '--nzb', '--no-content', GROUP, '--force')
         assert result.exit_code == 0, result.output
         assert fetched(server) == count + 2
 
@@ -220,7 +220,7 @@ def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         # A database made before group options existed still works
         db = sqlite3.connect(tmp_path / 'newsreap.db')
@@ -237,14 +237,14 @@ def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
         assert 'no content, nzb' in nr('status').output
 
         # Left out for one run
-        result = nr('update', '--watched', '--no-content')
+        result = nr('update', '--no-content')
         assert result.exit_code == 0, result.output
         assert 'article(s) kept' not in result.output
         assert 'NZB file(s)' not in result.output
         assert fetched(server) == 0
 
         # As the group says
-        result = nr('update', '--watched')
+        result = nr('update')
         assert result.exit_code == 0, result.output
         assert 'article(s) kept' in result.output
         assert 'NZB file(s)' not in result.output
@@ -267,10 +267,9 @@ def test_groups_can_be_told_to_always_keep_content_or_read_nzb_files(
             .exit_code == 1
 
 
-def test_the_update_steps_can_still_be_run_on_their_own(tmp_path):
+def test_update_is_one_command_that_explains_itself(tmp_path):
     """
-    nr update groups/search/index/archive/nzb are still there, and
-    'nr update' explains itself
+    nr update has no subcommands; every step is a switch
     """
     from newsreap.cli import cli
 
@@ -285,15 +284,82 @@ def test_the_update_steps_can_still_be_run_on_their_own(tmp_path):
         result = nr('update', '--help')
         assert result.exit_code == 0
         assert ' update [OPTIONS] [GROUPS]...' in result.output.split('\n')[0]
-        for name in ('--content', '--nzb', '--rescore', 'archive', 'groups',
-                     'index', 'nzb', 'search'):
+        for name in ('--content', '--nzb', '--rescore', '--cached',
+                     '--prune'):
             assert name in result.output
+        assert 'Commands:' not in result.output
 
         assert nr('db', 'init').exit_code == 0
 
         # A group we don't know of
         result = nr('update', 'alt.nothing.here')
         assert result.exit_code == 1
+
+
+def test_update_does_the_watched_groups_unless_others_are_named(tmp_path):
+    """
+    With no groups named, nr update does every watched group; a name that
+    isn't a group is an error, but the others are still updated
+    """
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000004 0000000001 y\n'
+                          '%s 0000000004 0000000001 y\n' % (GROUP, OTHER))
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        for group, name in ((GROUP, 'Watched'), (OTHER, 'Named')):
+            for no, (subject, poster, message_id) in enumerate(
+                    release(name, files=2, segments=2), 1):
+                server.add_overview(
+                    group, no, subject, poster,
+                    POSTED + timedelta(minutes=no), message_id, size=1000)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+
+        # Nothing named and nothing watched
+        result = nr('update')
+        assert result.exit_code == 1
+        assert 'No groups are watched' in result.output
+
+        # Only the watched group
+        assert nr('group', 'watch', GROUP).exit_code == 0
+        result = nr('update', '--newest', '10')
+        assert result.exit_code == 0, result.output
+        assert '%s: 4 article(s) indexed' % GROUP in result.output
+        assert OTHER not in result.output
+
+        # The bad name is reported, the good one is still updated
+        result = nr('update', 'alt.nothing.here', OTHER, '--newest', '10')
+        assert result.exit_code == 1
+        assert "There is no group (or alias) named 'alt.nothing.here'" \
+            in result.output
+        assert '%s: 4 article(s) indexed' % OTHER in result.output
+
+        # The same with no new headers fetched
+        result = nr('update', '--cached', 'alt.nothing.here', GROUP)
+        assert result.exit_code == 1
+        assert "named 'alt.nothing.here'" in result.output
+        assert 'No groups are watched' not in result.output
+
+        # An alias can have any name, even one that sounds like a step
+        assert nr('alias', 'add', 'index', OTHER).exit_code == 0
+        result = nr('update', 'index', '--cached')
+        assert result.exit_code == 0, result.output
+        assert '%s: ' % OTHER in result.output
+
+        # Only bad names leaves nothing to do
+        result = nr('update', 'alt.nothing.here')
+        assert result.exit_code == 1
+        assert 'No groups are watched' not in result.output
 
 
 def test_articles_can_be_shown_and_fetched(tmp_path):
@@ -339,7 +405,7 @@ def test_articles_can_be_shown_and_fetched(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         assert nr('update', GROUP).exit_code == 0
 
         def logins():
@@ -440,7 +506,7 @@ def test_groups_can_be_reset_and_worked_on_offline(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         assert nr('update', GROUP, OTHER).exit_code == 0
 
         # Everything, newest first (or oldest first)
@@ -469,7 +535,7 @@ def test_groups_can_be_reset_and_worked_on_offline(tmp_path):
         assert '%s: 8 article(s) cached' % GROUP in result.output
         assert names() == ['Shared']
 
-        assert nr('update', 'index', GROUP).exit_code == 0
+        assert nr('update', '--cached', GROUP).exit_code == 0
         assert names() == ['Shared', 'Mine']
 
 
@@ -478,6 +544,8 @@ def test_groups_are_pruned_to_their_retention(tmp_path):
     - nothing is pruned without a retention, and only when asked
     - nr prune removes what is older than a group's own retention; other
       groups keep theirs
+    - on its own it does the watched groups; a bad name doesn't stop the
+      rest
     - a plain update doesn't fetch it again, but asking for those dates
       does; nr update --prune prunes afterwards
     - nr group purge frees everything kept of a group
@@ -537,7 +605,7 @@ def test_groups_are_pruned_to_their_retention(tmp_path):
                 settings.close()
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         assert nr('update', GROUP, OTHER).exit_code == 0
         assert names() == {'Old', 'New', 'Other'}
 
@@ -577,9 +645,35 @@ def test_groups_are_pruned_to_their_retention(tmp_path):
         assert result.exit_code == 0, result.output
         assert names() == {'Old', 'New', 'Other'}
 
+        # On its own, prune does the watched groups
+        older = '%s: 4 header(s), 2 file(s) and 0 post(s) older than 30 ' \
+            'day(s)' % GROUP
+        assert 'Nothing to clear out.' in nr('prune', '-n').output
+        assert nr('group', 'watch', GROUP).exit_code == 0
+        result = nr('prune', '-n')
+        assert result.exit_code == 0, result.output
+        assert older in result.output
+        assert OTHER not in result.output
+
+        # A bad name is an error; the rest are still looked at
+        result = nr('prune', 'alt.nothing.here', GROUP, '-n')
+        assert result.exit_code == 1
+        assert "named 'alt.nothing.here'" in result.output
+        assert older in result.output
+
+        # --days is for one kind, and groups and kinds don't mix
+        result = nr('prune', '--days', '5', '-n')
+        assert result.exit_code == 1
+        assert '--days needs one kind' in result.output
+        result = nr('prune', GROUP, '--only', 'work', '-n')
+        assert result.exit_code == 1
+        assert 'not both' in result.output
+        assert names() == {'Old', 'New', 'Other'}
+        assert nr('group', 'unwatch', GROUP).exit_code == 0
+
         # Old transfer statistics go too
         from tests.Prune_Test import old_statistics
-        old_statistics(config, server.host)
+        old_statistics(config)
 
         result = nr('update', GROUP, '--prune')
         assert result.exit_code == 0, result.output
@@ -596,6 +690,10 @@ def test_groups_are_pruned_to_their_retention(tmp_path):
         result = nr('-y', 'group', 'purge', GROUP)
         assert result.exit_code == 0, result.output
         assert '%s: purged' % GROUP in result.output
+        # Nothing of its cache is left behind (SQLite's files included)
+        import os
+        assert not [name for name in os.listdir(
+            tmp_path / 'cache' / 'search') if name.startswith(GROUP)]
         assert names() == {'Other'}
         assert clocks() == {OTHER}
         listed = nr('group', 'ls').output
@@ -637,7 +735,7 @@ def test_status_shows_everything_kept(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         # A name that isn't a group (or an alias)
         result = nr('update', 'update')
@@ -660,7 +758,7 @@ def test_status_shows_everything_kept(tmp_path):
 
         # Each server's line: what today moved, and every day kept
         line = next(row for row in result.output.splitlines()
-                    if row.strip().startswith('127.0.0.1') and
+                    if row.strip().startswith('valid@127.0.0.1:') and
                     ' today ' in row)
         assert ' down, ' in line and '1 day(s)' in line
         assert 'Collections' not in result.output
@@ -756,7 +854,7 @@ def test_what_a_search_finds_can_be_listed_shown_or_removed(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         assert nr('update', GROUP, '--content').exit_code == 0
 
         # Only what each is called (to hand to another command)
@@ -785,22 +883,197 @@ def test_what_a_search_finds_can_be_listed_shown_or_removed(tmp_path):
         assert 'Nothing was removed.' in result.output
         assert 'more@x' in nr('search', '--posts', 'photos', '-q').output
 
+        # Everything kept of it goes too (ie: its cached header)
         result = nr('search', '--posts', 'more', '--delete', input='y\n')
         assert 'Removed 1 post(s).' in result.output
         assert nr('search', '--posts', 'photos', '-q').output.split() == [
             'talk@x']
+        assert 'more@x' not in nr(
+            'search', '--articles', '-g', GROUP, '-q').output
 
-        # -y answers yes; collections and articles go the same way
-        result = nr('-y', 'search', 'holiday', '--delete')
-        assert result.exit_code == 0, result.output
-        assert 'Removed %d collection(s).' % len(collections) in \
-            result.output
-        assert nr('search', 'holiday', '-q').output.strip() == ''
-
+        # -y answers yes; articles and collections go the same way
         result = nr('-y', 'search', '--articles', '-g', GROUP,
                     '--message-id', 'talk@x', '--delete')
         assert 'Removed 1 article(s).' in result.output
         assert 'talk@x' not in nr(
             'search', '--articles', '-g', GROUP, '-q').output
-        assert 'more@x' in nr(
-            'search', '--articles', '-g', GROUP, '-q').output
+        assert nr('search', '--posts', 'photos', '-q').output.strip() == ''
+
+        collections = nr('search', 'holiday', '-q').output.split()
+        assert collections
+        result = nr('-y', 'search', 'holiday', '--delete')
+        assert result.exit_code == 0, result.output
+        assert 'Removed %d collection(s).' % len(collections) in \
+            result.output
+        assert nr('search', 'holiday', '-q').output.strip() == ''
+        assert nr('search', '--articles', '-g', GROUP, 'holiday',
+                  '-q').output.strip() == ''
+
+
+def test_workers_leave_each_other_alone(tmp_path):
+    """
+    - a group another worker is updating is skipped (the rest are done)
+    - so is settling, when another worker is at it
+    - once that worker lets go (or has stopped), it is done as usual
+    """
+    from newsreap.NNTPSettings import NNTPSettings
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000004 0000000001 y\n'
+                          '%s 0000000004 0000000001 y\n' % (GROUP, OTHER))
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        for group, name in ((GROUP, 'Mine'), (OTHER, 'Theirs')):
+            for no, (subject, poster, message_id) in enumerate(
+                    release(name, files=2, segments=2), 1):
+                server.add_overview(
+                    group, no, subject, poster,
+                    POSTED + timedelta(minutes=no), message_id, size=1000)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+
+        # Another worker (still running) is busy with one group, and with
+        # settling
+        settings = NNTPSettings(cfg_file=config)
+        assert settings.claim(['group:%s' % OTHER, 'settle'], 'elsewhere:1:x',
+                              600) == ['group:%s' % OTHER, 'settle']
+
+        result = nr('update', GROUP, OTHER, '--newest', '10')
+        assert result.exit_code == 0, result.output
+        assert '%s: another worker is updating it; skipped.' % OTHER in \
+            result.output
+        assert 'Another worker is settling the collections; left to it.' \
+            in result.output
+        assert '%s: 4 article(s) indexed' % GROUP in result.output
+        assert OTHER + ':' not in result.output.replace(
+            '%s: another' % OTHER, '')
+
+        result = nr('update', OTHER)
+        assert result.exit_code == 0, result.output
+        assert result.output.strip().endswith(
+            'Nothing to do; other workers have every group.')
+
+        # Pruning and purging leave it alone too
+        result = nr('prune', GROUP, OTHER, '--days', '1', '-n')
+        assert '%s: another worker is updating it; skipped.' % OTHER in \
+            result.output
+        assert '%s: 4 header(s)' % GROUP in result.output
+
+        result = nr('-y', 'group', 'purge', OTHER)
+        assert result.exit_code == 1
+        assert '%s: another worker is updating it; it was left alone.' % \
+            OTHER in result.output
+
+        # Our own claims were let go of; theirs stay
+        assert set(settings.claims()) == {'group:%s' % OTHER, 'settle'}
+
+        settings.release_claims('elsewhere:1:x')
+        result = nr('update', OTHER, '--newest', '10')
+        assert result.exit_code == 0, result.output
+        assert '%s: 4 article(s) indexed' % OTHER in result.output
+        assert '2 collection(s) formed' in result.output
+        assert settings.claims() == {}
+        settings.close()
+
+
+def test_workers_given_the_same_groups_share_them_out(tmp_path,
+                                                      monkeypatch):
+    """
+    Each group is claimed just before it is worked on: one another worker
+    took meanwhile is left to it (so two 'nr update' split the
+    groups between them), and collections are settled once at the end
+    """
+    from newsreap.NNTPSettings import NNTPSettings
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000004 0000000001 y\n'
+                          '%s 0000000004 0000000001 y\n' % (GROUP, OTHER))
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        for group, name in ((GROUP, 'Mine'), (OTHER, 'Theirs')):
+            for no, (subject, poster, message_id) in enumerate(
+                    release(name, files=2, segments=2), 1):
+                server.add_overview(
+                    group, no, subject, poster,
+                    POSTED + timedelta(minutes=no), message_id, size=1000)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+        assert nr('group', 'watch', GROUP, OTHER).exit_code == 0
+
+        # Another worker takes the second group while we fetch the first
+        settings = NNTPSettings(cfg_file=config)
+        import inspect
+        steps = inspect.unwrap(
+            cli.commands['update'].callback).__globals__
+        fetch = steps['fetch_headers']
+
+        def meanwhile(ctx, group, **kwargs):
+            settings.claim(['group:%s' % OTHER], 'elsewhere:1:x', 600)
+            return fetch(ctx, group, **kwargs)
+
+        monkeypatch.setitem(steps, 'fetch_headers', meanwhile)
+
+        result = nr('update', '--newest', '10')
+        assert result.exit_code == 0, result.output
+        lines = result.output.splitlines()
+        assert lines.index('%s: another worker is updating it; skipped.'
+                           % OTHER) > 0
+        assert '%s: 4 article(s) indexed' % GROUP in result.output
+        assert lines[-1] == '1 collection(s) formed'
+        settings.close()
+
+
+def test_a_group_too_big_to_fetch_doesnt_stop_the_others(tmp_path,
+                                                         monkeypatch):
+    """
+    A group too big to fetch the first time says so, the other groups are
+    still updated, and nr update exits with 1
+    """
+    from newsreap.NNTPGroupScanner import NNTPGroupScanner
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000003 0000000001 y\n%s 0000000003 '
+                          '0000000001 y\n' % (GROUP, OTHER))
+
+    scanned = []
+
+    def scan(self, *args, **kwargs):
+        scanned.append(self.group)
+        if self.group == GROUP:
+            self.too_big = 300
+            return False
+        return True
+
+    monkeypatch.setattr(NNTPGroupScanner, 'scan', scan)
+    with FakeNNTPServer(group_list=str(group_list),
+                        join_group=False) as server:
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args):
+            return runner.invoke(cli, ['--config', config, *args], obj={})
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+        result = nr('update', GROUP, OTHER)
+        assert result.exit_code == 1, result.output
+        assert sorted(scanned) == sorted([GROUP, OTHER])

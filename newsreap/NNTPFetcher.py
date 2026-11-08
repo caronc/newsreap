@@ -78,7 +78,6 @@ from .NNTPDownloader import STAGING_PARTS
 from .NNTPDownloader import STAGING_FILES
 from .NNTPDownloader import STAGING_WORK
 from .NNTPDownloader import COMMIT_EVERY
-from .NNTPDownloader import SUBJECT_NAME_RE
 from .NNTPDownloader import safe_name
 from .NNTPDownloader import clear_errors
 from .NNTPDownloader import place_file
@@ -94,6 +93,7 @@ from .Utils import utcnow
 from .NNTPEmptyContent import NNTPEmptyContent
 from .NNTPGetDatabase import NNTPGetDatabase
 from .NNTPIndexer import SegmentNote
+from .NNTPIndexer import parse_subject
 from .NNTPRetry import DEFAULT_RETRY_WINDOW
 from .NNTPRetry import NNTPRetry
 from .NNTPSegmentedPost import NNTPSegmentedPost
@@ -190,6 +190,15 @@ def file_parts(body, work_dir=None):
             stream.readline()
 
 
+def errors_id(line):
+    """
+    Returns the Message-ID a line of text.ERRORS or articles.ERRORS is about
+    (they start with it, ie: '<id>: why'), or None
+    """
+    end = line.find('>:')
+    return line[1:end] if line.startswith('<') and end > 0 else None
+
+
 def write_file(path, data):
     """
     Writes a file under a temporary name and renames it once it is whole;
@@ -279,6 +288,9 @@ class NNTPFetcher(NNTPDownloader):
         # articles.ERRORS
         self.unsaved = {'text': [], 'article': []}
 
+        # The articles our last fetch() was about
+        self.covered = set()
+
     @property
     def archiver(self):
         """
@@ -304,6 +316,10 @@ class NNTPFetcher(NNTPDownloader):
         known = dict(known or {})
         texts = dict(texts) if self.text and texts else {}
         self.folder = join(self.download_dir, tidy_name(name))
+
+        # The articles this fetch is about (what text.ERRORS and
+        # articles.ERRORS say of any other is left as it is)
+        self.covered = {m for f in files for _, m in f['segments']}
 
         # What the archive already knows saves fetching it: whether a post
         # carries a file, and the text of the ones that don't
@@ -438,7 +454,11 @@ class NNTPFetcher(NNTPDownloader):
         """
         Writes text.ERRORS and articles.ERRORS listing the text and articles
         that were wanted and didn't come (see unsaved); each goes once
-        everything it listed is there
+        everything it listed is there.
+
+        Only the articles this fetch was about are changed in them: what
+        they say of any other (ie: one an earlier batch or another search
+        saved into the same folder) is kept.
         """
         for kind, folder, wanted in (
                 ('text', TEXT_FOLDER, self.text),
@@ -447,17 +467,22 @@ class NNTPFetcher(NNTPDownloader):
                 continue
 
             path = join(self.folder, folder)
+            before = NNTPErrorsFile(path).load()
+            others = [line for line in before.problems
+                      if errors_id(line) not in self.covered]
             ids = sorted(set(self.unsaved[kind]))
-            if not ids:
+            if not ids and not others:
                 clear_errors(path)
                 continue
 
             makedirs(self.folder, exist_ok=True)
             sweep(self.folder)
             now = utcnow()
-            write_errors(path, [
-                '<%s>: %s' % (m, self._why(m, now=now)) for m in ids], {
-                m: self.memory[m] for m in ids if m in self.memory},
+            parts = {m: entry for m, entry in before.parts.items()
+                     if m not in self.covered}
+            parts.update({m: self.memory[m] for m in ids if m in self.memory})
+            write_errors(path, others + [
+                '<%s>: %s' % (m, self._why(m, now=now)) for m in ids], parts,
                 heading='Some of the %s could not be saved' % (
                     'text' if kind == 'text' else 'articles'))
 
@@ -502,8 +527,8 @@ class NNTPFetcher(NNTPDownloader):
         them
         """
         now = utcnow()
-        noted = {} if session is None else {
-            row.message_id: row for row in session.query(DownloadedSegment)}
+        noted = {} if session is None else \
+            DownloadedSegment.noted(session, needed)
 
         # The parts of files fetched before (ie: by 'nr get') aren't
         # fetched again for them
@@ -711,33 +736,72 @@ class NNTPFetcher(NNTPDownloader):
             ).encode('utf-8'))
 
     @staticmethod
+    def loose_key(article):
+        """
+        Returns (key, parsed subject) for an article that isn't indexed:
+        every part of one file shares the key (its group and its subject
+        with the part counter taken out); the key is None when the subject
+        names no file (see parse_subject())
+        """
+        parsed = parse_subject(article.get('subject') or '')
+        if not parsed['filename']:
+            return None, parsed
+
+        return '%s\0%s' % (article.get('group') or '', parsed['base']), \
+            parsed
+
+    @staticmethod
     def files_of(articles):
         """
         Returns articles that aren't indexed as files (see
-        NNTPIndexer.fetch_files()): the ones whose subjects name the same
-        file (in quotes) in the same group are parts of one file, put in
-        the order they were given; any other is a file of its own
+        NNTPIndexer.fetch_files()):
+
+        - articles with the same key (see loose_key()) are parts of one
+          file, numbered as their subjects say (ie: 3 of (3/10))
+        - a part seen again belongs to another copy of the file (ie: a
+          repost): the second time a part is seen it goes to the second
+          copy, and so on (NNTPArticleBatches keeps copies apart the same
+          way)
+        - an article whose subject names no file is a file of its own
+        - files come back in the order they were first found
 
         - articles: [{'message_id', 'subject', 'poster', 'group'}]
         """
-        files = {}
-        for no, article in enumerate(articles):
-            found = SUBJECT_NAME_RE.search(article.get('subject') or '')
-            key = (article.get('group'), found.group('name')) if found \
-                else no
-            f = files.get(key)
+        files = []
+
+        # The copies of each file, and how many of them have each part
+        copies = {}
+        seen = {}
+        for article in articles:
+            key, parsed = NNTPFetcher.loose_key(article)
+            part = parsed['part'] if key is not None else 1
+
+            f = None
+            if key is not None:
+                copy = seen.get((key, part), 0)
+                seen[key, part] = copy + 1
+                held = copies.setdefault(key, [])
+                if copy < len(held):
+                    f = held[copy]
+
             if f is None:
-                f = files[key] = {
-                    'id': None, 'name': found.group('name') if found else '',
+                f = {
+                    'id': None, 'name': parsed['filename'],
                     'group': article.get('group'),
                     'subject': article.get('subject') or '',
                     'poster': article.get('poster') or '',
                     'segments': [], 'size': None, 'crc32': None}
-            f['segments'].append((
-                len(f['segments']) + 1,
-                article['message_id'].strip().strip('<>')))
+                files.append(f)
+                if key is not None:
+                    held.append(f)
 
-        return list(files.values())
+            f['segments'].append((
+                part, article['message_id'].strip().strip('<>')))
+
+        for f in files:
+            f['segments'].sort()
+
+        return files
 
     @staticmethod
     def write_nzb(path, files, title=None, work_dir=None):
@@ -746,27 +810,32 @@ class NNTPFetcher(NNTPDownloader):
         NNTPIndexer.fetch_files()); it is only replaced when what it lists
         changed.  Returns True if it was written (or already held the
         same).
+
+        - files: a list or any iterable (ie: a generator); each file is
+          written as it comes, so only one is held in memory at a time
         """
+        def posts():
+            for sort_no, f in enumerate(files):
+                groups = [f['group']] if f.get('group') else []
+                post = NNTPSegmentedPost(
+                    None, subject=f.get('subject') or f.get('name') or '',
+                    poster=f.get('poster') or '', groups=groups,
+                    work_dir=work_dir, sort_no=sort_no)
+                post.filename = f.get('name') or ''
+                for part, message_id in f['segments']:
+                    article = NNTPArticle(
+                        id=message_id, no=part, subject=post.subject,
+                        poster=post.poster, groups=groups, work_dir=work_dir)
+                    article.add(NNTPEmptyContent(
+                        filepath=post.filename, part=part, total_size=0,
+                        work_dir=work_dir))
+                    post.add(article)
+                yield post
+
         nzb = NNTPnzb(work_dir=work_dir)
         nzb.meta = {'title': title} if title else {}
-        for sort_no, f in enumerate(files):
-            groups = [f['group']] if f.get('group') else []
-            post = NNTPSegmentedPost(
-                None, subject=f.get('subject') or f.get('name') or '',
-                poster=f.get('poster') or '', groups=groups,
-                work_dir=work_dir, sort_no=sort_no)
-            post.filename = f.get('name') or ''
-            for part, message_id in f['segments']:
-                article = NNTPArticle(
-                    id=message_id, no=part, subject=post.subject,
-                    poster=post.poster, groups=groups, work_dir=work_dir)
-                article.add(NNTPEmptyContent(
-                    filepath=post.filename, part=part, total_size=0,
-                    work_dir=work_dir))
-                post.add(article)
-            nzb.add(post)
-
-        if not nzb.save(path + '.new', numbering=NZBSegmentNumber.Article):
+        if not nzb.save(path + '.new', numbering=NZBSegmentNumber.Article,
+                        posts=posts()):
             return False
 
         replace_if_changed(path + '.new', path)

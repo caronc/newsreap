@@ -100,3 +100,37 @@ def test_a_status_line_split_over_reads_is_read_whole(connect):
 
     response = connection.send('DATE')
     assert (response.code, response.code_str) == (111, '')
+
+
+def test_a_line_ending_in_a_dot_isnt_the_end_of_a_reply(connect):
+    """
+    A line that merely ends with a dot, followed by a pause, isn't taken
+    for the end of the reply (only a line holding just a dot is)
+    """
+    server, connect = connect
+    first = b'215 list follows\r\nends with a dot.\r\n'
+    server.on(r'^LIST PAUSE', Reply(
+        raw=first + b'and more\r\n.\r\n', chunk_size=len(first), delay=3.5))
+    server.on(r'^DATE', Reply(raw=b'111 20260101000000\r\n'))
+
+    connection = connect()
+    response = connection.send('LIST PAUSE')
+    assert response.body.getvalue().split(b'\r\n')[:2] == [
+        b'ends with a dot.', b'and more']
+
+    response = connection.send('DATE')
+    assert response.code == 111
+
+
+def test_empty_replies_are_answered_without_crashing(connect):
+    """
+    A HEAD or LIST ACTIVE reply holding nothing at all gives no answer
+    instead of a crash
+    """
+    server, connect = connect
+    server.on(r'^HEAD ', Reply(raw=b'221 0 <a@b>\r\n.\r\n'))
+    server.on(r'^LIST ACTIVE', Reply(raw=b'215 list follows\r\n.\r\n'))
+
+    connection = connect()
+    assert not connection.stat('a@b', full=True)
+    assert not connection.groups()

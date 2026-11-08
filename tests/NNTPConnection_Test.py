@@ -12,6 +12,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+import pytest
 import re
 import sys
 import unittest
@@ -421,3 +422,320 @@ def test_server_settings_that_are_not_numbers_use_their_defaults():
     assert sock.min_rate == 1024
     assert sock.slow_window == 0.0
     assert sock._iostream == NNTPIOStream.RFC3977_GZIP
+
+
+def test_next_and_prev_walk_through_a_group(nntp_server):
+    """
+    next() reads forward from where we are (the last article included) and
+    prev() reads back to the first article; neither goes past the group
+    """
+    from datetime import datetime
+    from tests.conftest import connect_to
+
+    for no in range(1, 6):
+        nntp_server.add_overview(
+            'alt.test', no, 'Subject %d' % no, 'p@x', datetime(2020, 1, 1),
+            'id%d@x' % no)
+
+    def numbers(found):
+        return sorted(entry['article_no'] for entry in found.values())
+
+    sock = connect_to(nntp_server, join_group=True)
+    sock.group('alt.test')
+    assert (sock.group_head, sock.group_tail) == (1, 5)
+
+    assert sock.seek(1) == 1
+    assert numbers(sock.next(2)) == [1, 2]
+    assert numbers(sock.next(10)) == [3, 4, 5]
+    assert sock.next().code == 423
+
+    assert numbers(sock.prev(2)) == [4, 5]
+    assert numbers(sock.prev(10)) == [1, 2, 3]
+    assert sock.prev().code == 423
+    sock.close()
+
+
+def test_a_command_can_be_given_its_own_timeout(nntp_server):
+    """
+    send(timeout=...) is how long that reply may go quiet before it counts
+    as stalled; without one the stall_timeout setting is used
+    """
+    from tests.conftest import connect_to
+
+    sock = connect_to(nntp_server, join_group=True)
+    recv = sock._recv
+    asked = []
+
+    def spy(*args, **kwargs):
+        asked.append(kwargs.get('timeout'))
+        return recv(*args, **kwargs)
+
+    sock._recv = spy
+    assert sock.send('MODE READER', timeout=7.5).code is not None
+    assert sock.send('MODE READER').code is not None
+    assert asked[-2:] == [7.5, 0]
+    sock.close()
+
+
+@pytest.mark.parametrize('iostream', [None, False, 0, ''])
+def test_an_empty_iostream_turns_compression_off(iostream):
+    """
+    An iostream of nothing (ie: 'iostream: ~' in the configuration) means
+    no compression
+    """
+    sock = NNTPConnection(host='localhost', port=119, iostream=iostream)
+    assert sock._iostream == NNTPIOStream.RFC3977
+
+
+@pytest.mark.parametrize('join_group', [True, False])
+def test_lists_posts_and_nzb_files_are_fetched_directly(tmp_path, join_group):
+    """
+    A connection fetches a list of Message-IDs, every part of a post (one
+    it can't find is kept, unfetched) and every part an NZB file lists,
+    with the options given
+    """
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.NNTPDownloader_Test import GROUP
+    from tests.NNTPDownloader_Test import write_nzb
+    from tests.conftest import connect_to
+    from newsreap.NNTPArticle import NNTPArticle
+    from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+    from newsreap.NNTPnzb import NNTPnzb
+
+    with FakeNNTPServer() as server:
+        for name in ('a', 'b'):
+            path = tmp_path / ('%s.eml' % name)
+            path.write_bytes(b'Subject: test\r\n\r\nhello %s\r\n' % name.encode())
+            server.add_article('%s@example.com' % name, str(path), GROUP)
+
+        # A yEnc encoded one (only decoded when we are asked to)
+        server.add_article('y@example.com', join(
+            dirname(abspath(__file__)), 'var', '00000005.ntx'), GROUP)
+
+        sock = connect_to(server, join_group=join_group)
+        if not join_group:
+            # We pick the group ourselves (group= is only used to join one)
+            sock.group(GROUP)
+
+        found = sock.get(['a@example.com', 'b@example.com'], str(tmp_path),
+                         group=GROUP)
+        assert sorted(article.id for article in found) == [
+            'a@example.com', 'b@example.com']
+
+        post = NNTPSegmentedPost('file.bin', groups=GROUP)
+        for no, message_id in enumerate(
+                ('a@example.com', 'gone@example.com', 'b@example.com'), 1):
+            post.add(NNTPArticle(id=message_id, no=no))
+
+        # A post knows its groups (they are joined when join_group is set)
+        found = sock.get(post, str(tmp_path), decoders=False,
+                         group=None if join_group else GROUP)
+        assert len(found) == 3
+        fetched = {article.id: len(article.body) > 0 for article in found}
+        assert fetched == {'a@example.com': True, 'gone@example.com': False,
+                           'b@example.com': True}
+
+        nzb = NNTPnzb(write_nzb(tmp_path / 'r.nzb', [
+            ('a.bin', [(1, 'a@example.com')]),
+            ('y.bin', [(1, 'y@example.com')])]))
+        found = sock.get(nzb, str(tmp_path), group=GROUP)
+        assert sorted(article.id for article in found) == [
+            'a@example.com', 'y@example.com']
+        assert [len(a) for a in found if a.id == 'y@example.com'] == [1]
+
+        # As it is (nothing decoded), as asked
+        found = sock.get(nzb, str(tmp_path), group=GROUP, decoders=False)
+        assert [len(a) for a in found if a.id == 'y@example.com'] == [0]
+        sock.close()
+
+
+def test_stat_answers_none_when_the_server_refuses(nntp_server):
+    """
+    A STAT the server refuses (ie: 412 no group selected) is answered with
+    None (it couldn't be told), not mistaken for the article being there
+    """
+    from tests.conftest import connect_to
+
+    sock = connect_to(nntp_server, join_group=False)
+    assert sock.stat('nothing@example.com') is None
+    sock.close()
+
+
+def test_posting_keeps_the_options_given():
+    """
+    post() hands update_headers on for every article (lists too), and an
+    unexpected error is raised as it is (not hidden by another one)
+    """
+    from newsreap.NNTPArticle import NNTPArticle
+    from newsreap.NNTPResponse import NNTPResponse
+
+    sock = NNTPConnection(host='localhost', port=119)
+    asked = []
+
+    def posted(article, update_headers=True):
+        asked.append(update_headers)
+        return NNTPResponse(240, 'Article received OK')
+
+    sock._post = posted
+    articles = [NNTPArticle(id='%d@example.com' % no, no=no)
+                for no in (1, 2)]
+    assert len(sock.post(articles, update_headers=False)) == 2
+    assert asked == [False, False]
+
+    def broken(article, update_headers=True):
+        raise ValueError('bad article')
+
+    sock._post = broken
+    with pytest.raises(ValueError):
+        sock.post(articles[0])
+
+
+def test_the_answer_to_a_post_keeps_what_was_posted():
+    """
+    The answer to a post holds the article posted, even once nothing else
+    does (ie: it was made just for the post)
+    """
+    from newsreap.NNTPArticle import NNTPArticle
+    from newsreap.NNTPResponse import NNTPResponse
+
+    sock = NNTPConnection(host='localhost', port=119)
+    sock._post = lambda article, update_headers=True: NNTPResponse(
+        240, 'Article received OK')
+
+    results = sock.post(NNTPArticle(id='lone@example.com'))
+    assert [r.body.msgid() for r in results] == ['lone@example.com']
+
+
+def test_decoders_given_start_clean_for_each_part(tmp_path):
+    """
+    Decoders handed to a connection for a post are reset before each part
+    (one cut short would otherwise carry on into the next)
+    """
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.NNTPDownloader_Test import GROUP
+    from tests.conftest import connect_to
+    from newsreap.NNTPArticle import NNTPArticle
+    from newsreap.NNTPSegmentedPost import NNTPSegmentedPost
+    from newsreap.codecs.CodecHeader import CodecHeader
+
+    with FakeNNTPServer() as server:
+        for name in ('a', 'b'):
+            path = tmp_path / ('%s.eml' % name)
+            path.write_bytes(b'Subject: test\r\n\r\nhello\r\n')
+            server.add_article('%s@example.com' % name, str(path), GROUP)
+
+        sock = connect_to(server, join_group=True)
+        post = NNTPSegmentedPost('file.bin', groups=GROUP)
+        for no, name in enumerate(('a', 'b'), 1):
+            post.add(NNTPArticle(id='%s@example.com' % name, no=no))
+
+        decoder = CodecHeader(work_dir=str(tmp_path))
+        events = []
+        reset = decoder.reset
+        detect = decoder.detect
+
+        def counted():
+            events.append('reset')
+            return reset()
+
+        def seen(*args, **kwargs):
+            if not events or events[-1] != 'used':
+                events.append('used')
+            return detect(*args, **kwargs)
+
+        decoder.reset = counted
+        decoder.detect = seen
+        sock.get(post, str(tmp_path), decoders=[decoder])
+
+        # Each time it is used, it was reset just before
+        used = [no for no, event in enumerate(events) if event == 'used']
+        assert len(used) == 2
+        assert all(events[no - 1] == 'reset' for no in used)
+        sock.close()
+
+
+def test_a_group_that_cant_be_reached_still_answers_a_tuple():
+    """
+    group() answers (None, None, None, name) when the server can't be
+    reached, as it does for a group that doesn't exist
+    """
+    from newsreap.NNTPConnection import NNTPConnection
+
+    connection = NNTPConnection(
+        host='127.0.0.1', port=119, username='valid', password='valid',
+        secure=False, join_group=False, retries=0)
+    connection.connect = lambda *args, **kwargs: False
+    assert connection.group('alt.test') == (None, None, None, 'alt.test')
+
+
+def test_closing_a_connection_closes_its_backups_too(tmp_path):
+    """
+    Closing a connection lets go of its socket (the server sees it go) and
+    of its backup servers' connections
+    """
+    import time
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.conftest import connect_to
+
+    with FakeNNTPServer(join_group=False) as server:
+        primary = connect_to(server)
+        backup = connect_to(server)
+        assert primary.connect() and backup.connect()
+        assert primary.append(backup) is True
+
+        raw = primary.socket
+        primary.close()
+        assert raw.fileno() == -1
+        assert not backup.connected and backup.socket is None
+
+        # The server is told (QUIT) both times
+        deadline = time.monotonic() + 5
+        while server.commands().count('QUIT') < 2 and \
+                time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert server.commands().count('QUIT') == 2
+
+
+def test_a_group_that_couldnt_be_joined_isnt_taken_as_joined():
+    """
+    A failed GROUP leaves the connection in the group it was in, so asking
+    for the missing group again tries to join it again
+    """
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.conftest import connect_to
+
+    with FakeNNTPServer(join_group=True) as server:
+        server.add_group('alt.binaries.test')
+        connection = connect_to(server, join_group=True)
+        try:
+            assert connection.group('alt.binaries.test')[0] is not None
+            assert connection.group('alt.no.such') == \
+                (None, None, None, 'alt.no.such')
+            assert connection.group_name == 'alt.binaries.test'
+
+            assert connection.stat('<a@b>', group='alt.no.such') is None
+            assert server.commands().count('GROUP alt.no.such') == 2
+
+        finally:
+            connection.close()
+
+
+def test_what_we_write_is_sent_right_away():
+    """
+    Connections send each write at once (TCP_NODELAY) rather than holding
+    a short one back until the server acknowledges the last; posting an
+    article otherwise waits up to 40ms at its end
+    """
+    import socket
+    from tests.FakeNNTPServer import FakeNNTPServer
+    from tests.conftest import connect_to
+
+    with FakeNNTPServer(join_group=False) as server:
+        connection = connect_to(server)
+        try:
+            assert connection.connect()
+            assert connection.socket.getsockopt(
+                socket.IPPROTO_TCP, socket.TCP_NODELAY)
+
+        finally:
+            connection.close()

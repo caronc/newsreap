@@ -690,3 +690,25 @@ class NNTPArticle_Test(TestBase):
             for c in encoded.post_iter())
         assert b'Subject: Subject\r\n' in payload
         assert b'\r\n=ybegin part=1 total=1 line=128 size=19338' in payload
+
+
+def test_articles_and_parts_keep_their_order_past_99999():
+    """
+    Articles (and the parts of a file) sort by their number, however many
+    there are
+    """
+    from newsreap.NNTPArticle import NNTPArticle
+    from newsreap.NNTPContent import NNTPContent
+    from newsreap.SortedSet import sortedset
+
+    articles = sortedset(key=lambda x: x.key())
+    for no in (100000, 99999, 5):
+        articles.add(NNTPArticle(id='%d@x' % no, no=no))
+    assert [a.no for a in articles] == [5, 99999, 100000]
+
+    parts = sortedset(key=lambda x: x.key())
+    for part in (100000, 99999):
+        content = NNTPContent(part=part, total_parts=100000)
+        content.filename = 'a.bin'
+        parts.add(content)
+    assert [c.part for c in parts] == [99999, 100000]

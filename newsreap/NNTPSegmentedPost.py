@@ -44,6 +44,9 @@ import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
+# A {{directive}} in a subject or poster (see apply_template())
+TEMPLATE_RE = re.compile(r'{{[^}]*}}')
+
 
 class NNTPSegmentedPost:
     """
@@ -395,84 +398,38 @@ class NNTPSegmentedPost:
         %%  A literal '%' character.
                 %
         """
-        if custom is None:
-            custom = {}
+        # Custom values replace their text first (in any case)
+        cmask = {str(key).lower(): str(value)
+                 for key, value in (custom or {}).items()}
+        cmask_r = re.compile('|'.join(map(re.escape, cmask)), re.IGNORECASE) \
+            if cmask else None
 
         for index, article in enumerate(self.articles):
-
-            # Make a copy of our subject
-            subject = self.subject \
-                if isinstance(self.subject, str) else ''
-
-            # Make a copy of our poster
-            poster = self.poster \
-                if isinstance(self.poster, str) else ''
-
-            if custom:
-                # Apply our custom object if one is defined; first escape
-                # content
-                cmask = {re.escape(str(key)): str(value)
-                         for (key, value) in custom.items()}
-
-                # Build ourselves a translation map
-                cmask_r = re.compile(
-                    r'(' + '|'.join(cmask) + r')',
-                    re.IGNORECASE | re.ASCII,
-                )
-
-                # Apply our custom masks
-                subject = cmask_r.sub(
-                    lambda x: cmask[re.escape(x.group())], subject)
-                poster = cmask_r.sub(
-                    lambda x: cmask[re.escape(x.group())], poster)
-
-            # Initialize ourselves a master translation table
+            # What each {{directive}} is (ie: {{filename002}} is the name of
+            # its second file)
             mask = {
-                re.escape('{{count}}'): str(len(self)),
-                re.escape('{{index}}'): str(index+1),
-                re.escape('{{totalsize}}'): str(article.size()),
+                '{{count}}': str(len(self)),
+                '{{index}}': str(index + 1),
+                '{{totalsize}}': str(article.size()),
             }
+            for no, content in enumerate(article, 1):
+                mask['{{filename%.3d}}' % no] = content.filename
+                mask['{{filesize%.3d}}' % no] = str(len(content))
+            mask['{{filename}}'] = mask.get('{{filename001}}', '')
+            mask['{{filesize}}'] = mask.get('{{filesize001}}', '')
 
-            # Our first item can be referenced as
-            #   {{filename001}} or {{filename}}
-            #
-            # Similarily the first time (only) can be reference as
-            #   {{filesize001}} or {{filesize}}
-            #
-            try:
-                mask[re.escape('{{filename}}')] = article[0].filename
-                mask[re.escape('{{filesize}}')] = str(len(article[0]))
+            def fill(text):
+                if cmask_r is not None:
+                    text = cmask_r.sub(
+                        lambda x: cmask[x.group().lower()], text)
 
-            except IndexError:
-                mask[re.escape('{{filename}}')] = ''
-                mask[re.escape('{{filesize}}')] = ''
+                # A directive that isn't known is left out
+                return TEMPLATE_RE.sub(
+                    lambda x: mask.get(x.group().lower(), ''), text)
 
-            # for each file, create a filenameNo and filesizeNo
-            for no, content in enumerate(article):
-                try:
-                    mask[re.escape('{{filename%.3d}}' % (no+1))] = \
-                        article[0].filename
-                    mask[re.escape('{{filesize%.3d}}' % (no+1))] = \
-                        str(len(article[0]))
-
-                except IndexError:
-                    # No files found
-                    mask[re.escape('{{filename%.3d}}' % (no+1))] = ''
-                    mask[re.escape('{{filesize%.3d}}' % (no+1))] = ''
-
-            # Build ourselves a translation map
-            mask_r = re.compile(
-                r'(' + '|'.join(mask) + r')',
-                re.IGNORECASE | re.ASCII,
-            )
-
-            # Apply our common masks
-            subject = mask_r.sub(lambda x: mask[re.escape(x.group())], subject)
-            poster = mask_r.sub(lambda x: mask[re.escape(x.group())], poster)
-
-            # Final Tidy
-            subject = re.sub('{{[^}]*}}', '', subject, flags=re.ASCII)
-            poster = re.sub('{{[^}]*}}', '', poster, flags=re.ASCII)
+            subject = fill(self.subject
+                           if isinstance(self.subject, str) else '')
+            poster = fill(self.poster if isinstance(self.poster, str) else '')
 
             if strftime:
                 # Time reference

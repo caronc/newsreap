@@ -34,6 +34,7 @@ from .objects.index.CollectionFile import CollectionFile
 from .objects.index.CollectionMeta import CollectionMeta
 from .objects.index.FileGroup import FileGroup
 from .objects.index.GroupClock import GroupClock
+from .objects.index.IndexLock import IndexLock
 from .objects.index.NzbImport import NzbImport
 from .objects.index.PGPKey import PGPKey
 from .objects.index.PGPPost import PGPPost
@@ -46,6 +47,7 @@ from .objects.index.ObjectBase import ObjectBase
 from .objects.index.Vsp import Vsp
 
 from .Database import Database
+from .Database import setting_up
 
 # SQLite: the full text search index of collection names, file subjects
 # and posters (one entry per collection and per file; see
@@ -202,11 +204,12 @@ class NNTPIndexDatabase(Database):
 
         db = cls(engine=engine, reset=False)
 
-        # Older databases may not have every table yet
-        ObjectBase.metadata.create_all(db._engine)
-
-        with db._engine.begin() as conn:
-            cls.search_index(conn)
+        # Several workers may open the index at once; one at a time sets
+        # it up (two creating the same table or search function at once
+        # fails on a database server)
+        with setting_up(db._engine):
+            with db._engine.begin() as conn:
+                cls.search_index(conn)
 
         return db
 
@@ -288,11 +291,10 @@ class NNTPIndexDatabase(Database):
         makedirs(dirname(db_file), exist_ok=True)
         db = cls(engine='sqlite:///%s' % db_file, reset=False)
 
-        # Older databases may not have every table yet
-        ObjectBase.metadata.create_all(db._engine)
-
-        with db._engine.begin() as conn:
-            cls.search_index(conn)
+        # One worker at a time sets up searching (see from_engine())
+        with setting_up(db._engine):
+            with db._engine.begin() as conn:
+                cls.search_index(conn)
 
         return db
 

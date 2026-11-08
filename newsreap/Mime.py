@@ -38,7 +38,7 @@ from ctypes import c_char_p
 from ctypes import c_int
 from ctypes import c_size_t
 from ctypes import c_void_p
-from gevent.lock import Semaphore
+from threading import Lock
 
 # Logging
 import logging
@@ -59,6 +59,27 @@ _libmagic = ctypes.cdll.LoadLibrary(
 
 # Define a dictionary that we will use to store our library references within
 _magic = {}
+
+# libmagic is opened (and its database loaded) once for each set of flags
+# and kept; a handle is only ever used by one thread at a time
+_handles = {}
+_lock = Lock()
+
+
+def _handle(flags, magic_file=None):
+    """
+    Returns the libmagic handle for the flags given (call it holding _lock)
+    """
+    key = (flags, magic_file)
+    ptr = _handles.get(key)
+    if ptr is None:
+        ptr = _magic['open'](flags)
+        _magic['load'](ptr, magic_file.encode() if isinstance(
+            magic_file, str) else magic_file)
+        _handles[key] = ptr
+
+    return ptr
+
 if not _libmagic or not _libmagic._name:
     # Toggle our HAS_LIBMAGIC Flag
     HAS_LIBMAGIC = False
@@ -577,9 +598,6 @@ class Mime:
         magic_file - Another magic file other then the default
         """
 
-        # The lock allows us to be thread-safe
-        self.lock = Semaphore(value=1)
-
         # Tracks the errno/errstr set after each call
         self.errno = 0
         self.errstr = ''
@@ -619,14 +637,8 @@ class Mime:
             flags |= MAGIC_COMPRESS
 
         try:
-            self.lock.acquire(blocking=True)
-            # 'application/octet-stream; charset=binary'
-
-            # Acquire a pointer
-            ptr = _magic['open'](flags)
-
-            # Acquire a pointer
-            _magic['load'](ptr, self.magic_file)
+            _lock.acquire()
+            ptr = _handle(flags, self.magic_file)
             self.errno = _magic['errno'](ptr)
             if self.errno == 0:
 
@@ -676,12 +688,7 @@ class Mime:
             )
 
         finally:
-            if ptr is not None:
-                # Release our pointer
-                _magic['close'](ptr)
-
-            # Release our lock
-            self.lock.release()
+            _lock.release()
 
         # We failed if we got here, return nothing
         return None
@@ -717,14 +724,8 @@ class Mime:
         res = ""
 
         try:
-            self.lock.acquire(blocking=True)
-            # 'application/octet-stream; charset=binary'
-
-            # Acquire a pointer
-            ptr = _magic['open'](flags)
-
-            # Acquire a pointer
-            _magic['load'](ptr, self.magic_file)
+            _lock.acquire()
+            ptr = _handle(flags, self.magic_file)
             self.errno = _magic['errno'](ptr)
             if self.errno == 0:
 
@@ -787,12 +788,7 @@ class Mime:
             return None
 
         finally:
-            if ptr is not None:
-                # Release our pointer
-                _magic['close'](ptr)
-
-            # Release our lock
-            self.lock.release()
+            _lock.release()
 
         # We failed if we got here, return nothing
         return None

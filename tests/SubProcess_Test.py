@@ -203,3 +203,36 @@ class SubProcess_Test(TestBase):
 
         # Test that the process is now dead as a result of the previous action
         assert self.pid_exists(pid) is False
+
+
+def test_a_program_writing_a_lot_finishes():
+    """
+    A program writing more than a pipe holds (to stdout and stderr) still
+    finishes, and everything it wrote is kept
+    """
+    sp = SubProcess([
+        sys.executable, '-c',
+        "import sys; sys.stdout.write('o' * 1000000); "
+        "sys.stderr.write('e' * 1000000)"], timeout=30)
+    sp.start()
+    sp.join()
+
+    assert sp.response_code() == 0
+    assert len(sp.stdout(as_list=False)) == 1000000
+    assert len(sp.stderr(as_list=False)) == 1000000
+
+
+def test_a_program_that_cant_be_started_is_still_done():
+    """
+    A program that isn't there is reported (not raised), and anything
+    waiting on it is let go
+    """
+    from newsreap.SubProcess import ReturnCode
+
+    sp = SubProcess(['/nonexistent/program'])
+    sp.start()
+    sp.join()
+
+    assert sp.is_complete(timeout=1) is True
+    assert sp.response_code() == ReturnCode.NotStarted
+    assert sp.successful() is False

@@ -420,8 +420,8 @@ def fetch(ctx, message_ids, output, raw, force):
 
     work_dir = ctx['NNTPSettings'].work_dir
 
-    # Track how many we saved
-    saved = 0
+    # Track the articles that couldn't be fetched (or saved)
+    failed = 0
     wanted = list(dict.fromkeys(rank_key(m) for m in message_ids))
     for message_id in wanted:
         article, status = ask(
@@ -435,6 +435,7 @@ def fetch(ctx, message_ids, output, raw, force):
                 "account)." % message_id if status == 'denied'
                 else '<%s> could not be fetched; try again later.' % (
                     message_id))
+            failed += 1
             continue
 
         contents = [] if raw else [
@@ -448,6 +449,7 @@ def fetch(ctx, message_ids, output, raw, force):
                 logger.error(
                     '<%s> could not be fetched; try again later.' % (
                         message_id))
+                failed += 1
                 continue
 
         if not contents:
@@ -456,7 +458,6 @@ def fetch(ctx, message_ids, output, raw, force):
                 fp.write(article.body.getvalue())
 
             click.echo(path)
-            saved += 1
             continue
 
         for content in contents:
@@ -468,10 +469,10 @@ def fetch(ctx, message_ids, output, raw, force):
             path = saved_name(output, name, force)
             if not content.save(path, copy=True):
                 logger.error("Could not save '%s'." % path)
-                continue
+                failed += 1
+                break
 
             click.echo(path)
-            saved += 1
 
-    if saved == 0 or saved < len(wanted):
+    if failed:
         exit(1)

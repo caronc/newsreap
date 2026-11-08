@@ -16,6 +16,7 @@ from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import DateTime
+from newsreap.objects import BigNumber
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -45,16 +46,16 @@ class GroupTrack(ObjectBase):
     group_id = Column(Integer, ForeignKey("group.id"))
 
     # Low Watermark (head)
-    low = Column(Integer, nullable=False, default=0)
+    low = Column(BigNumber, nullable=False, default=0)
 
     # High Watermark (tail)
-    high = Column(Integer, nullable=False, default=0)
+    high = Column(BigNumber, nullable=False, default=0)
 
     # Current Pointer
-    index_pointer = Column(Integer, nullable=False)
+    index_pointer = Column(BigNumber, nullable=False)
 
     # Scan Pointer
-    scan_pointer = Column(Integer, nullable=False)
+    scan_pointer = Column(BigNumber, nullable=False)
 
     # Tracks the last time a scan was done (moving the current pointer)
     last_scan = Column(DateTime, nullable=False, default=datetime.fromtimestamp(0))

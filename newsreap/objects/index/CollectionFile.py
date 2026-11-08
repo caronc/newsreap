@@ -18,6 +18,8 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import DateTime
+from newsreap.objects import BigNumber
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -31,11 +33,11 @@ class CollectionFile(ObjectBase):
     __tablename__ = 'collection_file'
 
     # primary key
-    id = Column(Integer, primary_key=True)
+    id = Column(BigNumber, primary_key=True)
 
     # What makes this file unique (its collection and the subject with its
     # segment counter left out)
-    key = Column(String(512), nullable=False, unique=True)
+    key = Column(Key(512), nullable=False, unique=True)
 
     # The collection the file belongs to (many files : one collection)
     collection_id = Column(

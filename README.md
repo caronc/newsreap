@@ -44,13 +44,13 @@ nr --init
 nr --config ~/usenet/config.yaml --init
 ```
 
-Each kind of file goes where your system expects it (on Linux):
+On Linux, files are kept in these locations:
 
-| What | Where |
+| Path | Contents |
 |---|---|
-| `config.yaml` and your filters (`filters/`) | `~/.config/newsreap/` |
-| What can't be fetched again: the databases, the posts kept, your PGP keys | `~/.local/share/newsreap/` |
-| What can be fetched again: the cached headers, downloads in progress | `~/.cache/newsreap/` |
+| `~/.config/newsreap/` | The configuration file (`config.yaml`) and your filters. |
+| `~/.local/share/newsreap/` | The default SQLite databases, used unless you point NewsReap at your own database (such as PostgreSQL or MySQL). Your PGP keys are kept here too. |
+| `~/.cache/newsreap/` | The cache directory: group headers and downloads in progress. |
 
 The `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` variables move
 them, as do `data_dir` and `cache_dir` in `config.yaml`.  Set `base_dir`
@@ -104,7 +104,7 @@ servers:
 nr db init
 
 # Lists every group your server carries (do this again now and then)
-nr update groups
+nr group refresh
 ```
 
 ### 3. Fetch a Group
@@ -159,6 +159,10 @@ nr search --articles -g a.b.test2 --iposter '*bot*' --delete
 nr search holiday --json                     # one JSON object each
 ```
 `--delete` shows what it found and asks first (`-y` answers yes).
+Everything kept of what it removes goes with it: the cached headers, the
+posts kept offline, their scores and tags, and any file or collection
+left with nothing in it.  `nr delete <id>` does the same for a collection
+(it is remembered as deleted, so it never comes back).
 
 ### 5. Download What You Want
 The number on the left of each search result is its id:
@@ -180,7 +184,7 @@ nr group watch alt.binaries.test2
 nr alias add test2 alt.binaries.test2
 
 # Fetch every watched group (a good one for a crontab)
-nr update --watched
+nr update
 ```
 
 ### Where to Go Next
@@ -258,9 +262,10 @@ can read it too; if it is changed so it can't be read back, its file is
 downloaded again.
 
 `--no-repair`, `--no-extract` and `--no-cleanup` turn the steps off for one
-run; the `downloads:` section of `config.yaml` sets them for good.  Each
-`nr get` uses its own connections, so running two at once can go over what
-your provider allows.
+run; the `downloads:` section of `config.yaml` sets them for good.  Once
+the database is set up (`nr db init`), two `nr get` (or `nr update`)
+running at once share the connections your provider allows rather than
+going over them.
 
 ### Downloading What a Search Finds
 `nr search` can download what it finds straight away, as it was posted.
@@ -288,6 +293,10 @@ nr search holiday -d --delete
 
 - It shows what it found and its size, and asks first (`-y` answers yes).
 - Each article is fetched once, whatever you asked for.
+- Articles and posts found on their own (`--articles`, `--posts`) are
+  downloaded 10,000 at a time (`batch_size` in the `downloads:` section),
+  so even a whole group never fills your memory.  A file's parts always
+  stay in the same batch, however far apart they were posted.
 - **Running the same download again only fetches what is missing.**  A
   file that is there without a `.ERRORS` file beside it is whole, so it is
   skipped without asking the server (and so is a text file or an article
@@ -307,17 +316,13 @@ nr search holiday -d --delete
   carry on; the next run may fetch a few articles again to find out
   whether they carry a file.
 
-A Message-ID downloads that one article as it is:
+One article is looked at with `nr show` and saved with `nr fetch`:
 ```bash
-# Fetch Message-ID aajk2jb (--group if your server needs it)
-nr get --group=alt.binaries.test aajk2jb
-```
+# What we know of the article abcd@1234 (its header, and its text)
+nr show abcd@1234
 
-If you want to view a header of a particular post you can do the following:
-```bash
-# Fetch the Article header associated with the Message-ID abcd@1234
-nr get --headers abcd@1234
-
+# Save the files it holds (--raw saves it as the server sent it)
+nr fetch abcd@1234
 ```
 
 ## Posting
@@ -440,7 +445,7 @@ Indexing allows you to scan headers from one or more groups and download them to
 nr db init
 
 # Cache the group listings
-nr update groups
+nr group refresh
 
 # When that's done;  you can choose to add groups to a watch list
 # which will be automatically indexed for you:
@@ -611,7 +616,7 @@ Watch the groups you care about and fetch them as often as you like:
 
 ```bash
 nr group watch a.b.test2
-nr update --watched
+nr update
 
 # A group can always keep its posts' text (--content) or read the NZB
 # files posted to it (--nzb), without being asked each time
@@ -626,9 +631,39 @@ nr group ls
 cat << _EOF > /etc/cron.d/newsreap
 # Fetch (and index) every watched group every 20 minutes; you don't need
 # root to run this (it's better not to)
-*/20 * * * * someuser nr update --watched
+*/20 * * * * someuser nr update
 _EOF
 ```
+
+### Several Workers at Once
+When updating every group takes longer than the time between runs, run
+several `nr update` at once.  They can run on one machine, or on several
+sharing a PostgreSQL or MySQL database (SQLite works too, on one machine;
+the workers just take turns more):
+
+```bash
+# Give them all the same groups; they share them out between them
+nr update        # in one crontab line (or terminal)
+nr update        # and another
+
+# Or give each its own groups (an alias each works well)
+nr alias add busy a.b.big1 a.b.big2
+nr alias add quiet a.b.small1 a.b.small2 a.b.small3
+nr update busy
+nr update quiet
+```
+
+- Each group is claimed just before a worker starts on it; a group
+  another worker has is skipped, so no two workers fetch the same thing.
+  Collections are settled once a worker has done its groups (by one
+  worker at a time).
+- Every worker takes turns adding to the index, so a post crossposted to
+  groups that different workers fetch is still one collection.
+- The `connections` each server allows are shared by all of them: two
+  workers together never open more than your provider lets you.
+- A worker that stopped without finishing (ie: it was killed) lets go of
+  what it was busy with within a couple of minutes (at once on the same
+  machine).
 
 ### Housekeeping
 Every group of commands uses the same words (as docker does): `ls` to
@@ -641,28 +676,27 @@ nr pgp ls
 ```
 (The older names, ie: `list`, `remove` and `forget`, still work.)
 
-`nr prune` clears out what is no longer needed, but only what you name.
-It shows what would go and asks first:
+`nr prune` clears out what is no longer needed.  It shows what would go
+and asks first:
 ```bash
-# Downloads that didn't finish (kept so they can carry on), untouched 14 days
-nr prune downloads --days 14
+# Everything the configuration says (see below); --dry-run only shows it
+nr prune --dry-run
+nr prune
 
-# Files a stopped run left in the work directory
-nr prune work
+# Only some groups (or aliases), to their retention
+nr prune alt.binaries.test2
 
-# Indexed headers posted over 90 days ago (their collections stay)
-nr prune headers --days 90 --dry-run
-
-# Transfer statistics older than 31 days
-nr prune statistics
-
-# Every kind, as the configuration says
-nr prune all
+# Only some kinds: groups, headers, downloads, work or statistics
+nr prune --only downloads --days 14
+nr prune --only work --only statistics
 ```
-Without `--days`, each one uses the `prune_downloads`, `prune_work`,
-`raw_retention` and `statistics` settings.  Out of the box, downloads and
-headers are kept until you ask, work files go after a day and transfer
-statistics after 31 days.  Finished downloads are never touched.
+Each kind follows a setting: the watched groups keep their `retention`
+(or what `nr group set --retention` gave them), indexed headers keep
+`raw_retention` days, unfinished downloads `prune_downloads`, work files
+`prune_work` and transfer statistics `statistics`.  `--days` overrides it
+for one kind.  Out of the box, group content, downloads and headers are
+kept until you set a number of days, work files go after a day and
+transfer statistics after 31 days.  Finished downloads are never touched.
 
 ## Developers
 Tests, linting and builds are all run through [tox](https://tox.wiki/):

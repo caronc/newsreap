@@ -76,7 +76,7 @@ def test_removing_a_group_from_one_alias_leaves_the_others(nr):
     a group that isn't in it, or an alias that doesn't exist, is an error
     """
     assert nr('db', 'init').exit_code == 0
-    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'refresh').exit_code == 0
     assert nr('alias', 'add', 'test', TEST).exit_code == 0
     assert nr('alias', 'add', 'both', TEST, OTHER).exit_code == 0
 
@@ -103,11 +103,10 @@ def test_removing_a_group_from_one_alias_leaves_the_others(nr):
 
 def test_names_that_match_nothing_are_refused(nr):
     """
-    A typo in a group name adds (or watches) nothing, and says so; an
-    alias can't take the name of an update step either
+    A typo in a group name adds (or watches) nothing, and says so
     """
     assert nr('db', 'init').exit_code == 0
-    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'refresh').exit_code == 0
 
     result = nr('alias', 'add', 't', TEST, 'alt.binaries.typo')
     assert result.exit_code == 1
@@ -115,10 +114,6 @@ def test_names_that_match_nothing_are_refused(nr):
     assert aliases(nr) == {}
 
     assert nr('group', 'watch', TEST, 'alt.binaries.typo').exit_code == 1
-
-    result = nr('alias', 'add', 'index', TEST)
-    assert result.exit_code == 1
-    assert "'index' can't be an alias" in result.output
 
 
 def test_unwatching_skips_a_typo(nr):
@@ -132,7 +127,7 @@ def test_unwatching_skips_a_typo(nr):
     assert "run 'nr db init' first" in result.output
 
     assert nr('db', 'init').exit_code == 0
-    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'refresh').exit_code == 0
     assert nr('group', 'watch', TEST, OTHER).exit_code == 0
     listed = nr('group', 'ls').output.splitlines()
     assert [line.split()[:2] for line in listed] == [['*', OTHER],
@@ -155,7 +150,7 @@ def test_resetting_the_database_asks_first(nr):
     'db reset' says what it removes and asks; no keeps everything
     """
     assert nr('db', 'init').exit_code == 0
-    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'refresh').exit_code == 0
     assert nr('alias', 'add', 'test', TEST).exit_code == 0
 
     result = nr('db', 'reset', input='n\n')
@@ -172,7 +167,7 @@ def test_optimizing_compacts_every_sqlite_database(nr, tmp_path):
     and says how much it gave back
     """
     assert nr('db', 'init').exit_code == 0
-    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'refresh').exit_code == 0
 
     result = nr('db', 'optimize')
     assert result.exit_code == 0, result.output

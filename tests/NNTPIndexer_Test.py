@@ -1,5 +1,5 @@
 # Tests grouping cached articles (from every group) into files and
-# collections (nr update index), and saving, importing and deleting them
+# collections (nr update), and saving, importing and deleting them
 # (nr nzb, nr delete)
 #
 # Copyright (C) 2026 Chris Caron <lead2gold@gmail.com>
@@ -35,9 +35,11 @@ from newsreap.NNTPIndexer import gid_order
 from newsreap.NNTPIndexer import make_gid
 from newsreap.NNTPIndexer import parse_subject
 from newsreap.NNTPIndexer import release_name
+from newsreap.NNTPIndexer import sorted_in_runs
 from newsreap.NNTPnzb import NNTPnzb
 from newsreap.NNTPnzb import NZBSegmentNumber
 from newsreap.objects.group.Article import Article
+from newsreap.objects.index.CollectionFile import CollectionFile
 from newsreap.objects.index.Collection import Collection
 from newsreap.objects.index.Collection import CollectionSource
 from newsreap.objects.index.ObjectBase import ObjectBase as IndexBase
@@ -86,7 +88,7 @@ def release(name, files=3, segments=4, skip=(), poster=POSTER, only=None,
 
 def cache(db_file, articles, start=1, posted=POSTED):
     """
-    Stores articles (as `nr update search` would) and returns the next
+    Stores articles (as `nr update` would) and returns the next
     article number; the first is posted at `posted`, the rest a minute
     apart
     """
@@ -195,6 +197,41 @@ def indexed(paths, *groups, **kwargs):
         indexer.index(group, paths[group])
     indexer.settle()
     return indexer
+
+
+def open_in(folder):
+    """
+    How many files this process has open in a folder (or below it)
+    """
+    found = 0
+    for fd in os.listdir('/proc/self/fd'):
+        try:
+            found += os.readlink('/proc/self/fd/%s' % fd).startswith(
+                folder + os.sep)
+
+        except OSError:
+            # (it was closed while we looked)
+            pass
+
+    return found
+
+
+def sort_runs(monkeypatch):
+    """
+    Notes how many runs each sort done in runs (see sorted_in_runs())
+    left behind just before its folder was removed
+    """
+    from newsreap import NNTPIndexer as module
+
+    found = []
+    remove = module.rmtree
+
+    def noted(folder, *args, **kwargs):
+        found.append(len(os.listdir(folder)))
+        return remove(folder, *args, **kwargs)
+
+    monkeypatch.setattr(module, 'rmtree', noted)
+    return found
 
 
 #
@@ -544,6 +581,43 @@ def test_case_is_ignored_unless_asked(paths, tmp_path):
     assert names('Caf%') == []
     assert names('%z') == []
     assert names('Soc_ety') == []
+    indexer.close()
+
+
+def test_a_big_nzb_file_is_imported_a_chunk_at_a_time(paths, tmp_path):
+    """
+    The files of an NZB file are looked up a chunk at a time (not with a
+    query each), and every one is kept in the order listed
+    """
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    path = nzb_file(tmp_path / 'big.nzb', 'Big', range(1, 1201),
+                    total=1200, segments=1)
+    lookups = []
+
+    def counted(conn, cursor, statement, *args):
+        # The key may be quoted ("key" or `key`)
+        if statement.lstrip().upper().startswith('SELECT') and \
+                re.search(r'collection_file\.\W?key\W? (IN|=)', statement):
+            lookups.append(statement)
+
+    event.listen(Engine, 'before_cursor_execute', counted)
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        collection, added = indexer.import_nzb(path)
+
+    finally:
+        event.remove(Engine, 'before_cursor_execute', counted)
+
+    session = indexer.session()
+    files = session.query(CollectionFile)\
+        .filter(CollectionFile.collection_id == collection.id)\
+        .order_by(CollectionFile.position).all()
+    assert len(files) == 1200
+    assert files[0].filename == 'big.part01.rar'
+    assert files[-1].filename == 'big.part1200.rar'
+    assert len(lookups) == 3
     indexer.close()
 
 
@@ -1199,7 +1273,7 @@ def test_deleted_collections_stay_gone(paths, tmp_path):
     # It can't be deleted twice
     assert indexer.delete(junk.id) is False
 
-    # Its articles cached again (ie: nr update search --force)
+    # Its articles cached again (ie: nr update --force)
     db = NNTPGroupDatabase.from_file(paths[GROUP])
     session = db.session()
     session.query(Article).update({Article.indexed: False})
@@ -1242,9 +1316,10 @@ def test_old_headers_are_purged(paths):
 #
 # The command line
 #
-def test_index_and_save_from_the_command_line(tmp_path):
+def test_index_and_save_from_the_command_line(tmp_path, caplog,
+                                              monkeypatch):
     """
-    nr update index, nr nzb list/save/import and nr delete work together
+    nr update, nr nzb list/save/import and nr delete work together
     """
     from newsreap.cli import cli
 
@@ -1271,10 +1346,10 @@ def test_index_and_save_from_the_command_line(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         # Nothing has been cached yet
-        result = nr('update', 'index', GROUP)
+        result = nr('update', '--cached', GROUP)
         assert result.exit_code == 1
         assert "run 'nr update %s' first" % GROUP in result.output
 
@@ -1282,12 +1357,12 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert 'Nothing indexed yet' in result.output
 
         # Only cached (indexed below)
-        assert nr('update', 'search', '--no-index', GROUP).exit_code == 0
-        assert nr('update', 'search', '--no-index', OTHER).exit_code == 0
+        assert nr('update', '--no-index', GROUP).exit_code == 0
+        assert nr('update', '--no-index', OTHER).exit_code == 0
         assert 'Nothing indexed yet' in nr('search').output
 
         assert nr('alias', 'add', 'both', GROUP, OTHER).exit_code == 0
-        result = nr('update', 'index', 'both')
+        result = nr('update', '--cached', 'both')
         assert result.exit_code == 0
         assert '%s: 3 article(s) indexed; 2 new file(s) in 1 new ' \
             'collection(s)' % GROUP in result.output
@@ -1361,6 +1436,21 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert result.exit_code == 0
         assert '(already indexed)' in result.output
 
+        # Files it has on top of ours are counted, and the first few named
+        from newsreap import NNTPIndexer as module
+        monkeypatch.setattr(module, 'LEFT_OUT_SAMPLES', 1)
+        extra = globals()['nzb_file'](
+            tmp_path / 'extra.nzb', 'Holiday.Photos', (1, 2, 3, 4, 5),
+            total=2)
+        caplog.clear()
+        result = nr('nzb', 'import', extra)
+        assert result.exit_code == 0
+        assert '(already indexed)' in result.output
+        assert "lists 3 file(s) collection #1 doesn't have" in caplog.text
+        assert 'part03.rar' in caplog.text
+        assert 'part04.rar' not in caplog.text
+        assert '... and 2 more' in caplog.text
+
         # An NZB file with an extra file only adds it when merging
         bigger = globals()['nzb_file'](
             tmp_path / 'bigger.nzb', 'Holiday.Photos', (1, 2, 3), total=2)
@@ -1374,7 +1464,7 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert '3/3 file(s)' in nr('nzb', 'list').output
 
         # Settling can be told every group was seen up to now
-        assert nr('update', 'index', 'both', '--settle').exit_code == 0
+        assert nr('update', '--cached', 'both', '--settle').exit_code == 0
 
         # Delete it (you are asked first); it doesn't come back
         result = nr('delete', '1', input='n\n')
@@ -1384,14 +1474,14 @@ def test_index_and_save_from_the_command_line(tmp_path):
         assert result.exit_code == 0
         assert 'Removed [1] Holiday.Photos' in result.output
         assert nr('delete', '1').exit_code == 1
-        assert nr('update', 'index', 'both').exit_code == 0
+        assert nr('update', '--cached', 'both').exit_code == 0
         assert 'Holiday.Photos' not in nr('nzb', 'list').output
         assert nr('nzb', 'import', nzb_file).exit_code == 1
 
 
 def test_fetched_headers_can_be_searched_right_away(tmp_path):
     """
-    nr update search indexes what it fetched; nr db status shows what is
+    nr update indexes what it fetched; nr db status shows what is
     where; a search that finds nothing says why
     """
     from newsreap.cli import cli
@@ -1420,14 +1510,14 @@ def test_fetched_headers_can_be_searched_right_away(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         # Nothing fetched yet
         assert "run 'nr update <group> --newest 100000' first" in \
             nr('search').output
         assert 'Nothing fetched yet' in nr('db', 'status').output
 
-        result = nr('update', 'search', GROUP)
+        result = nr('update', GROUP)
         assert result.exit_code == 0, result.output
         assert '%s: 7 article(s) indexed; 4 new file(s) in 2 new ' \
             'collection(s)' % GROUP in result.output
@@ -1530,6 +1620,1027 @@ def test_old_posts_kept_from_a_group_can_be_let_go(index_engine):
             'new@x', 'shared@x'}
         assert {(g.message_id, g.name) for g in session.query(
             ArchiveGroup)} == {('new@x', GROUP), ('shared@x', OTHER)}
+
+    finally:
+        indexer.close()
+
+
+def index_worker(index, group, path, start):
+    """
+    Indexes (and settles) one group in a process of its own, once `start`
+    is set (see test_workers_indexing_at_once_share_their_collections)
+    """
+    start.wait()
+    indexer = NNTPIndexer(index, chunk_size=40)
+    try:
+        indexer.index(group, path)
+        indexer.settle()
+
+    finally:
+        indexer.close()
+
+
+def open_worker(index, start):
+    """
+    Opens (and closes) the index a few times in a process of its own, once
+    `start` is set (see test_workers_can_open_the_index_at_once)
+    """
+    from newsreap.NNTPIndexDatabase import NNTPIndexDatabase
+
+    start.wait()
+    for _ in range(5):
+        NNTPIndexDatabase.from_engine(index).close()
+
+
+def test_workers_can_open_the_index_at_once(paths):
+    """
+    Several workers opening the index at the same moment don't trip over
+    each other setting it up (its tables and search)
+    """
+    import multiprocessing
+
+    context = multiprocessing.get_context('spawn')
+    start = context.Event()
+    workers = [context.Process(target=open_worker, args=(
+        paths['index'], start)) for _ in range(6)]
+    for worker in workers:
+        worker.start()
+    start.set()
+    for worker in workers:
+        worker.join(120)
+        assert worker.exitcode == 0
+
+
+def test_workers_indexing_at_once_share_their_collections(paths):
+    """
+    Two workers indexing groups that share their posts (crossposted) into
+    one index at the same time make each collection once, with every
+    file and article in it
+    """
+    import multiprocessing
+
+    names = ['Shared%02d' % no for no in range(30)]
+    for group in (GROUP, OTHER):
+        cache(paths[group], [
+            article for name in names for article in release(name)])
+        caught_up(paths[group])
+
+    # Something made the index first (as 'nr db init' does)
+    NNTPIndexer(paths['index']).session(create=True)
+
+    context = multiprocessing.get_context('spawn')
+    start = context.Event()
+    workers = [context.Process(target=index_worker, args=(
+        paths['index'], group, paths[group], start)) for group in (
+            GROUP, OTHER)]
+    for worker in workers:
+        worker.start()
+    start.set()
+    for worker in workers:
+        worker.join(120)
+        assert worker.exitcode == 0
+
+    indexer = NNTPIndexer(paths['index'])
+    found = indexer.find()
+    assert sorted(entry.name for entry in found) == names
+    assert {(entry.files, entry.segments) for entry in found} == {(3, 12)}
+    assert all(indexer.groups(entry.id) == [OTHER, GROUP] for entry in found)
+    indexer.close()
+
+
+def test_a_chunk_is_tried_again_when_another_worker_is_in_the_way(
+        paths, monkeypatch):
+    """
+    - a chunk that met a lock is undone and tried again (a few times at
+      most), and nothing is lost or counted twice
+    - any other error isn't tried again
+    """
+    import sqlite3
+    from sqlalchemy.exc import OperationalError
+    import newsreap.NNTPIndexer as module
+
+    cache(paths[GROUP], release('Retried'))
+    monkeypatch.setattr(module, 'sleep', lambda seconds: None)
+
+    original = NNTPIndexer._archived_filenames
+    failures = []
+
+    def in_the_way(self, session, message_ids):
+        if failures:
+            raise OperationalError(
+                'UPDATE', {}, failures.pop(0))
+        return original(self, session, message_ids)
+
+    monkeypatch.setattr(NNTPIndexer, '_archived_filenames', in_the_way)
+
+    failures[:] = [sqlite3.OperationalError('database is locked')] * 2
+    indexer = indexed(paths)
+    assert (indexer.articles, indexer.files, indexer.collections) == (
+        12, 3, 1)
+    found, = indexer.find()
+    assert (found.files, found.segments) == (3, 12)
+    indexer.close()
+
+    cache(paths[OTHER], release('Broken'))
+    for error, tries in (
+            (sqlite3.OperationalError('database is locked'),
+             module.INDEX_TRIES),
+            (sqlite3.OperationalError('no such table: segment'), 1)):
+        failures[:] = [error] * (module.INDEX_TRIES + 1)
+        indexer = NNTPIndexer(paths['index'])
+        with pytest.raises(OperationalError):
+            indexer.index(OTHER, paths[OTHER])
+        indexer.close()
+        assert len(failures) == module.INDEX_TRIES + 1 - tries
+
+
+@pytest.mark.parametrize('orig, expected', [
+    (type('E', (Exception, ), {'sqlstate': '40P01'})(), True),
+    (type('E', (Exception, ), {'pgcode': '40001'})(), True),
+    (type('E', (Exception, ), {'sqlstate': '23505'})(), False),
+    (Exception(1213, 'Deadlock found'), True),
+    (Exception(1205, 'Lock wait timeout exceeded'), True),
+    (Exception(1062, 'Duplicate entry'), False),
+    (Exception('database is locked'), True),
+    (Exception('no such table'), False),
+    (None, False),
+])
+def test_contended_errors_are_told_apart(orig, expected):
+    """
+    Only a database saying another worker was in the way counts
+    """
+    from newsreap.Database import contended
+
+    error = Exception()
+    error.orig = orig
+    assert contended(error) is expected
+
+
+def test_the_index_is_let_go_of_after_each_step(paths, tmp_path):
+    """
+    Indexing, settling and importing an NZB file leave nothing open, so
+    other workers (and the archive) can change the index right away
+    """
+    cache(paths[GROUP], release('Holiday'))
+    indexer = indexed(paths)
+    assert not indexer.session().in_transaction()
+
+    assert indexer.settle() == 0
+    assert not indexer.session().in_transaction()
+
+    # One that is refused, and one that is added
+    bad = tmp_path / 'bad.nzb'
+    bad.write_text('nothing')
+    assert indexer.import_nzb(str(bad)) == (None, False)
+    collection, _ = indexer.import_nzb(
+        nzb_file(tmp_path / 'a.nzb', 'Cafe', (1, )))
+    assert not indexer.session().in_transaction()
+
+    # Refused once it has looked (it was removed)
+    indexer.delete(collection.id)
+    assert indexer.import_nzb(
+        nzb_file(tmp_path / 'a.nzb', 'Cafe', (1, ))) == (None, False)
+    assert not indexer.session().in_transaction()
+    indexer.close()
+
+
+def test_chunks_are_made_without_reading_everything_first():
+    """
+    chunked() only reads one chunk ahead, so little of a big iterator is
+    held at once
+    """
+    from newsreap.NNTPIndexer import chunked
+
+    read = []
+
+    def items():
+        for no in range(1000):
+            read.append(no)
+            yield no
+
+    chunks = chunked(items(), 3)
+    assert next(chunks) == [0, 1, 2]
+    assert len(read) == 3
+    assert next(chunks) == [3, 4, 5]
+    assert len(read) == 6
+    assert list(chunked([], 3)) == []
+    assert list(chunked(range(7), 3)) == [[0, 1, 2], [3, 4, 5], [6]]
+
+
+def test_removing_articles_cascades_to_their_files_and_collection(paths):
+    """
+    Removing articles keeps what is left of their collection (counted
+    again, no longer complete); a file left with no articles goes, and so
+    does a collection left with no files
+    """
+    from newsreap.objects.index.CollectionFile import CollectionFile
+
+    articles = list(release('Holiday', files=2, segments=2))
+    cache(paths[GROUP], articles)
+    indexer = indexed(paths)
+    collection = indexer.find()[0]
+    assert (collection.files, collection.segments) == (2, 4)
+    assert collection.state == CollectionState.Complete
+    ids = [message_id for _, _, message_id in articles]
+
+    # One part of the first file: the file and collection stay
+    assert indexer.forget_articles(['<%s>' % ids[0]]) == (1, 0, 0)
+    collection = indexer.get(collection.id)
+    assert (collection.files, collection.segments) == (2, 3)
+    assert collection.state == CollectionState.Settled
+
+    # The rest of the first file: the file goes
+    assert indexer.forget_articles([ids[1], 'unknown@x']) == (1, 1, 0)
+    assert indexer.get(collection.id).files == 1
+
+    # Everything left: the collection goes too
+    assert indexer.forget_articles(ids[2:]) == (2, 1, 1)
+    assert indexer.get(collection.id) is None
+    assert indexer.session().query(CollectionFile).count() == 0
+    indexer.close()
+
+
+def test_articles_are_removed_as_their_message_ids_are_read(paths):
+    """
+    Removing articles reads the Message-IDs given a chunk at a time and
+    removes each chunk before reading on, so any number can be given
+    """
+    from newsreap.NNTPIndexer import IN_LIST_SIZE
+
+    articles = list(release('Holiday', files=1, segments=3))
+    cache(paths[GROUP], articles)
+    indexer = indexed(paths)
+    collection = indexer.find()[0]
+    ids = [message_id for _, _, message_id in articles]
+
+    def given(first, later, seen):
+        # The first chunk, then what is left of the collection once it
+        # has been read past
+        yield first
+        for no in range(IN_LIST_SIZE - 1):
+            yield 'filler%d@x' % no
+        found = indexer.get(collection.id)
+        seen.append(found.segments if found else None)
+        yield later
+
+    try:
+        seen = []
+        assert indexer.forget_articles(given(ids[0], ids[1], seen))[0] == 2
+        assert seen == [2]
+
+        seen = []
+        assert indexer.purge(given(ids[2], 'other@x', seen)).collections \
+            == 1
+        assert seen == [None]
+
+    finally:
+        indexer.close()
+
+
+def cached_ids(db_file):
+    """
+    Returns the Message-IDs a group's header cache holds
+    """
+    db = NNTPGroupDatabase.from_file(db_file)
+    try:
+        return {m for m, in db.session().query(Article.message_id)}
+
+    finally:
+        db.close()
+
+
+def kept_post(session, message_id, group):
+    """
+    Adds a post to the archive (as 'nr update --content' keeps it)
+    """
+    from newsreap.objects.index.ArchiveGroup import ArchiveGroup
+    from newsreap.objects.index.ArchivedPost import ArchivedPost
+
+    session.add(ArchivedPost(message_id=message_id, subject='kept'))
+    session.flush()
+    session.add(ArchiveGroup(message_id=message_id, name=group))
+    session.commit()
+
+
+def test_deleting_a_collection_takes_everything_kept_of_it(paths):
+    """
+    delete() removes what is kept of the collection's articles too: their
+    headers in every group they were cached in, the posts the archive kept,
+    and their scores and tags; the collection stays, marked as deleted
+    """
+    from newsreap.NNTPArticleRanks import NNTPArticleRanks
+    from newsreap.NNTPIndexer import Purged
+    from newsreap.objects.index.ArchivedPost import ArchivedPost
+
+    articles = list(release('Holiday', files=1, segments=2))
+    ids = [message_id for _, _, message_id in articles]
+    cache(paths[GROUP], articles)
+    cache(paths[OTHER], articles)
+    cache(paths[GROUP], [('unrelated', POSTER, 'unrelated@x')], start=10)
+    indexer = indexed(paths, GROUP, OTHER)
+    try:
+        collection = next(c for c in indexer.find() if c.name == 'Holiday')
+        session = indexer.session()
+        NNTPArticleRanks.save(session, {ids[0]: (5, frozenset(['seen']))})
+        session.commit()
+        kept_post(session, ids[1], GROUP)
+
+        assert indexer.delete(collection.id, group_database=paths.get)
+        assert indexer.purged == Purged(
+            headers=4, posts=1, articles=2, files=1, collections=1)
+
+        assert cached_ids(paths[GROUP]) == {'unrelated@x'}
+        assert cached_ids(paths[OTHER]) == set()
+        assert NNTPArticleRanks.load(session, ids) == {}
+        assert session.query(ArchivedPost).count() == 0
+        assert session.get(Collection, collection.id).state == \
+            CollectionState.Deleted
+
+    finally:
+        indexer.close()
+
+
+def test_deleting_a_collection_reads_its_articles_a_page_at_a_time(paths):
+    """
+    delete() reads a collection's articles a page of files at a time
+    rather than with one query for each file
+    """
+    from sqlalchemy import event
+    from newsreap.NNTPIndexer import Purged
+
+    articles = list(release('Holiday', files=40, segments=2))
+    cache(paths[GROUP], articles)
+    indexer = indexed(paths, GROUP)
+    try:
+        collection = next(c for c in indexer.find() if c.name == 'Holiday')
+        session = indexer.session()
+
+        # No page holds more articles than asked for (2 files of 2)
+        pages = list(indexer._file_pages(session, collection.id, size=5))
+        assert max(len(page) for page in pages) == 2
+        assert len({i for page in pages for i in page}) == 40
+
+        reads = []
+
+        def note(conn, cursor, statement, *args):
+            if statement.lstrip().upper().startswith('SELECT') and \
+                    'FROM segment' in statement:
+                reads.append(statement)
+
+        engine = session.get_bind()
+        event.listen(engine, 'before_cursor_execute', note)
+        try:
+            assert indexer.delete(collection.id, group_database=paths.get)
+
+        finally:
+            event.remove(engine, 'before_cursor_execute', note)
+
+        assert indexer.purged == Purged(
+            headers=80, posts=0, articles=80, files=40, collections=1)
+        assert len(reads) < 10
+        assert cached_ids(paths[GROUP]) == set()
+
+    finally:
+        indexer.close()
+
+
+def test_purging_articles_takes_everything_kept_of_them(paths):
+    """
+    purge() removes articles everywhere: from the header cache of each
+    group the index or the archive knows they were in (and the groups
+    given), the archive, their scores and tags, and the index (a file and
+    collection left with nothing go)
+    """
+    from newsreap.NNTPArticleRanks import NNTPArticleRanks
+    from newsreap.NNTPIndexer import Purged
+
+    articles = list(release('Holiday', files=1, segments=1))
+    indexed_id = articles[0][2]
+    cache(paths[GROUP], articles)
+    cache(paths[OTHER], articles)
+    indexer = indexed(paths, GROUP, OTHER)
+    try:
+        session = indexer.session()
+        NNTPArticleRanks.save(session, {indexed_id: (5, frozenset())})
+        session.commit()
+
+        # Cached after indexing: one only the archive knows the group of,
+        # and one only the search that found it does
+        cache(paths[OTHER], [('kept', POSTER, 'kept@x')], start=10)
+        kept_post(session, 'kept@x', OTHER)
+        cache(paths[GROUP], [('found', POSTER, 'found@x')], start=20)
+
+        assert indexer.purge(['<%s>' % indexed_id],
+                             group_database=paths.get) == Purged(
+            headers=2, posts=0, articles=1, files=1, collections=1)
+        assert cached_ids(paths[GROUP]) == {'found@x'}
+        assert cached_ids(paths[OTHER]) == {'kept@x'}
+
+        assert indexer.purge(['kept@x'], group_database=paths.get) == \
+            Purged(headers=1, posts=1, articles=0, files=0, collections=0)
+        assert cached_ids(paths[OTHER]) == set()
+        assert NNTPArticleRanks.load(session, [indexed_id]) == {}
+        assert indexer.find() == []
+
+        assert indexer.purge(['found@x'], group_database=paths.get,
+                             groups={GROUP}).headers == 1
+        assert cached_ids(paths[GROUP]) == set()
+
+        # Without where the caches are, they are left alone
+        cache(paths[GROUP], [('again', POSTER, 'again@x')], start=30)
+        assert indexer.purge(['again@x'], groups={GROUP}).headers == 0
+        assert cached_ids(paths[GROUP]) == {'again@x'}
+
+    finally:
+        indexer.close()
+
+
+def test_saving_a_collection_reads_its_files_a_page_at_a_time(
+        paths, tmp_path, monkeypatch):
+    """
+    nzb() reads a page of files (their groups and articles) at a time and
+    writes each file as it goes, so a collection of any size is never all
+    held; the files keep their order, and one with no articles left is
+    left out
+    """
+    import weakref
+    from sqlalchemy import event
+    from newsreap import NNTPIndexer as module
+    from newsreap.objects.index.CollectionFile import CollectionFile
+    from newsreap.objects.index.Segment import Segment
+
+    # Pages of 3 files (2 articles each); what they are sorted by is
+    # sorted 7 files at a time
+    monkeypatch.setattr(module, 'ARTICLE_PAGE_SIZE', 6)
+    monkeypatch.setattr(module, 'SORT_RUN_SIZE', 7)
+    runs = sort_runs(monkeypatch)
+
+    live = weakref.WeakSet()
+    most = [0]
+
+    class Tracked(module.NNTPArticle):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            live.add(self)
+            most[0] = max(most[0], len(live))
+
+    monkeypatch.setattr(module, 'NNTPArticle', Tracked)
+
+    cache(paths[GROUP], list(release('Holiday', files=40, segments=2)))
+    indexer = indexed(paths, GROUP)
+    try:
+        collection = next(c for c in indexer.find() if c.name == 'Holiday')
+        session = indexer.session()
+
+        # The order newznab gives them
+        subjects = [subject for _, _, subject in sorted(
+            (gid_order(subject), file_id, subject)
+            for file_id, subject in session.query(
+                CollectionFile.id, CollectionFile.subject)
+            .filter(CollectionFile.collection_id == collection.id))]
+        assert [entry.subject for entry in indexer._files(
+            session, collection.id)] == subjects
+
+        # One file loses its articles
+        emptied = next(iter(indexer._files(session, collection.id)))
+        session.query(Segment).filter(Segment.file_id == emptied.id)\
+            .delete(synchronize_session=False)
+        session.commit()
+
+        reads = []
+
+        def note(conn, cursor, statement, *args):
+            if statement.lstrip().upper().startswith('SELECT') and (
+                    'FROM segment' in statement
+                    or 'FROM file_group' in statement):
+                reads.append(statement)
+
+        engine = session.get_bind()
+        event.listen(engine, 'before_cursor_execute', note)
+        try:
+            path = str(tmp_path / 'holiday.nzb')
+            runs.clear()
+            assert indexer.nzb(collection.id, path, work_dir=str(
+                tmp_path)) is True
+
+        finally:
+            event.remove(engine, 'before_cursor_execute', note)
+
+    finally:
+        indexer.close()
+
+    # 14 pages, a query each for their groups and articles
+    assert len(reads) <= 28
+    assert most[0] <= 6
+
+    # 40 files were sorted in 6 runs, which are gone again
+    assert runs == [6]
+    assert open_in(str(tmp_path)) == 0
+    assert not [name for name in os.listdir(tmp_path)
+                if name.startswith('newsreap-sort-')]
+
+    posts = list(NNTPnzb(path))
+    assert [post.subject for post in posts] == subjects[1:]
+    assert all(len(post) == 2 for post in posts)
+
+
+def test_importing_an_nzb_file_holds_a_few_of_its_articles_at_once(
+        paths, tmp_path, monkeypatch):
+    """
+    import_nzb() reads the NZB file a file at a time and saves its
+    articles a chunk at a time, so an NZB file of any size is never all
+    held; everything it lists is still imported
+    """
+    import gc
+    import weakref
+    from sqlalchemy import event
+    import sys
+    from newsreap import NNTPIndexer as module
+    from newsreap.objects.index.CollectionFile import CollectionFile
+
+    # (the package's NNTPnzb is the class; its module is wanted here)
+    nzb_module = sys.modules['newsreap.NNTPnzb']
+
+    # Chunks of 3 files (4 articles each)
+    monkeypatch.setattr(module, 'ARTICLE_PAGE_SIZE', 10)
+
+    live = weakref.WeakSet()
+    most = [0]
+
+    class Tracked(nzb_module.NNTPArticle):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            live.add(self)
+            most[0] = max(most[0], len(live))
+
+    monkeypatch.setattr(nzb_module, 'NNTPArticle', Tracked)
+
+    path = nzb_file(tmp_path / 'a.nzb', 'Holiday', range(1, 31), total=30,
+                    segments=4)
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        writes = []
+        files = [0]
+
+        def note(conn, cursor, statement, *args):
+            if statement.lstrip().upper().startswith('INSERT') and \
+                    'segment' in statement.split('(')[0]:
+                writes.append(statement)
+
+                # The files held while a chunk's articles are saved
+                gc.collect()
+                files[0] = max(files[0], sum(
+                    isinstance(item, CollectionFile)
+                    for item in gc.get_objects()))
+
+        engine = indexer.session(create=True).get_bind()
+        event.listen(engine, 'before_cursor_execute', note)
+        try:
+            collection, added = indexer.import_nzb(path)
+
+        finally:
+            event.remove(engine, 'before_cursor_execute', note)
+
+        assert added is True
+        assert (collection.files_expected, collection.files,
+                collection.segments) == (30, 30, 120)
+        assert collection.poster == POSTER
+
+        # Its articles were saved a chunk at a time
+        assert len(writes) >= 10
+
+        # A chunk (3 files) and the file read next, out of 120 articles
+        assert most[0] <= 16
+
+        # Only the files of a chunk, out of 30
+        assert 1 <= files[0] <= 3
+
+        saved = str(tmp_path / 'saved.nzb')
+        assert indexer.nzb(collection.id, saved) is True
+        assert sorted(NNTPnzb(saved).message_ids()) == sorted(
+            NNTPnzb(path).message_ids())
+
+    finally:
+        indexer.close()
+
+
+def test_an_import_looks_its_articles_up_by_message_id(paths, tmp_path):
+    """
+    Finding which collections have an NZB file's articles starts from the
+    articles themselves; starting from the collections would read every
+    article they have, for each chunk of Message-IDs
+    """
+    from sqlalchemy import event
+
+    # A scanned collection; the NZB files take its articles
+    cache(paths[GROUP], release('Claimed', files=2, segments=2))
+    indexed(paths).close()
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        found = []
+
+        def note(conn, cursor, statement, parameters, *args):
+            if 'JOIN collection ' in statement and \
+                    'segment.message_id IN' in statement:
+                found.append((statement, parameters))
+
+        engine = indexer.session(create=True).get_bind()
+        event.listen(engine, 'before_cursor_execute', note)
+        try:
+            # (whole chunks of Message-IDs; SQLite plans a short list
+            # differently)
+            first = nzb_file(tmp_path / 'first.nzb', 'Claimed',
+                             range(1, 300), total=300)
+            assert indexer.import_nzb(first)[1] is True
+
+            more = nzb_file(tmp_path / 'more.nzb', 'Claimed',
+                            range(1, 301), total=300)
+            assert indexer.import_nzb(more)[1] is False
+            assert len(indexer.left_out) == 1
+
+        finally:
+            event.remove(engine, 'before_cursor_execute', note)
+
+        # (claimed, then its owners twice and what the second one shares)
+        assert len(found) >= 4
+        if engine.dialect.name != 'sqlite':
+            # (only SQLite's plans are read here)
+            return
+
+        with engine.connect() as connection:
+            cursor = connection.connection.cursor()
+            for statement, parameters in found:
+                plan = cursor.execute(
+                    'EXPLAIN QUERY PLAN ' + statement, parameters).fetchall()
+                assert 'SEARCH segment' in plan[0][-1], plan
+
+    finally:
+        indexer.close()
+
+
+def test_large_sorts_are_done_in_runs_kept_on_disk(tmp_path, monkeypatch):
+    """
+    sorted_in_runs() sorts what fits in memory there; more is sorted in
+    runs kept in temporary files, giving the same order:
+    - only a few of those files are open at once, however many runs there
+      are
+    - they are closed and removed once done, or stopped part way
+    """
+    from newsreap import NNTPIndexer as module
+
+    work_dir = str(tmp_path)
+    runs = sort_runs(monkeypatch)
+    most = [0]
+
+    def note():
+        most[0] = max(most[0], open_in(work_dir))
+
+    def fed(items):
+        for item in items:
+            note()
+            yield item
+
+    def sort(items, size):
+        most[0] = 0
+        found = []
+        for item in sorted_in_runs(fed(items), size=size, work_dir=work_dir):
+            note()
+            found.append(item)
+
+        assert open_in(work_dir) == 0
+        assert os.listdir(work_dir) == []
+        return found
+
+    items = [(i % 7 == 0, i * 37 % 11, 'subject %d' % (i * 13 % 17), i,
+              None) for i in range(50)]
+
+    assert sort(items, 100) == sorted(items)
+    assert (runs, most[0]) == ([], 0)
+
+    # 7 runs, read together
+    assert sort(items, 8) == sorted(items)
+    assert runs == [7]
+    assert 1 <= most[0] <= 7
+
+    # 25 runs, read 3 at a time: they are merged into bigger runs first
+    runs.clear()
+    monkeypatch.setattr(module, 'SORT_MERGE_SIZE', 3)
+    assert sort(items, 2) == sorted(items)
+    assert runs == [3]
+    assert 1 <= most[0] <= 4
+
+    # Stopped part way, its files are still closed and removed
+    found = sorted_in_runs(iter(items), size=2, work_dir=work_dir)
+    assert next(found) == min(items)
+    assert open_in(work_dir) == 3
+    found.close()
+    assert open_in(work_dir) == 0
+    assert os.listdir(work_dir) == []
+
+    assert list(sorted_in_runs(iter(()), size=8)) == []
+
+    # Exactly one run's worth
+    assert list(sorted_in_runs(iter(items[:8]), size=8)) == sorted(items[:8])
+
+
+def test_an_article_listed_twice_is_counted_once(paths, tmp_path,
+                                                 monkeypatch):
+    """
+    An NZB file listing an article twice (far apart) shares no more with
+    a collection than it really does
+    """
+    from newsreap import NNTPIndexer as module
+
+    # Two articles are looked up at a time (so the two copies are looked
+    # up separately)
+    chunked = module.chunked
+    monkeypatch.setattr(module, 'chunked', lambda items, size=2: chunked(
+        items, min(size, 2)))
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        first = nzb_file(tmp_path / 'first.nzb', 'Twice', (1, 2, 3))
+        assert indexer.import_nzb(first)[1] is True
+
+        # It shares two files of three, and lists the first one twice
+        other = nzb_file(tmp_path / 'other.nzb', 'Twice', (1, 2, 4, 1))
+        assert indexer.import_nzb(other) == (None, False)
+        assert indexer.left_out == []
+
+    finally:
+        indexer.close()
+
+
+def test_an_nzb_file_changed_while_it_is_imported_is_read_as_it_was(
+        paths, tmp_path, monkeypatch):
+    """
+    import_nzb() reads its own copy of the NZB file, so replacing the file
+    part way through changes nothing; the copy is removed afterwards
+    """
+    import sys
+    nzb_module = sys.modules['newsreap.NNTPnzb']
+
+    path = nzb_file(tmp_path / 'a.nzb', 'Holiday', (1, 2, 3))
+    other = nzb_file(tmp_path / 'b.nzb', 'Other', (1, 2), total=2)
+
+    # The file is replaced once it was found to be valid
+    is_valid = nzb_module.NNTPnzb.is_valid
+
+    def replaced(self):
+        found = is_valid(self)
+        if os.path.exists(other):
+            os.replace(other, path)
+        return found
+
+    monkeypatch.setattr(nzb_module.NNTPnzb, 'is_valid', replaced)
+
+    work = tmp_path / 'work'
+    work.mkdir()
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        collection, added = indexer.import_nzb(path, work_dir=str(work))
+        assert added is True
+        assert collection.gid == make_gid('holiday.1.1@example.com')
+        assert (collection.files, collection.segments) == (3, 6)
+        assert collection.name == 'a'
+        assert list(work.iterdir()) == []
+
+        # A missing file can't be read
+        assert indexer.import_nzb(str(tmp_path / 'missing.nzb'),
+                                  work_dir=str(work)) == (None, False)
+        assert list(work.iterdir()) == []
+
+    finally:
+        indexer.close()
+
+
+def test_many_details_are_checked_for_repeats_quickly(paths, tmp_path):
+    """
+    Looking for a detail we have already doesn't compare it with every
+    detail kept so far (an NZB file can list a great many)
+    """
+    import time
+
+    class Nzb:
+        meta = {'title': 'Many', 'tag': [
+            'tag %d' % i for i in range(20000)] + ['tag 1']}
+
+    started = time.monotonic()
+    meta = NNTPIndexer._meta(Nzb())
+    assert time.monotonic() - started < 2
+    assert len(meta) == 20001
+    assert meta[:3] == [('title', 'Many'), ('tag', 'tag 0'), ('tag', 'tag 1')]
+
+    class Counted(str):
+        compared = 0
+
+        def __eq__(self, other):
+            Counted.compared += 1
+            return str.__eq__(self, other)
+
+        __hash__ = str.__hash__
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        path = nzb_file(tmp_path / 'many.nzb', 'Many', (1, ))
+        collection, _ = indexer.import_nzb(path)
+        session = indexer.session()
+
+        indexer.details = 0
+        indexer._merge_meta(session, collection.id, [
+            ('tag', Counted('tag %d' % (i % 2000))) for i in range(4000)])
+        assert indexer.details == 2000
+        assert Counted.compared < 4000
+
+    finally:
+        indexer.close()
+
+
+def test_an_nzb_file_is_read_once_for_its_articles(paths, tmp_path,
+                                                   monkeypatch):
+    """
+    The articles an NZB file lists are read and sorted once, however many
+    times an import needs them; what is kept of them is gone afterwards
+    """
+    from newsreap import NNTPIndexer as module
+
+    # Kept on disk from the start
+    monkeypatch.setattr(module, 'SPOOL_SIZE', 10)
+
+    reads = []
+    read = NNTPnzb.message_ids
+
+    def counted(self, *args, **kwargs):
+        reads.append(self)
+        return read(self, *args, **kwargs)
+
+    monkeypatch.setattr(NNTPnzb, 'message_ids', counted)
+
+    work = tmp_path / 'work'
+    work.mkdir()
+
+    # Some of it was scanned
+    cache(paths[GROUP], release('Once', files=4, segments=2, only={1}))
+    indexer = indexed(paths)
+    try:
+        # Taking over what was scanned
+        first = nzb_file(tmp_path / 'first.nzb', 'Once', (1, 2), total=4)
+        reads.clear()
+        assert indexer.import_nzb(first, work_dir=str(work))[1] is True
+        assert len(reads) == 1
+
+        # Sharing articles with what we have
+        more = nzb_file(tmp_path / 'more.nzb', 'Once', (1, 2, 3), total=4)
+        reads.clear()
+        assert indexer.import_nzb(more, work_dir=str(work))[1] is False
+        assert len(reads) == 1
+        assert indexer.left_out_count == 1
+
+        # Replacing what we have
+        reads.clear()
+        assert indexer.import_nzb(
+            more, merge=True, work_dir=str(work))[1] is True
+        assert len(reads) == 1
+        assert (indexer.merged, indexer.dropped) == (1, 0)
+
+        assert open_in(str(work)) == 0
+        assert os.listdir(work) == []
+
+    finally:
+        indexer.close()
+
+
+def test_scanned_collections_an_nzb_file_takes_are_let_go_of_in_chunks(
+        paths, tmp_path, monkeypatch):
+    """
+    Taking articles from scanned collections works on a few articles (and
+    collections) at a time:
+    - each collection left with nothing is removed but one, which becomes
+      the NZB file's collection
+    - the one kept is the one with the NZB file's GID, else the one that
+      lost the most articles
+    """
+    from newsreap import NNTPIndexer as module
+
+    # A couple of articles, and collections, at a time
+    chunked = module.chunked
+    monkeypatch.setattr(module, 'chunked', lambda items, size=2: chunked(
+        items, 2))
+    monkeypatch.setattr(module, 'SORT_RUN_SIZE', 2)
+
+    # The files (and collections) counted at once while articles are taken
+    counted = []
+    recount = NNTPIndexer._recount
+
+    def noted(self, session, file_ids, collection_ids, dates=None):
+        if dates is None:
+            counted.append((len(list(file_ids)), len(list(collection_ids))))
+        return recount(self, session, file_ids, collection_ids, dates)
+
+    monkeypatch.setattr(NNTPIndexer, '_recount', noted)
+
+    cache(paths[GROUP], [
+        *release('Alpha', files=2, segments=2),
+        *release('Beta', files=1, segments=2),
+        *release('Gamma', files=3, segments=2),
+        *release('Iota', files=1, segments=2),
+        *release('Kappa', files=3, segments=2)])
+    indexer = indexed(paths)
+    try:
+        scanned = {c.name: c.id for c in indexer.find()}
+        assert sorted(scanned) == ['Alpha', 'Beta', 'Gamma', 'Iota', 'Kappa']
+
+        def combined(name, *names, skip=()):
+            # One NZB file listing what we scanned of each (but the files
+            # whose subjects start with what skip has)
+            nzb = NNTPnzb()
+            for other in names:
+                path = str(tmp_path / ('%s.nzb' % other))
+                assert indexer.nzb(scanned[other], path) is True
+                for post in NNTPnzb(path):
+                    if not post.subject.startswith(skip):
+                        nzb.add(post)
+
+            path = str(tmp_path / name)
+            assert nzb.save(path) is True
+            return path
+
+        # Its GID is Alpha's, which keeps a file of its own: of the ones
+        # left with nothing, the one that lost the most is kept
+        counted.clear()
+        collection, added = indexer.import_nzb(combined(
+            'all.nzb', 'Beta', 'Alpha', 'Gamma', skip=('Alpha [02', )))
+        assert added is True
+        assert collection.id == scanned['Gamma']
+        assert (collection.files, collection.segments) == (5, 10)
+        assert indexer.get(scanned['Beta']) is None
+        assert indexer.get(scanned['Alpha']).files == 1
+        assert counted
+        assert max(files for files, _ in counted) <= 2
+        assert max(collections for _, collections in counted) <= 2
+
+        # The one with its GID is kept, even though it lost less
+        collection, added = indexer.import_nzb(combined(
+            'both.nzb', 'Iota', 'Kappa'))
+        assert added is True
+        assert collection.id == scanned['Iota']
+        assert (collection.files, collection.segments) == (4, 8)
+        assert indexer.get(scanned['Kappa']) is None
+
+        indexer.settle()
+        assert sorted(c.name for c in indexer.find()) == [
+            'Alpha', 'all', 'both']
+
+    finally:
+        indexer.close()
+
+
+def test_merging_compares_the_files_a_few_at_a_time(paths, tmp_path,
+                                                    monkeypatch):
+    """
+    What merging an NZB file changed (files added and dropped) is worked
+    out from their keys, read a page at a time and sorted in runs (see
+    sorted_in_runs()), so a collection of any size is never held
+    """
+    from sqlalchemy import event
+    from newsreap import NNTPIndexer as module
+
+    monkeypatch.setattr(module, 'SORT_RUN_SIZE', 2)
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        first = nzb_file(tmp_path / 'first.nzb', 'Swap', range(1, 7),
+                         total=9)
+        collection_id = indexer.import_nzb(first)[0].id
+
+        reads = []
+
+        def note(conn, cursor, statement, *args):
+            if statement.lstrip().upper().startswith('SELECT') and \
+                    re.search(r'collection_file\."?key\b', statement) and \
+                    'collection_file.collection_id =' in statement:
+                reads.append(statement)
+
+        engine = indexer.session().get_bind()
+        event.listen(engine, 'before_cursor_execute', note)
+        try:
+            fixed = nzb_file(tmp_path / 'fixed.nzb', 'Swap', range(4, 10),
+                             total=9)
+            collection, added = indexer.import_nzb(fixed, merge=True)
+
+        finally:
+            event.remove(engine, 'before_cursor_execute', note)
+
+        assert (collection.id, added) == (collection_id, True)
+        assert (indexer.merged, indexer.dropped) == (3, 3)
+        assert collection.files == 6
+
+        # Every read of them was a page
+        assert len(reads) >= 4
+        assert all('LIMIT' in statement.upper() for statement in reads)
 
     finally:
         indexer.close()

@@ -24,6 +24,7 @@ from gevent import sleep as gevent_sleep
 
 from newsreap.SortedSet import sortedset
 from os import listdir
+from os import walk
 from os import makedirs
 from os import access
 from os import chmod
@@ -191,91 +192,41 @@ VALID_QUERY_RE = re.compile(r'^(.*[/\\])([^/\\]*)$', re.ASCII)
 RM_RECURSION_LIMIT = 100
 
 
+# A size as text: a number (decimals allowed) and an optional unit
+STRSIZE_RE = re.compile(
+    r'\s*(?P<size>[0-9]+(\.[0-9]+)?)\s*'
+    r'((?P<unit>[bkmgtp])(?P<type>b)?)?\s*', re.ASCII | re.IGNORECASE)
+
+# The units a size can be given in, smallest first
+STRSIZE_UNITS = 'BKMGTP'
+
+
 def strsize_to_bytes(strsize):
     """
-    This function returns the byte size equivalent (as an integer) that best
-    represents the string passed in.  the string passed in is intended to be
-    in the format as:
-        value <unit>
-
-        example: 4TB, 3GB, 10MB, 25KB, etc
-
+    Returns the number of bytes a size given as text stands for (None if
+    it isn't one):
+    - 4TB, 3G, 1.5MB, 25KB or 100 (bytes); each unit is 1024 of the one
+      before
+    - a lowercase b counts in thousands instead (1Kb is 1000)
     """
     if isinstance(strsize, int):
         # Nothing further to do
         return strsize
 
     try:
-        strsize_re = re.match(
-            r'\s*(?P<size>(0|[1-9][0-9]*)(\.(0+|[1-9][0-9]*))?)\s*'
-            r'((?P<unit>.)(?P<type>[bB])?)?\s*',
-            strsize, re.ASCII,
-        )
+        found = STRSIZE_RE.fullmatch(strsize)
+
     except TypeError:
         return None
 
-    if not strsize_re:
-        # Not good
+    if not found:
         return None
 
-    size = int(strsize_re.group('size'))
-    unit = strsize_re.group('unit')
-    use_bytes = strsize_re.group('type') != 'b'
-
-    if not unit:
-        return size
-
-    # convert unit to uppercase
-    unit = unit.upper()
-
-    if use_bytes:
-        if unit == 'B':
-            # We're going to assume bytes and return now
-            return size
-
-        elif unit == 'K':
-            # We're dealing with Kilobytes
-            return size * 1024
-
-        elif unit == 'M':
-            # We're dealing with Megabytes
-            return size * 1048576
-
-        elif unit == 'G':
-            # We're dealing with Gigabytes
-            return size * 1073741824
-
-        elif unit == 'T':
-            # We're dealing with Terabytes
-            return size * 1073741824 * 1024
-
-        elif unit == 'P':
-            # We're dealing with Petabytes
-            return size * 1073741824 * 1048576
-
-    # In Bits
-    if unit == 'K':
-        # We're dealing with Kilobytes
-        return size * 1e3
-
-    elif unit == 'M':
-        # We're dealing with Megabytes
-        return size * 1e6
-
-    elif unit == 'G':
-        # We're dealing with Gigabytes
-        return size * 1e9
-
-    elif unit == 'T':
-        # We're dealing with Terabytes
-        return size * 1e12
-
-    elif unit == 'P':
-        # We're dealing with Petabytes
-        return size * 1e15
-
-    # Unsupported Type
-    return None
+    size = found.group('size')
+    size = float(size) if '.' in size else int(size)
+    unit = STRSIZE_UNITS.index((found.group('unit') or 'B').upper())
+    base = 1000 if found.group('type') == 'b' else 1024
+    return int(size * base ** unit)
 
 
 # The units sizes are shown in, smallest first (each 1024 of the one
@@ -1463,40 +1414,79 @@ def hexdump(src, length=16, sep='.'):
     This was based on https://gist.github.com/7h3rAm/5603718 with some
     minor modifications
     """
-    allowed = digits + ascii_letters + punctuation + ' '
+    if isinstance(src, str):
+        src = src.encode('latin-1', 'replace')
 
-    print_map = ''.join(((x if x in allowed else '.')
-                        for x in map(chr, range(256))))
+    allowed = (digits + ascii_letters + punctuation + ' ').encode('ascii')
     lines = []
 
     for c in range(0, len(src), length):
         chars = src[c:c + length]
-        hex = ' '.join(["%02x" % ord(x) for x in chars])
+        hex = chars.hex(' ')
         if len(hex) > 24:
             hex = "%s %s" % (hex[:24], hex[24:])
-        printable = ''.join(["%s" % (
-            (ord(x) <= 127 and print_map[ord(x)]) or sep) for x in chars])
+        printable = ''.join(
+            chr(x) if x in allowed else sep for x in chars)
         lines.append("%08x:  %-*s  |%s|" % (c, length * 3, hex, printable))
     return '\n'.join(lines)
 
 
 def dirsize(src):
     """
-    Takes a source directory and returns the entire size of all of it's
-    content(s) in bytes.
-
-    The function returns None if the size can't be properly calculated.
+    Returns the size (in bytes) of everything in a directory, its
+    sub-directories included; None if part of it can't be read
     """
     if not isdir(src):
         # Nothing to return
         return 0
 
+    def failed(error):
+        raise error
+
     try:
-        with pushd(src, create_if_missing=False):
-            size = sum(getsize(f) for f in listdir('.') if isfile(f))
+        return sum(
+            getsize(join(root, name))
+            for root, _, names in walk(src, onerror=failed)
+            for name in names if not islink(join(root, name)))
 
     except OSError:
         return None
 
-    # Return our total size
-    return size
+
+def server_key(host, port=None, username=None, secure=None, **_):
+    """
+    Returns what tells our servers apart: [user@]host[:port] (ie:
+    'me@news.example.com' or 'news.example.com:8119'); a server's settings
+    can be passed as they are (server_key(**settings))
+
+    - the user is left out when there is none
+    - the port is left out when it is the usual one (119, or 563 with
+      TLS)
+
+    Two accounts on one server, or one server reached on two ports, are
+    kept apart (their connections, statistics and group listings).
+    """
+    key = str(host or '').strip().lower()
+    try:
+        port = int(port) if port else None
+
+    except (TypeError, ValueError):
+        port = None
+
+    if port and port != (563 if secure else 119):
+        key = '%s:%d' % (key, port)
+
+    if username:
+        key = '%s@%s' % (str(username).strip(), key)
+
+    return key
+
+
+def normal_server_key(key):
+    """
+    Returns a server key (see server_key()) as it is kept: no spaces
+    around it, and its host (not its user) in lower case, so
+    ' Me@News.Example.com ' and 'Me@news.example.com' are the same server
+    """
+    user, at, host = str(key or '').strip().rpartition('@')
+    return '%s%s%s' % (user.strip(), at, host.strip().lower())

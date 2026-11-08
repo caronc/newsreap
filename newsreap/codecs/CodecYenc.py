@@ -331,7 +331,7 @@ class CodecYenc(CodecBase):
         # yEnc (v1.3) begin
         fmt_ybegin = b'=ybegin part=%d total=%d line=%d size=%d name=%s' % (
             content.part, content.total_parts, self.linelen,
-            len(content), fsencode(content.filename),
+            content.total_size(), fsencode(content.filename),
         )
 
         # yEnc part

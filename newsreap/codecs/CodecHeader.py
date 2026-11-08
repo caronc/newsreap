@@ -145,7 +145,9 @@ class CodecHeader(CodecBase):
         if self.header_parsed:
             return self.decoded
 
-        ws_head = True
+        # Blank lines are only passed over until the first header (one
+        # after that ends them, even when it arrives in the next read)
+        ws_head = not len(self.decoded)
         while self.decode_loop():
 
             # fall_back ptr

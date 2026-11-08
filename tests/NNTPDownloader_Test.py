@@ -650,8 +650,8 @@ def test_new_posts_are_asked_for_again_for_a_while(
 
 def test_files_of_the_same_name_dont_overwrite_each_other(tmp_path, usenet):
     """
-    Two files posted under the same name are both kept (the second one
-    gets ' (2)')
+    Files posted under the same name are all kept (the second one gets
+    ' (2)', the third ' (3)'), with the same names each run
     """
     server, downloader = usenet
     first = post(server, tmp_path, 'readme.nfo', README)
@@ -663,12 +663,27 @@ def test_files_of_the_same_name_dont_overwrite_each_other(tmp_path, usenet):
     nzb = write_nzb(tmp_path / 'release.nzb', [
         first, ('readme.nfo', [(1, second_id)])])
 
+    third_id = 'readme.nfo.third@example.com'
+    path = tmp_path / 'third.msg'
+    path.write_bytes(yenc_article('readme.nfo', NOTES[:200], 1, 1, 0, 200,
+                                  third_id))
+    server.add_article(third_id, str(path), GROUP)
+    nzb = write_nzb(tmp_path / 'release.nzb', [
+        first, ('readme.nfo', [(1, second_id)]),
+        ('readme.nfo', [(1, third_id)])])
+
+    names = ['readme (2).nfo', 'readme (3).nfo', 'readme.nfo']
     get = downloader()
     assert get.download(nzb) is True, get.problem
-    assert sorted(os.listdir(get.folder)) == ['readme (2).nfo', 'readme.nfo']
+    assert sorted(os.listdir(get.folder)) == names
     assert {(tmp_path / 'Downloads' / 'release' / name).read_bytes()
-            for name in ('readme.nfo', 'readme (2).nfo')} == {
-        README, NOTES[:300]}
+            for name in names} == {README, NOTES[:300], NOTES[:200]}
+
+    # Run again, each one keeps its name
+    assert get.download(nzb) is True, get.problem
+    assert sorted(os.listdir(get.folder)) == names
+    assert (tmp_path / 'Downloads' / 'release' / 'readme (3).nfo')\
+        .read_bytes() == NOTES[:200]
 
 
 def staged(tmp_path, parts):
@@ -934,22 +949,23 @@ def test_ctrl_c_keeps_what_is_on_its_way_and_stops(
     Ctrl-C stops asking for more; the articles already asked for are
     still kept, nothing is placed, and running it again carries on
     """
-    from newsreap.NNTPConnectionRequest import NNTPConnectionRequest
+    from newsreap import NNTPArchiver as module
 
     server, downloader = usenet
     nzb = write_nzb(tmp_path / 'release.nzb', [
         post(server, tmp_path, 'notes.txt', NOTES, parts=8)])
 
-    wait = NNTPConnectionRequest.wait
+    # Ctrl-C is pressed while waiting for the articles to come back
+    wait = module.wait
     calls = []
 
-    def pressed(self, *args, **kwargs):
+    def pressed(*args, **kwargs):
         calls.append(1)
         if len(calls) == 2:
             raise KeyboardInterrupt
-        return wait(self, *args, **kwargs)
+        return wait(*args, **kwargs)
 
-    monkeypatch.setattr(NNTPConnectionRequest, 'wait', pressed)
+    monkeypatch.setattr(module, 'wait', pressed)
     get = downloader()
     with pytest.raises(KeyboardInterrupt):
         get.download(nzb)
@@ -1072,3 +1088,140 @@ def test_just_enough_recovery_volumes_are_chosen(needed, chosen):
         'n.vol7+0.par2', 'n.vol0+1.par2', 'n.vol1+2.par2', 'n.vol3+4.par2')]
     assert [f['name'] for f in NNTPDownloader.recovery_volumes(
         volumes, needed)] == chosen
+
+
+def test_only_nzb_files_and_collections_are_downloaded(tmp_path):
+    """
+    nr get refuses what is neither an NZB file nor a collection's id (an
+    article is fetched with nr fetch)
+    """
+    from newsreap.cli import cli
+
+    with FakeNNTPServer(join_group=False) as server:
+        config = config_for(server, tmp_path / 'config.yaml')
+        result = CliRunner().invoke(
+            cli, ['--config', config, 'get', '<one@example.com>'], obj={})
+        assert result.exit_code == 1
+        assert 'nr fetch' in result.output
+
+
+def test_extracted_files_only_take_their_name_once_whole(tmp_path,
+                                                         monkeypatch):
+    """
+    What was extracted is moved in keeping its layout; from another drive
+    each file is copied under a temporary name, so a stop part way leaves
+    nothing that looks whole
+    """
+    import newsreap.NNTPDownloader as downloader
+
+    source = tmp_path / 'extracted'
+    (source / 'Season.1').mkdir(parents=True)
+    (source / 'Season.1' / 'e1.mkv').write_bytes(b'one')
+    (source / 'notes.txt').write_bytes(b'notes')
+    target = tmp_path / 'placed'
+    (target / 'Season.1').mkdir(parents=True)
+    (target / 'notes.txt').write_bytes(b'older')
+
+    def other_drive(source, target):
+        raise OSError(18, 'Invalid cross-device link')
+
+    real_replace = downloader.replace
+    monkeypatch.setattr(downloader, 'replace', lambda s, t: real_replace(
+        s, t) if t.endswith('.tmp') or s.endswith('.tmp') else other_drive(
+        s, t))
+
+    def stopped(source, target):
+        with open(target, 'wb') as fp:
+            fp.write(b'o')
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(downloader, 'copyfile', stopped)
+    with pytest.raises(KeyboardInterrupt):
+        NNTPDownloader._move_into(str(source), str(target))
+    assert not (target / 'notes (2).txt').exists()
+    assert sorted(p.name for p in (target / 'Season.1').iterdir()) == []
+
+    monkeypatch.undo()
+    monkeypatch.setattr(downloader, 'replace', lambda s, t: real_replace(
+        s, t) if t.endswith('.tmp') or s.endswith('.tmp') else other_drive(
+        s, t))
+    NNTPDownloader._move_into(str(source), str(target))
+    assert (target / 'Season.1' / 'e1.mkv').read_bytes() == b'one'
+    assert (target / 'notes (2).txt').read_bytes() == b'notes'
+    assert (target / 'notes.txt').read_bytes() == b'older'
+    assert not list(target.rglob('*.tmp'))
+
+
+@pytest.mark.skipif(not which('par2'), reason='par2 is not installed')
+def test_a_file_no_server_has_is_rebuilt_by_par2(tmp_path, usenet):
+    """
+    A file no server has any of is rebuilt by par2 and placed with the
+    others
+    """
+    server, downloader = usenet
+    source = tmp_path / 'made'
+    source.mkdir()
+    more = b'more notes, all of them lost\n' * 40
+    (source / 'notes.txt').write_bytes(NOTES)
+    (source / 'more.txt').write_bytes(more)
+    run_program(
+        [which('par2'), 'create', '-r100', '-n1', '-s1024', '-q',
+         str(source / 'notes.par2'), str(source / 'notes.txt'),
+         str(source / 'more.txt')], check=True)
+
+    files = [post(server, tmp_path, 'notes.txt', NOTES, parts=2),
+             post(server, tmp_path, 'more.txt', more, parts=2)]
+    for name in sorted(os.listdir(source)):
+        if name.endswith('.par2'):
+            files.append(post(server, tmp_path, name,
+                              (source / name).read_bytes()))
+
+    # Every part of it is gone
+    server.on(r'^ARTICLE <more.txt\.[0-9]+@example.com>$',
+              Reply('430 No such article'))
+    nzb = write_nzb(tmp_path / 'release.nzb', files)
+
+    get = downloader()
+    assert get.download(nzb) is True, get.problem
+    assert get.repaired
+    placed = tmp_path / 'Downloads' / 'release'
+    assert (placed / 'notes.txt').read_bytes() == NOTES
+    assert (placed / 'more.txt').read_bytes() == more
+
+
+@pytest.mark.skipif(not which('par2'), reason='par2 is not installed')
+def test_every_par2_set_is_checked(tmp_path, usenet):
+    """
+    Each par2 set checks its own files: damage in one that isn't the first
+    is still found and repaired
+    """
+    server, downloader = usenet
+    source = tmp_path / 'made'
+    source.mkdir()
+    more = b'more notes in a set of their own\n' * 40
+    (source / 'notes.txt').write_bytes(NOTES)
+    (source / 'more.txt').write_bytes(more)
+    for name in ('notes', 'more'):
+        run_program(
+            [which('par2'), 'create', '-r100', '-n1', '-s1024', '-q',
+             str(source / ('%s.par2' % name)),
+             str(source / ('%s.txt' % name))], check=True)
+
+    files = [post(server, tmp_path, 'notes.txt', NOTES, parts=4),
+             post(server, tmp_path, 'more.txt', more, parts=2)]
+    for name in sorted(os.listdir(source)):
+        if name.endswith('.par2'):
+            files.append(post(server, tmp_path, name,
+                              (source / name).read_bytes()))
+
+    # A part of notes.txt (its set is checked second) is gone
+    server.on(r'^ARTICLE <notes.txt.2@example.com>$',
+              Reply('430 No such article'))
+    nzb = write_nzb(tmp_path / 'release.nzb', files)
+
+    get = downloader()
+    assert get.download(nzb) is True, get.problem
+    assert get.repaired
+    placed = tmp_path / 'Downloads' / 'release'
+    assert (placed / 'notes.txt').read_bytes() == NOTES
+    assert (placed / 'more.txt').read_bytes() == more

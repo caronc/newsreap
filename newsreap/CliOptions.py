@@ -184,7 +184,7 @@ VERB_ALIASES = {
 class AliasedGroup(click.Group):
     """
     A group of commands that also answers to the older names of its
-    commands (see VERB_ALIASES); ie: 'nr alias ls' runs 'nr alias ls'
+    commands (see VERB_ALIASES); ie: 'nr alias list' runs 'nr alias ls'
     """
 
     def get_command(self, ctx, name):
@@ -197,8 +197,9 @@ class AliasedGroup(click.Group):
 class DefaultGroup(AliasedGroup):
     """
     A group of commands that runs one of them (the default) when what
-    follows isn't the name of another; ie: 'nr update a.b.test' runs
-    'nr update run a.b.test' while 'nr update groups' still works
+    follows isn't the name of another; ie: with 'default': 'run' in a
+    plugin's NEWSREAP_CLI_PLUGINS, 'nr mine a.b.test' runs 'nr mine run
+    a.b.test' while 'nr mine ls' still works
 
     Its help is the default command's, followed by the other commands.
     """

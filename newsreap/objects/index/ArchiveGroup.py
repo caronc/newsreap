@@ -15,6 +15,7 @@
 from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -29,11 +30,11 @@ class ArchiveGroup(ObjectBase):
 
     # The article
     message_id = Column(
-        String(250), ForeignKey('archive_post.message_id'),
+        Key(250), ForeignKey('archive_post.message_id'),
         primary_key=True)
 
     # The group's name
-    name = Column(String(128), primary_key=True, index=True)
+    name = Column(Key(128), primary_key=True, index=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

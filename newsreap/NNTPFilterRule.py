@@ -885,9 +885,15 @@ class NNTPFilterRule:
                 raise ValueError(
                     '%s: case_sensitive must be true or false' % field)
 
+            negate = value.get('not', False)
+            if not isinstance(negate, bool):
+                # ie: 'false' in quotes, which would otherwise turn the
+                # rule around
+                raise ValueError('%s: not must be true or false' % field)
+
             try:
                 matches.append(TextMatch(
-                    ops[0], value[ops[0]], negate=value.get('not', False),
+                    ops[0], value[ops[0]], negate=negate,
                     case_sensitive=case_sensitive))
 
             except ValueError as e:

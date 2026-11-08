@@ -304,11 +304,18 @@ class NNTPSearchTerm:
 
         if dialect == 'mysql':
             if self.kind == SearchKind.Glob:
-                # The usual (_ci) collations ignore case and accents
-                found = column.like(self.like(), escape='/')
-                return and_(found, column.collate('utf8mb4_bin').like(
-                    self.like(), escape='/')) if self.case_sensitive \
-                    else found
+                # Compared the way that is asked for whatever the column's
+                # own collation (keys and Message-IDs are kept exact; see
+                # objects.Key()): the usual collation ignores case and
+                # accents, the binary one minds both
+                if not self.case_sensitive:
+                    return column.collate('utf8mb4_0900_ai_ci').like(
+                        self.like(), escape='/')
+
+                return and_(
+                    column.like(self.like(), escape='/'),
+                    column.collate('utf8mb4_bin').like(
+                        self.like(), escape='/'))
 
             # Its expressions can't ignore accents; the pattern is used as
             # it was given

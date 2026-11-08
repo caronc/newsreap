@@ -18,6 +18,8 @@ from sqlalchemy import Integer
 from sqlalchemy import SmallInteger
 from sqlalchemy import String
 from sqlalchemy import Text
+from newsreap.objects import BigNumber
+from newsreap.objects import Key
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
 from .ObjectBase import ObjectBase
@@ -64,7 +66,7 @@ class ArchivedPost(ObjectBase):
     id = Column(Integer, primary_key=True)
 
     # The article's Message-ID (without its < and >)
-    message_id = Column(String(250), nullable=False, unique=True)
+    message_id = Column(Key(250), nullable=False, unique=True)
 
     # What it is (see ArchiveKind)
     kind = Column(SmallInteger, nullable=False, default=ArchiveKind.Text,
@@ -78,7 +80,7 @@ class ArchivedPost(ObjectBase):
     posted = Column(DateTime, index=True)
 
     # How big the article was (in bytes, as the server listed it)
-    size = Column(Integer, nullable=False, default=0)
+    size = Column(BigNumber, nullable=False, default=0)
 
     # The Message-IDs it replies to (its References header), so threads can
     # be put back together

@@ -21,6 +21,7 @@ from .objects.nntp.Group import NAME_LENGTH
 from .objects.nntp.GroupAlias import GroupAlias
 from .objects.nntp.GroupOption import GroupOption
 from .objects.nntp.GroupTrack import GroupTrack
+from .objects.nntp.Claim import Claim
 from .objects.nntp.Server import Server
 from .objects.nntp.ServerStats import ServerStats
 
@@ -38,6 +39,7 @@ from sqlalchemy import exists
 from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import or_
+from sqlalchemy import text
 from sqlalchemy import update
 
 from sqlalchemy.exc import OperationalError
@@ -46,6 +48,8 @@ from sqlalchemy.exc import ProgrammingError
 from .Database import Database
 from .NNTPStatistics import NNTPStatistics
 from .NNTPStatistics import STATISTIC_COUNTERS
+from .Utils import normal_server_key
+from .Utils import server_key
 from .Utils import utcnow
 from .objects.nntp.Common import GROUP_OPTIONS
 from .objects.nntp.Common import _get_groups
@@ -81,7 +85,8 @@ class UnknownGroups(LookupError):
 class UnknownServer(LookupError):
     """
     A server that isn't in the database yet ('nr db init' adds the ones
-    in the configuration file); the host is in .host
+    in the configuration file); its key (see Utils.server_key()) is in
+    .host
     """
     def __init__(self, host):
         self.host = host
@@ -112,6 +117,7 @@ Removal = namedtuple('Removal', ('removed', 'unknown', 'outside'))
 # - days: how many days are kept
 # - usual: what an average day before today looks like (None until there
 #   are USUAL_DAYS of them)
+# - host: the server (its key; see Utils.server_key())
 # - warnings: what looks wrong today next to the usual day; each is
 #   (what, today's value, the usual value) with what being 'slow' (bytes
 #   per second) or 'failures' (failures per command sent)
@@ -170,6 +176,14 @@ class NNTPDatabase(Database):
             engine=engine,
             reset=reset,
         )
+
+    def open(self, engine=None, reset=None):
+        """
+        Opens the database (see Database.open()); a reset drops the claims
+        table too, so it is looked for again
+        """
+        self._claim_table = False
+        return super().open(engine=engine, reset=reset)
 
     def groups(self, names=None, watched=False, strict=True):
         """
@@ -390,33 +404,37 @@ class NNTPDatabase(Database):
 
         return Removal(groups, unknown, outside)
 
-    def server_id(self, host):
+    def server_id(self, key):
         """
-        Returns the database id of a server (by its host); raises
+        Returns the database id of a server (by its key, see
+        Utils.server_key(); for a plain server that is its host); raises
         UnknownServer if it isn't there
         """
+        key = normal_server_key(key)
         with self.transaction() as session:
             found = session.query(Server.id)\
-                .filter(Server.host == host).first()
+                .filter(Server.key == key).first()
 
         if found is None:
-            raise UnknownServer(host)
+            raise UnknownServer(key)
 
         return found[0]
 
-    def save_groups(self, host, listing):
+    def save_groups(self, key, listing):
         """
-        Keeps the groups a server listed (each a dict: group, count,
-        flags, low, high), adding the new ones and refreshing the rest.
+        Keeps the groups a server (by its key; see server_id()) listed
+        (each a dict: group, count, flags, low, high), adding the new ones
+        and refreshing the rest.
 
         - returns how many groups were new
         - raises UnknownServer if the server isn't in the database
         """
+        key = normal_server_key(key)
         with self.transaction() as session:
             found = session.query(Server.id)\
-                .filter(Server.host == host).first()
+                .filter(Server.key == key).first()
             if found is None:
-                raise UnknownServer(host)
+                raise UnknownServer(key)
 
             # The groups we already know about (name -> id), read once
             # rather than once per group
@@ -471,20 +489,32 @@ class NNTPDatabase(Database):
 
         return len(new_groups)
 
-    def add_servers(self, hosts):
+    def add_servers(self, servers):
         """
-        Adds the servers (by host) that aren't in the database yet; returns
-        the hosts added
+        Adds the servers that aren't in the database yet; returns the keys
+        added (see Utils.server_key())
+
+        - servers: each a server's settings (a dict with its host, port,
+          username and so on), or just its host
         """
         added = []
         with self.transaction() as session:
-            known = {host for host, in session.query(Server.host)}
-            for host in hosts:
-                if host not in known:
-                    # The name is only shown; the host is used for now
-                    session.add(Server(name=host, host=host))
-                    known.add(host)
-                    added.append(host)
+            known = {key for key, in session.query(Server.key)}
+            for server in servers:
+                if isinstance(server, dict):
+                    host = str(server.get('host') or '').strip().lower()
+                    key = server_key(**server)
+
+                else:
+                    # A key (ie: a host, or me@host)
+                    key = normal_server_key(server)
+                    host = key.rpartition('@')[2]
+
+                if key not in known:
+                    # The name is only shown
+                    session.add(Server(name=key, host=host, key=key))
+                    known.add(key)
+                    added.append(key)
 
         return added
 
@@ -566,32 +596,28 @@ class NNTPDatabase(Database):
 
     def record_stats(self, by_host, day=None):
         """
-        Adds what a command did (NNTPStatistics by host) to each server's
-        row for the day (UTC today when not given); returns the hosts
-        recorded.
+        Adds what a command did (NNTPStatistics by server key; see
+        Utils.server_key()) to each server's row for the day (UTC today
+        when not given); returns the keys recorded.
 
         - several workers can add to the same row at the same time
-        - a host that isn't in the database (see 'nr db init') is skipped
+        - a server that isn't in the database (see 'nr db init') is
+          skipped
         - nothing is written for a server that did nothing
         """
         from .NNTPIndexer import NNTPIndexer
 
         day = day or utcnow().date()
-        wanted = {host: stats for host, stats in by_host.items()
+        wanted = {normal_server_key(host): stats
+                  for host, stats in by_host.items()
                   if stats.commands or stats.total_bytes}
         if not wanted:
             return []
 
         recorded = []
         with self.transaction() as session:
-            # A database made before statistics were kept gets the table
-            # now (on our own connection; another would wait on what we
-            # haven't committed)
-            ServerStats.__table__.create(
-                bind=session.connection(), checkfirst=True)
-
-            servers = dict(session.query(Server.host, Server.id)
-                           .filter(Server.host.in_(list(wanted))))
+            servers = dict(session.query(Server.key, Server.id)
+                           .filter(Server.key.in_(list(wanted))))
 
             for host, stats in wanted.items():
                 server_id = servers.get(host)
@@ -627,30 +653,23 @@ class NNTPDatabase(Database):
 
     def server_stats(self, since=None):
         """
-        Returns {host: {day: NNTPStatistics}} of the days kept (from the
+        Returns {server key: {day: NNTPStatistics}} of the days kept (from the
         day `since` on when given); its elapsed time is how long the
         commands ran that day
         """
         found = {}
         with self.transaction() as session:
-            query = session.query(Server.host, ServerStats)\
+            query = session.query(Server.key, ServerStats)\
                 .join(ServerStats, ServerStats.server_id == Server.id)
             if since is not None:
                 query = query.filter(ServerStats.day >= since)
 
-            try:
-                for host, row in query.order_by(ServerStats.day):
-                    found.setdefault(host, {})[row.day] = NNTPStatistics(
-                        peak_rate=row.peak_rate, started=0.0,
-                        finished=row.elapsed, **{
-                            name: getattr(row, name)
-                            for name in STATISTIC_COUNTERS})
-
-            except (OperationalError, ProgrammingError):
-                # A database made before statistics were kept (the table is
-                # added the first time something is recorded)
-                session.rollback()
-                return {}
+            for host, row in query.order_by(ServerStats.day):
+                found.setdefault(host, {})[row.day] = NNTPStatistics(
+                    peak_rate=row.peak_rate, started=0.0,
+                    finished=row.elapsed, **{
+                        name: getattr(row, name)
+                        for name in STATISTIC_COUNTERS})
 
         return found
 
@@ -723,16 +742,112 @@ class NNTPDatabase(Database):
         with self.transaction() as session:
             query = session.query(ServerStats)\
                 .filter(ServerStats.day < before)
-            try:
-                if dry_run:
-                    return query.count()
+            if dry_run:
+                return query.count()
 
-                return query.delete(synchronize_session=False)
+            return query.delete(synchronize_session=False)
 
-            except (OperationalError, ProgrammingError):
-                # No statistics were ever kept
-                session.rollback()
-                return 0
+    @staticmethod
+    def _now(session):
+        """
+        Returns the time now (UTC, naive) by the database server's clock,
+        so workers on machines whose clocks differ still agree on when a
+        claim runs out; SQLite is on this machine, so ours is used
+        """
+        dialect = session.get_bind().dialect.name
+        if dialect == 'postgresql':
+            return session.execute(text(
+                "SELECT CAST(now() AT TIME ZONE 'UTC' AS TIMESTAMP)")).scalar()
+
+        if dialect in ('mysql', 'mariadb'):
+            return session.execute(text('SELECT UTC_TIMESTAMP(6)')).scalar()
+
+        return utcnow()
+
+    def claim(self, names, owner, seconds, limit=None, free=()):
+        """
+        Claims what is named for `owner` (see Claim) for `seconds`; returns
+        the names claimed, in the order given.
+
+        - one already claimed by another owner (and not run out) is skipped
+        - one the owner already has is renewed
+        - limit: stop once this many are claimed (ie: connection slots)
+        - free: owners known to have stopped; their claims are taken over
+        - workers claiming the same name at once can't both get it
+        """
+        from .NNTPIndexer import NNTPIndexer
+
+        names = list(dict.fromkeys(names))
+        if not names:
+            return []
+
+        claimed = []
+        with self.transaction() as session:
+            now = self._now(session)
+            until = now + timedelta(seconds=seconds)
+
+            # Make sure each has a row (another worker may have made it
+            # already); then take the free ones.  The update only changes a
+            # row nobody else holds, so only one worker can get it.
+            NNTPIndexer._insert_ignore(
+                session, Claim, [{'name': name} for name in names])
+
+            for name in names:
+                if limit is not None and len(claimed) >= limit:
+                    break
+
+                taken = session.query(Claim)\
+                    .filter(Claim.name == name)\
+                    .filter(or_(Claim.owner.is_(None),
+                                Claim.owner == owner,
+                                Claim.until < now,
+                                Claim.owner.in_(list(free))))\
+                    .update({Claim.owner: owner, Claim.until: until},
+                            synchronize_session=False)
+                if taken:
+                    claimed.append(name)
+
+        return claimed
+
+    def renew_claims(self, owner, seconds):
+        """
+        Gives everything `owner` has claimed another `seconds`; returns how
+        many claims it has
+        """
+        with self.transaction() as session:
+            until = self._now(session) + timedelta(seconds=seconds)
+            return session.query(Claim)\
+                .filter(Claim.owner == owner)\
+                .update({Claim.until: until}, synchronize_session=False)
+
+    def release_claims(self, owner, names=None):
+        """
+        Lets go of what `owner` claimed (only the names given, when given);
+        returns how many were let go of
+        """
+        with self.transaction() as session:
+            query = session.query(Claim).filter(Claim.owner == owner)
+            if names is not None:
+                query = query.filter(Claim.name.in_(list(names)))
+
+            return query.update({Claim.owner: None, Claim.until: None},
+                                synchronize_session=False)
+
+    def claims(self, prefix=None):
+        """
+        Returns {name: (owner, until)} of what is claimed now (only names
+        starting with `prefix` when given); claims that ran out are left
+        out
+        """
+        with self.transaction() as session:
+            query = session.query(Claim.name, Claim.owner, Claim.until)\
+                .filter(Claim.owner.isnot(None))\
+                .filter(Claim.until >= self._now(session))
+            if prefix:
+                query = query.filter(Claim.name.startswith(
+                    prefix, autoescape=True))
+
+            return {name: (owner, until) for name, owner, until in query}
 
     @staticmethod
     def _resolve(session, names):

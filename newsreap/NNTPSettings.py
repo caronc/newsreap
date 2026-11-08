@@ -125,8 +125,6 @@ from os.path import dirname
 from os.path import abspath
 from os.path import expanduser
 from os.path import getsize
-from yaml.scanner import ScannerError
-from yaml.parser import ParserError
 from operator import itemgetter
 from copy import deepcopy
 
@@ -141,6 +139,7 @@ except ImportError:
     from newsreap.NNTPDatabase import NNTPDatabase
 
 from newsreap.Database import database_size
+from newsreap.Database import SQLITE_SIDE_FILES
 from newsreap.NNTPFilter import FILTERS_FILE
 from newsreap.NNTPFilter import FILTERS_EXTENSIONS
 from newsreap.NNTPFilter import FILTERS_FOLDER
@@ -148,6 +147,7 @@ from newsreap.NNTPFilter import NNTPFilter
 from newsreap.NNTPIOStream import NNTP_DEFAULT_ENCODING
 from newsreap.NNTPIOStream import NNTPIOStream
 from newsreap.Utils import parse_bool
+from newsreap.Utils import server_key
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
@@ -286,6 +286,11 @@ SQLITE_DATABASE_EXTENSION = '.db'
 # Characters not allowed in the filename of a group's cached database
 GROUP_FILENAME_RE = re.compile(r'[^a-z0-9.+_-]', re.ASCII)
 
+# A mask in the configuration (ie: %{base_dir}; see apply_mask()) and how
+# many masks deep one value may name another
+MASK_RE = re.compile(r'%\{(?P<name>[a-z0-9_]+)\}', re.ASCII | re.IGNORECASE)
+MASK_DEPTH = 5
+
 # Default block size to read and write to and from memory for
 # disk i/o
 DEFAULT_BLOCK_SIZE = 8192
@@ -378,6 +383,10 @@ SERVER_LIST_KEY = 'servers'
 # otherwise (safe with every provider we know of; most allow far more)
 DEFAULT_CONNECTIONS = 4
 
+# The main database when the configuration doesn't name one (as `nr
+# --init` writes it)
+DEFAULT_DATABASE_ENGINE = 'sqlite:///%{data_dir}/newsreap.db'
+
 # Default Database Variables
 DEFAULT_DATABASE_VARIABLES = {
     'engine': None,
@@ -411,7 +420,7 @@ DEFAULT_PROCESSING_VARIABLES = {
     # Article headers are removed from the group caches once indexed and
     # posted more than this many days ago; 0 keeps them all
     'raw_retention': 0,
-    # The biggest article 'nr update archive' fetches and keeps (text posts
+    # The biggest article 'nr update --content' fetches and keeps (text posts
     # are almost always much smaller)
     'archive_max_size': '64KB',
     # The file our filters (scores, tags and what is dropped) are kept in;
@@ -486,17 +495,21 @@ DEFAULT_DOWNLOAD_VARIABLES = {
     'extract': True,
     # Remove what was downloaded once it is all put together and placed
     'cleanup': True,
-    # 'nr prune downloads' removes downloads that didn't finish once
+    # 'nr prune' removes downloads that didn't finish once
     # nothing has touched them for this many days; 0 keeps them until you
     # remove them yourself
     'prune_downloads': 0,
-    # 'nr prune work' removes files left in the work directory this many
+    # 'nr prune' removes files left in the work directory this many
     # days or more; 0 keeps them
     'prune_work': 1,
     # An article no server had is asked for again by a later run while it
     # is this many minutes old or less (a new post takes a while to reach
     # every server), or once a server is added; see NNTPRetry
     'retry_window': 60,
+    # Loose articles a search finds (nr search --articles/--posts -d) are
+    # downloaded this many at a time; a file is never split between two
+    # batches (see NNTPArticleBatches)
+    'batch_size': 10000,
 }
 
 # Keyword used in configuration for downloading
@@ -693,10 +706,6 @@ class NNTPSettings(NNTPDatabase):
 
         """
 
-        if hasattr(self, '_mask_re'):
-            # Forget our cached masks (the directories may change)
-            del self._mask_re
-
         # Default Configuration Starting Point
         _cfg_data = deepcopy(VALID_SETTINGS_ENTRY)
 
@@ -717,13 +726,6 @@ class NNTPSettings(NNTPDatabase):
                 cfg_file,
             ))
 
-        except ParserError as e:
-            logger.debug('%s' % (str(e)))
-            logger.error('Failed to parse YAML configuration from %s' % (
-                cfg_file,
-            ))
-            return _cfg_data
-
         except OSError as e:
             logger.debug('%s' % (str(e)))
             logger.error('Failed to access YAML configuration from %s' % (
@@ -731,7 +733,8 @@ class NNTPSettings(NNTPDatabase):
             ))
             return _cfg_data
 
-        except (ScannerError, ParserError) as e:
+        except yaml.YAMLError as e:
+            # Anything the YAML reader couldn't make sense of
             logger.debug('%s' % (str(e)))
             logger.error('Failed to interpret YAML configuration from %s' % (
                 cfg_file,
@@ -839,8 +842,9 @@ class NNTPSettings(NNTPDatabase):
         # a list of processed nntp_servers
         _nntp_servers = {}
 
-        # A Simple list of hostnames (keys) so we can handle duplicates
-        _hosts = []
+        # What tells each server apart (see server_key()), so the same
+        # one listed twice is only used once
+        _keys = []
 
         # Track our default priority (it's incremented prior to assignment)
         _priority = 0
@@ -927,20 +931,21 @@ class NNTPSettings(NNTPDatabase):
             # Purge any entries from our list that are set to 'None'
             results = {k: v for k, v in results.items() if v is not None}
 
-            # our database (server) key is always the hostname
+            # A server is told apart by its user, host and port (two
+            # accounts on one server are two servers)
             try:
-                _key = results['host'].strip().lower()
-                if _key in _hosts:
-                    # Duplicate
-                    logger.warning(
-                        'Duplicate server entry #%d (%s)' % (
-                            _priority, _key) +
-                        ' was ignored specified.',
-                    )
+                results['host'] = str(results['host']).strip().lower()
+                _key = server_key(**results)
+                if not results['host']:
+                    raise ValueError('no host')
+
+                if _key in _keys:
+                    logger.error(
+                        'Server %s is listed more than once in %s; only the '
+                        'first is used.' % (_key, self.cfg_file))
                     continue
 
-                # Update our host using the key for consistency
-                results['host'] = _key
+                _keys.append(_key)
 
             except (ValueError, TypeError):
                 # Bad entry
@@ -1003,10 +1008,14 @@ class NNTPSettings(NNTPDatabase):
         if not self._is_valid:
             return False
 
-        if isinstance(self.nntp_database['engine'], str):
-            # Allow %{base_dir} and friends in our database location
-            self.nntp_database['engine'] = \
-                self.apply_mask(self.nntp_database['engine'])
+        # Without one, the main database is a file in our data directory
+        # (never one in memory, which would be gone once we stop)
+        engine = self.nntp_database.get('engine')
+        if not isinstance(engine, str) or not engine.strip():
+            engine = DEFAULT_DATABASE_ENGINE
+
+        # Allow %{base_dir} and friends in our database location
+        self.nntp_database['engine'] = self.apply_mask(engine.strip())
 
         # Open up our database connection if one exists
         if self.open(engine=self.nntp_database['engine'], reset=None):
@@ -1065,10 +1074,6 @@ class NNTPSettings(NNTPDatabase):
         if self._base_dir:
             self.data_dir = self._base_dir
             self.cache_dir = join(self._base_dir, 'cache')
-
-        if hasattr(self, '_mask_re'):
-            # Our masks name the directories
-            del self._mask_re
 
     def _resolve_connections(self):
         """
@@ -1144,6 +1149,24 @@ class NNTPSettings(NNTPDatabase):
                 'retry_window (%s) is not a number of minutes; using %d.' % (
                     value, DEFAULT_DOWNLOAD_VARIABLES['retry_window']))
             return DEFAULT_DOWNLOAD_VARIABLES['retry_window']
+
+    def batch_size(self):
+        """
+        Returns how many loose articles a search found are downloaded at a
+        time (the batch_size setting; see NNTPArticleBatches)
+        """
+        value = self.nntp_downloads.get('batch_size')
+        try:
+            value = int(value)
+            if value < 1:
+                raise ValueError()
+            return value
+
+        except (TypeError, ValueError, OverflowError):
+            logger.error(
+                'batch_size (%s) is not a number of articles; using %d.' % (
+                    value, DEFAULT_DOWNLOAD_VARIABLES['batch_size']))
+            return DEFAULT_DOWNLOAD_VARIABLES['batch_size']
 
     def staging_dir(self):
         """
@@ -1288,7 +1311,7 @@ class NNTPSettings(NNTPDatabase):
         """
         path = self.group_database(name)
         size = 0
-        for found in (path, path + '-wal', path + '-shm', path + '-journal'):
+        for found in (path, *(path + side for side in SQLITE_SIDE_FILES)):
             try:
                 size += getsize(found)
 
@@ -1473,95 +1496,57 @@ class NNTPSettings(NNTPDatabase):
         # Update central configuration
         self.cfg_file = cfg_file
 
-        if hasattr(self, '_mask_re'):
-            # Presumably something has changed if the user called save so we
-            # destroy our cached mask to be safe
-            del self._mask_re
-
         return True
 
     def apply_mask(self, content, mask_map=None, is_dir=False, lazy=True):
         """
-        when provided content, all predefined masks such as %{base_dir} are
-        substituted with their actual represented value.
+        Fills in the masks content holds (ie: %{base_dir}/tmp); they are
+        found whatever their case:
+        - %{base_dir}, %{config_dir}, %{data_dir}, %{cache_dir},
+          %{work_dir} and %{ramdisk}
+        - mask_map: more of them (ie: {'%{group}': 'alt.test'}); ours are
+          never replaced by these
+        - is_dir: the result is made an absolute path (~ expanded)
 
-        If you provide your own mask_map (must be a dictionary of key ->
-        value) then it will be added to the results
-
-        if is_dir is specified, then abspath and expanduser is also called
-        on the returned results.
-
-        If lazy is set to true, then we use our cached values (if they exist)
+        A mask that isn't known is left as it is (and said so); anything
+        else holding a %{ (ie: a password) is left alone.  lazy is ignored
+        (the values are always the current ones).
         """
+        values = {
+            'base_dir': self.base_dir,
+            'config_dir': self.config_dir,
+            'data_dir': self.data_dir,
+            'cache_dir': self.cache_dir,
+            'work_dir': self.work_dir,
+            'ramdisk': self.nntp_processing.get('ramdisk') or '',
+        }
+        extras = {
+            str(key).strip().lstrip('%').strip('{}').lower(): value
+            for key, value in (mask_map or {}).items()}
 
-        if not lazy or not hasattr(self, '_mask_re'):
-            # Define our translation map
-            self._mask_map = {
-                '%{base_dir}': self.base_dir,
-                '%{config_dir}': self.config_dir,
-                '%{data_dir}': self.data_dir,
-                '%{cache_dir}': self.cache_dir,
-                '%{work_dir}': self.work_dir,
-                '%{ramdisk}': self.nntp_processing.get('ramdisk', ''),
-            }
+        def fill(text, depth=0):
+            def lookup(match):
+                name = match.group('name').lower()
+                value = values.get(name)
+                if value is None:
+                    value = extras.get(name)
 
-            # A checking script for handling entries not supported
-            self._mask_check_re = re.compile('(%{([^}]r+)?}?)+', re.ASCII)
+                if value is None:
+                    logger.error(
+                        "%s isn't something the configuration can use (it "
+                        "is left as it is)." % match.group())
+                    return match.group()
 
-            # we build our mask once for speed
-            self._mask_re = re.compile(
-                r'(' + '|'.join(self._mask_map) + r')',
-                re.IGNORECASE | re.ASCII,
-            )
+                # A value can hold masks too (at most a few deep, so one
+                # that names itself stops)
+                return str(value) if depth >= MASK_DEPTH \
+                    else fill(str(value), depth + 1)
 
-        # extra mask is created if an additional mask was provided
-        extra_mask_re = None
+            return MASK_RE.sub(lookup, text)
 
-        if mask_map:
-            # a mask map was provided as input too
-            extra_mask_re = re.compile(
-                r'(' + '|'.join(mask_map) + r')',
-                re.IGNORECASE | re.ASCII,
-            )
-
-        # Apply our lookups
-        content = self._mask_re.sub(
-            lambda x: self._mask_map[x.group().lower()], content)
-
-        # We intentionally don't proces our extra matches yet until our
-        # standard entries have been applied at least twice. The reason is
-        # because we don't want someone over-riding the %{base_dir} path in
-        # the extras causing the work_dir to reference it instead of the
-        # one defined in our configuration
-
-        recursion = 0
-        _matches = self._mask_check_re.search(content)
-        while _matches:
-            # Apply our lookups
-            content = self._mask_re.sub(
-                lambda x: self._mask_map[x.group().lower()], content)
-
-            # If we get here, we still have left over keys that have
-            # not been looked up
-            if mask_map:
-                # The extra masks are found whatever their case too
-                extras = {key.lower(): value for key, value in mask_map.items()}
-                content = extra_mask_re.sub(
-                    lambda x: extras[x.group().lower()], content)
-
-            recursion += 1
-            if recursion > 5:
-                # Recursion Limit hit
-                raise AttributeError(
-                    "Configuration contains an infinit recursion loop.",
-                )
-
-            # Update our match search
-            _matches = self._mask_check_re.search(content)
-
+        content = fill(content)
         if is_dir:
             # convert it into an absolute path
             return abspath(expanduser(content))
 
-        # Don't mangle the content any more
         return content

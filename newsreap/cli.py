@@ -35,7 +35,7 @@
 #
 #   # Poll the configured NNTP Servers in your config.yaml file for
 #   # all of the usenet groups supported.
-#   nr update groups
+#   nr group refresh
 #
 #   # You can list them all now by typing:
 #   nr group ls --all
@@ -80,9 +80,9 @@
 #   # The headers fetched are grouped into files and collections
 #   # (releases) right away, ready to search; a collection can be spread
 #   # over many groups (they all go into one index).  --no-index only
-#   # fetches them; 'nr update index' groups them later.
+#   # fetches them; --cached groups them later.
 #   nr update test --no-index
-#   nr update index test
+#   nr update test --cached
 #
 #   # Also keep what the small articles say (--content), read the NZB
 #   # files posted (--nzb), or work the scores out again (--rescore); with
@@ -98,7 +98,7 @@
 #   # Collections only settle once their groups have been scanned past
 #   # them; --settle counts every group as seen up to now (ie: for groups
 #   # you no longer scan)
-#   nr update index test --settle
+#   nr update test --cached --settle
 #
 #   # List the collections (newest first, filtered by keywords and
 #   # optionally by group or alias) and save any of them as an NZB file
@@ -158,7 +158,7 @@
 #   nr group set test --content yes --nzb yes
 #
 #   # We can now fetch (and index) every watched group:
-#   nr -vvv update --watched
+#   nr -vvv update
 #
 #   # Now that you've got content indexed, you can search it (across every
 #   # group).  Each keyword must be in a collection's name or one of its
@@ -198,10 +198,11 @@
 #   nr search holiday -d -z -o ~/Usenet
 #   nr search --articles -g test --iposter '*bot*' --delete
 #
-#   # Clear out downloads that didn't finish, leftover work files or old
-#   # indexed headers (you say which, and are asked first)
-#   nr prune downloads --days 14 --dry-run
-#   nr prune work
+#   # Clear out what the configuration says is no longer needed (old
+#   # group content, downloads that didn't finish, leftover work files,
+#   # old statistics); you are asked first.  --only picks one kind
+#   nr prune --dry-run
+#   nr prune --only downloads --days 14
 #
 #   # Keep the database trim: see what a rule would remove (everywhere:
 #   # header caches, index and archive), remove it, and keep the rule
@@ -250,6 +251,7 @@ from newsreap.NNTPSettings import DEFAULT_CLI_PLUGIN_DIRECTORIES
 from newsreap.NNTPSettings import NNTPSettings
 from newsreap.NNTPSettings import create_config
 from newsreap.NNTPSettings import DEFAULT_CONFIG_FILE_PATHS
+from newsreap.NNTPClaims import NNTPClaims
 from newsreap.NNTPManager import NNTPManager
 from newsreap.Utils import scan_pylib
 from newsreap.Utils import load_pylib
@@ -337,7 +339,7 @@ def cli(ctx, config, verbose, noprompt, statistics, init):
         click.echo('Next steps:')
         click.echo('  1. Edit it and fill in your server details')
         click.echo('  2. Prepare the database:     %s db init' % nr)
-        click.echo('  3. Fetch the group listing:  %s update groups' % nr)
+        click.echo('  3. Fetch the group listing:  %s group refresh' % nr)
         ctx.exit(0)
 
     if ctx.invoked_subcommand is None:
@@ -359,9 +361,17 @@ def cli(ctx, config, verbose, noprompt, statistics, init):
         logger.error("No valid config.yaml file was found.")
         exit(1)
 
-    # NNTPManager() for interacting with all configured NNTP Servers
+    # What this worker is busy with (groups, connections), so others running
+    # at the same time leave it alone; let go of last (callbacks run last
+    # to first)
+    ctx.obj['NNTPClaims'] = NNTPClaims(ctx.obj['NNTPSettings'])
+    ctx.call_on_close(ctx.obj['NNTPClaims'].close)
+
+    # NNTPManager() for interacting with all configured NNTP Servers; it
+    # shares each server's connections with the other workers
     ctx.obj['NNTPManager'] = NNTPManager(
         settings=ctx.obj['NNTPSettings'],
+        claims=ctx.obj['NNTPClaims'],
     )
 
     # Keep what our connections did ('nr db status' shows it); callbacks run

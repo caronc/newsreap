@@ -366,3 +366,81 @@ def test_backup_server_fetch(nntp_server, tmp_path):
         assert 'ARTICLE <5>' in backup_server.commands()
         backup.close()
         sock.close()
+
+
+def test_a_backup_server_is_asked_the_same_way(nntp_server, tmp_path):
+    """
+    A backup server gets the same decoders and max_bytes we were given
+    (ie: decoders=False still means the article as it is)
+    """
+    from tests.FakeNNTPServer import FakeNNTPServer
+
+    path = join(VAR_PATH, '00000005.ntx')
+    nntp_server.add_group(GROUP)
+
+    with FakeNNTPServer() as backup_server:
+        backup_server.add_article('5', path, GROUP)
+
+        sock = connect_to(nntp_server, join_group=True)
+        backup = connect_to(backup_server, join_group=True)
+        sock.append(backup)
+
+        asked = []
+        get = backup.get
+
+        def spy(*args, **kwargs):
+            asked.append(kwargs)
+            return get(*args, **kwargs)
+
+        backup.get = spy
+        article = sock.get('5', work_dir=str(tmp_path), group=GROUP,
+                           decoders=False, max_bytes=4096)
+        assert isinstance(article, NNTPArticle)
+        assert len(article.decoded) == 0
+        assert asked[0]['decoders'] is False
+        assert asked[0]['max_bytes'] == 4096
+        backup.close()
+        sock.close()
+
+
+def test_decoders_are_reset_before_a_backup_server_is_asked(
+        nntp_server, tmp_path):
+    """
+    Decoders we were given start clean for a backup server (the first
+    server may have fed them part of an answer)
+    """
+    from newsreap.codecs.CodecHeader import CodecHeader
+    from tests.FakeNNTPServer import FakeNNTPServer
+
+    path = join(VAR_PATH, '00000005.ntx')
+    nntp_server.add_group(GROUP)
+
+    with FakeNNTPServer() as backup_server:
+        backup_server.add_article('5', path, GROUP)
+
+        sock = connect_to(nntp_server, join_group=True)
+        backup = connect_to(backup_server, join_group=True)
+        sock.append(backup)
+
+        decoder = CodecHeader(work_dir=str(tmp_path))
+        events = []
+        reset = decoder.reset
+
+        def counted():
+            events.append('reset')
+            return reset()
+
+        decoder.reset = counted
+        get = backup.get
+
+        def spy(*args, **kwargs):
+            events.append('backup')
+            return get(*args, **kwargs)
+
+        backup.get = spy
+        sock.get('5', work_dir=str(tmp_path), group=GROUP,
+                 decoders=[decoder])
+        assert events.index('backup') > 0
+        assert events[events.index('backup') - 1] == 'reset'
+        backup.close()
+        sock.close()

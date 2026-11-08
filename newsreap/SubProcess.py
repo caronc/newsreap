@@ -14,13 +14,13 @@
 
 
 import signal
-import subprocess
 import re
 from os import kill
 from os import fsdecode
 from os import SEEK_SET
 
 from io import StringIO
+from tempfile import TemporaryFile
 
 from gevent import Greenlet
 from gevent.event import Event
@@ -46,6 +46,8 @@ class ReturnCode:
     Unknown = -10
     Timeout = -20
     Aborted = -30
+    # The program couldn't be started (ie: it isn't installed)
+    NotStarted = -40
 
 
 class SubProcess(Greenlet):
@@ -128,20 +130,50 @@ class SubProcess(Greenlet):
 
     def _run(self):
         """
-        Read from the work_queue, process it using an NNTPRequest object.
+        Runs the command; whatever happens, the done flag is set at the end
+        (so nothing waits on it forever)
 
+        What it writes goes into temporary files rather than pipes: a pipe
+        only holds so much, and a program writing a lot (ie: rar or par2)
+        would stop and wait for it to be read.
         """
 
         # Make sure our done flag is not set
         self._done.clear()
 
-        # Execute our Process
-        p1 = start_program(
-            self._cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        try:
+            with TemporaryFile() as out, TemporaryFile() as err:
+                try:
+                    p1 = start_program(self._cmd, stdout=out, stderr=err)
 
+                except (OSError, ValueError) as e:
+                    logger.error('Could not run %s (%s).' % (
+                        self._cmd[0] if self._cmd else 'nothing', e))
+                    self._returncode = ReturnCode.NotStarted
+                    self._execution_begin = self._execution_finish = \
+                        utcnow()
+                    return
+
+                self._wait(p1)
+
+                # Retrieve stdout/stderr
+                out.seek(0)
+                err.seek(0)
+                self._stdout = StringIO(fsdecode(out.read()))
+                self._stderr = StringIO(fsdecode(err.read()))
+
+        finally:
+            # Make sure no one uses the PID anymore
+            self._pid = None
+
+            # Set our done flag
+            self._done.set()
+
+    def _wait(self, p1):
+        """
+        Waits for the program to finish (stopping it once our timeout is
+        up, or when we are aborted) and keeps its return code
+        """
         # Calculate Current Time
         self._execution_begin = utcnow()
 
@@ -150,54 +182,33 @@ class SubProcess(Greenlet):
 
         # Calculate Wait Time
         max_wait_time = self._execution_begin + \
-                        timedelta(seconds=self._timeout)
+            timedelta(seconds=self._timeout or 0)
 
-        while p1.poll() is None and not self._abort.is_set():
-            # Head of Poll Loop
+        stopped = None
+        while p1.poll() is None:
+            if self._abort.is_set():
+                stopped = ReturnCode.Aborted
+                break
 
-            if self._timeout and \
-               utcnow() >= max_wait_time:
+            if self._timeout and utcnow() >= max_wait_time:
                 # Process aborted (took too long)
-                try:
-                    kill(self._pid, signal.SIGKILL)
-                except:
-                    pass
-
-                # Collect the stopped process so it isn't left behind
-                p1.wait()
-
-                # Force bad return code
-                self._returncode = ReturnCode.Timeout
-
-                # Set our elapsed time to now
-                self._execution_finish = utcnow()
-
-                # Retrieve stdout/stderr
-                self._stdout = StringIO(fsdecode(p1.stdout.read()))
-                self._stderr = StringIO(fsdecode(p1.stderr.read()))
-
-                # Make sure no one uses the PID anymore
-                self._pid = None
-
-                # Set our done flag
-                self._done.set()
-                return
+                stopped = ReturnCode.Timeout
+                break
 
             # CPU Throttle
             self._abort.wait(self._throttle)
 
-        if p1.poll() is None or self._abort.is_set():
-            # Safety
+        if stopped is not None:
             try:
                 kill(self._pid, signal.SIGKILL)
-            except:
+
+            except OSError:
+                # It finished on its own meanwhile
                 pass
 
             # Collect the stopped process so it isn't left behind
             p1.wait()
-
-            # Force bad return code
-            self._returncode = ReturnCode.Aborted
+            self._returncode = stopped
 
         else:
             # Store return code
@@ -205,19 +216,6 @@ class SubProcess(Greenlet):
 
         # Execution Completion Time
         self._execution_finish = utcnow()
-
-        # Retrieve stdout/stderr
-        self._stdout = StringIO(fsdecode(p1.stdout.read()))
-        self._stderr = StringIO(fsdecode(p1.stderr.read()))
-
-        # Make sure no one uses the PID anymore
-        self._pid = None
-
-        # Set our done flag
-        self._done.set()
-
-        # We're done!
-        return
 
     def is_complete(self, timeout=None):
         """

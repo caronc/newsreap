@@ -134,17 +134,17 @@ class Codec7Zip(CodecFile):
         ]
 
         # Password Protection
-        if self.password is not None:
+        if self.password:
             execute.append('-p%s' % self.password)
 
         # Handle Compression Level
-        if self.level is CompressionLevel.Maximum:
+        if self.level == CompressionLevel.Maximum:
             execute.append('-mx9')
 
-        elif self.level is CompressionLevel.Average:
+        elif self.level == CompressionLevel.Average:
             execute.append('-mx5')
 
-        elif self.level is CompressionLevel.Minimum:
+        elif self.level == CompressionLevel.Minimum:
             execute.append('-mx1')
 
         # Don't prompt for anything
@@ -282,7 +282,7 @@ class Codec7Zip(CodecFile):
         ]
 
         # Password Protection
-        if password is not None:
+        if password:
             execute.append('-p%s' % password)
         else:
             # Do not prompt for password
@@ -304,10 +304,10 @@ class Codec7Zip(CodecFile):
             if not name:
                 name = random_str()
 
-        for _path in self:
-            # Temporary Path
-            tmp_path, _ = self.mkstemp(content=name)
+        # Every archive is extracted into the same (temporary) directory
+        tmp_path, _ = self.mkstemp(content=name)
 
+        for _path in self:
             with pushd(tmp_path):
                 # Create our SubProcess Instance
                 sp = SubProcess(list(execute) + [_path])
@@ -397,7 +397,7 @@ class Codec7Zip(CodecFile):
         ]
 
         # Password Protection
-        if password is not None:
+        if password:
             execute.append('-p%s' % password)
         else:
             # Do not prompt for password

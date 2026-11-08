@@ -16,6 +16,8 @@ from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
+from newsreap.objects import BigNumber
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -34,10 +36,10 @@ class FileGroup(ObjectBase):
 
     # The file (see CollectionFile)
     file_id = Column(
-        Integer, ForeignKey('collection_file.id'), primary_key=True)
+        BigNumber, ForeignKey('collection_file.id'), primary_key=True)
 
     # The group's name
-    name = Column(String(128), primary_key=True, index=True)
+    name = Column(Key(128), primary_key=True, index=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

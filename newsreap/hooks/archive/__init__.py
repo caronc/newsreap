@@ -1,4 +1,4 @@
-# The hooks 'nr update archive' uses to turn articles into searchable text
+# The hooks 'nr update --content' uses to turn articles into searchable text
 #
 # Copyright (C) 2026 Chris Caron <lead2gold@gmail.com>
 #

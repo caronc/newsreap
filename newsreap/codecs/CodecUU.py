@@ -306,6 +306,17 @@ class CodecUU(CodecBase):
                 # keep going until we find it
                 continue
 
+            if not data.strip():
+                # A blank line holds nothing (decoding it would give NULs)
+                continue
+
+            if EOM in self._meta:
+                # Only 'end' follows the end of its data; anything else is
+                # what comes after it
+                stream.seek(ptr, SEEK_SET)
+                self._total_lines -= 1
+                break
+
             try:
                 decoded = a2b_uu(data)
 

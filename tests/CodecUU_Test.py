@@ -352,3 +352,21 @@ class CodecUU_Test(TestBase):
 
         finally:
             CodecBaseModule.sleep = original
+
+
+def test_uu_data_ends_where_its_end_line_is(tmp_path):
+    """
+    A blank line in uuencoded data adds nothing, and what follows the `
+    line that ends the data (when no 'end' does) isn't part of the file
+    """
+    from binascii import b2a_uu
+    from io import BytesIO
+
+    data = b'hello there, this is a little file\n'
+    article = BytesIO(
+        b'begin 644 note.txt\n' + b2a_uu(data) + b'\n' + b'`\n'
+        b'Thanks for reading\nmore text after it\n')
+
+    decoded = CodecUU(work_dir=str(tmp_path)).decode(article)
+    assert decoded.getvalue() == data
+    assert article.readline() == b'Thanks for reading\n'

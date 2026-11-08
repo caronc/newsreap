@@ -105,7 +105,8 @@ class CodecBase:
         self._total_lines = 0
 
         # Throttle relief
-        self.throttle_cycles = throttle_cycles
+        # Every pass at least (0 or less would never come round)
+        self.throttle_cycles = max(1, int(throttle_cycles or 1))
         self.throttle_time = throttle_time
         self.throttle_iter = 0
 
@@ -119,8 +120,6 @@ class CodecBase:
         - This call should exist within the while() loop of all decode()
           calls.
         """
-        # TODO: Generate some statistics here too based on lines processed
-
         before = self.throttle_iter // self.throttle_cycles
         self.throttle_iter += count
         if self.throttle_iter // self.throttle_cycles != before:

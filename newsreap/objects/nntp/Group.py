@@ -20,6 +20,8 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
+from newsreap.objects import BigNumber
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -43,14 +45,14 @@ class Group(ObjectBase):
     id = Column(Integer, Sequence('id_seq'), primary_key=True)
 
     # group name
-    name = Column(String(NAME_LENGTH), nullable=False, unique=True,
+    name = Column(Key(NAME_LENGTH), nullable=False, unique=True,
                   index=True)
 
     # Some statistics that are just fetched from the NNTP Server; this
     # is a lose value since counts will vary across multiple usenet
     # servers with multiple retentions.  This value is based on the
     # primary server.
-    count = Column(Integer, nullable=False, default=0)
+    count = Column(BigNumber, nullable=False, default=0)
 
     # group flags (associated with group); ie: y, m, or =another.group
     # when it is filed under another name (MySQL needs a length)

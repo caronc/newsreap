@@ -120,12 +120,6 @@ def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
             "can be used.")
         exit(1)
 
-    if (password is not None or generate_password or no_password) and \
-            not prep:
-        # The archives were made already; their password can't change now
-        click.echo('Note: --password, --generate-password and --no-password '
-                   'only apply while preparing (--prep).', err=True)
-
     if password == '':
         # The same as --no-password
         password = None
@@ -157,6 +151,12 @@ def post(ctx, groups, prep, stage, upload, verify, clean, split_size,
         upload = True
         verify = True
         clean = True
+
+    if (password is not None or generate_password or no_password) and \
+            not prep:
+        # The archives were made already; their password can't change now
+        click.echo('Note: --password, --generate-password and --no-password '
+                   'only apply while preparing (--prep).', err=True)
 
     if not split_size:
         # by default use what we have defined

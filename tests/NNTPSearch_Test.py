@@ -395,8 +395,9 @@ def test_posts_are_narrowed_down_by_tag_score_and_time(archiver):
 #
 def test_found_results_keep_only_what_is_needed_once_shown(capsys):
     """
-    Once a result is printed, its lines are let go of; removing keeps only
-    what each result is and where it is kept
+    Once a result is printed, its lines are let go of and it is kept in a
+    temporary file (never all in memory); removing keeps only what each
+    result is and where it is kept
     """
     from newsreap.plugins.cli.search import Found
     from newsreap.plugins.cli.search import shown
@@ -408,24 +409,36 @@ def test_found_results_keep_only_what_is_needed_once_shown(capsys):
             'subject': 'first', 'size': 10})
 
     kept = shown(found(), fields=('kind', 'group'))
-    assert kept == [Found('a@x', (), {
+    assert list(kept.entries()) == [Found('a@x', (), {
         'kind': 'article', 'group': 'alt.binaries.test'})]
+    assert (len(kept), kept.counts, kept.size) == (1, {'article': 1}, 10)
+    assert kept.what() == '1 article(s)'
+    assert list(kept.entries('collection')) == []
     assert capsys.readouterr().out.splitlines() == [
         'alt.binaries.test:', '  [00001] first', '    snippet']
+    kept.close()
 
     # Downloading keeps every detail (it puts articles together by them),
     # and a quiet run prints nothing
     kept = shown(found(), show=False)
-    assert kept[0].data['subject'] == 'first'
-    assert kept[0].lines == ()
+    first = next(kept.entries())
+    assert first.data['subject'] == 'first'
+    assert first.lines == ()
     assert capsys.readouterr().out == ''
+
+    # Read back a chunk at a time
+    for no in range(7):
+        kept.add(Found('%d@x' % no, (), {'kind': 'article', 'size': 1}))
+    assert [len(chunk) for chunk in kept.chunks('article', 3)] == [3, 3, 2]
+    kept.close()
 
 
 def test_what_a_search_found_is_downloaded_and_removed(
         tmp_path, index_engine):
     """
-    --delete removes the collections, posts and articles a search found,
-    and -z saves the NZB files of collections, on every index database
+    --delete removes the collections, posts and articles a search found
+    with everything kept of them (and so does nr delete), and -z saves the
+    NZB files of collections, on every index database
     """
     from click.testing import CliRunner
 
@@ -435,7 +448,7 @@ def test_what_a_search_found_is_downloaded_and_removed(
     from tests.conftest import config_for
 
     group_list = tmp_path / 'group.list'
-    group_list.write_text('%s 0000000004 0000000001 y\n' % GROUP)
+    group_list.write_text('%s 0000000006 0000000001 y\n' % GROUP)
 
     with FakeNNTPServer(group_list=str(group_list),
                         join_group=False) as server:
@@ -448,7 +461,8 @@ def test_what_a_search_found_is_downloaded_and_removed(
         for no, (subject, poster, message_id) in enumerate(
                 [*release('Holiday', files=1, segments=2),
                  ('Holiday talk', POSTER, 'talk@x'),
-                 ('Holiday talk', POSTER, 'more@x')], 1):
+                 ('Holiday talk', POSTER, 'more@x'),
+                 *release('Trip', files=1, segments=2)], 1):
             server.add_overview(
                 GROUP, no, subject, poster, POSTED + timedelta(minutes=no),
                 message_id, size=100)
@@ -470,7 +484,7 @@ def test_what_a_search_found_is_downloaded_and_removed(
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         result = nr('update', GROUP, '--content')
         assert result.exit_code == 0, result.output
 
@@ -483,21 +497,49 @@ def test_what_a_search_found_is_downloaded_and_removed(
         assert sorted(path.suffix for path in out.iterdir()) == \
             ['.nzb'] * len(collections)
 
-        # Posts: shown, asked, then removed
+        def cached(*words):
+            return nr('search', '--articles', '-g', GROUP, *words,
+                      '-q').output.split()
+
+        # Posts: shown, asked, then removed, with their cached headers and
+        # what the index has of them
         result = nr('search', '--posts', 'more', '--delete', input='y\n')
         assert '<more@x>' in result.output
-        assert 'Removed 1 post(s).' in result.output
+        assert 'Removed 1 post(s).\nAlso removed 1 cached header(s) and 1 ' \
+            'indexed article(s).' in result.output, result.output
         assert nr('search', '--posts', 'photos', '-q').output.split() == [
             'talk@x']
+        assert cached('talk') == ['talk@x']
 
-        # Articles (from their group's cache) and collections
+        # Articles: from their group's cache, the archive, and the
+        # collection they made (which is left empty and goes too)
         result = nr('-y', 'search', '--articles', '-g', GROUP, 'talk',
                     '--delete')
-        assert 'Removed 2 article(s).' in result.output, result.output
-        assert nr('search', '--articles', '-g', GROUP, 'talk',
-                  '-q').output.strip() == ''
+        assert 'Removed 1 article(s).\nAlso removed 1 kept post(s), 1 ' \
+            'indexed article(s), 1 file(s) left empty and 1 collection(s) ' \
+            'left empty.' in result.output, result.output
+        assert cached('talk') == []
+        assert nr('search', '--posts', 'photos', '-q').output.strip() == ''
+        assert len(nr('search', 'holiday', '-q').output.split()) == \
+            len(collections) - 1
 
+        # Collections: with their cached headers and what the archive kept
+        # of their articles (nr delete too)
         result = nr('-y', 'search', 'holiday', '--delete')
-        assert 'Removed %d collection(s).' % len(collections) in \
+        assert 'Removed %d collection(s).\nAlso removed 2 cached ' \
+            'header(s) and 2 kept post(s).' % (len(collections) - 1) in \
             result.output, result.output
         assert nr('search', 'holiday', '-q').output.strip() == ''
+
+        trip = nr('search', 'trip', '-q').output.split()
+        assert len(trip) == 1
+        result = nr('-y', 'delete', trip[0])
+        assert result.exit_code == 0, result.output
+        assert 'Also removed 2 cached header(s) and 2 kept post(s).' in \
+            result.output, result.output
+        assert cached() == []
+
+        # Scanning again brings none of it back
+        assert nr('update', GROUP).exit_code == 0
+        assert cached() == []
+        assert nr('search', 'holiday|trip', '-q').output.strip() == ''

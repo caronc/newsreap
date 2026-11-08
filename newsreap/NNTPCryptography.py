@@ -24,17 +24,21 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import UnsupportedAlgorithm
 
+from os.path import expanduser
 from os.path import isfile
 
 from base64 import b64encode
 from base64 import b64decode
 from io import BytesIO
 from gzip import GzipFile
+from gzip import decompress as gzip_decompress
+from zlib import error as ZlibError
 
 from newsreap.Utils import SEEK_SET
 
 # Logging
 import logging
+import os
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
 
@@ -169,8 +173,8 @@ class NNTPCryptography:
         # Mask generation functions
         self.mgf1 = mgf1
 
-        if self.private_key is not None:
-            if not self.load(private_key, private_key, password):
+        if private_key is not None:
+            if not self.load(private_key, public_key, password):
                 raise ValueError('Could not load specified keys')
 
     def encode_public_key(self):
@@ -206,60 +210,46 @@ class NNTPCryptography:
                 return None
         return b64encode(fileobj.getvalue())
 
+    @staticmethod
+    def _unpacked(encoded):
+        """
+        Returns what an encoded key (gzipped, then base64; as spotnab has
+        them) holds; None if it isn't one
+        """
+        try:
+            return gzip_decompress(b64decode(encoded))
+
+        except (TypeError, ValueError, OSError, EOFError, ZlibError):
+            # Not base64, or not gzipped
+            return None
+
     def decode_private_key(self, encoded):
         """
-        Based on spotnab, this is the gzipped version of the key
-        with base64 applied to it.  We decode it and load it.
-
+        Loads a private key encoded as spotnab has them (see _unpacked());
+        returns True if it could be
         """
-
-        fileobj = BytesIO()
-        try:
-            fileobj.write(b64decode(encoded))
-        except (TypeError, ValueError):
-            # Not valid base64 content
-            return False
-
-        fileobj.seek(0, SEEK_SET)
-        private_key = None
-        with GzipFile(fileobj=fileobj, mode="rb") as f:
-            private_key = f.read()
-
+        private_key = self._unpacked(encoded)
         if not private_key:
             return False
 
-        # We were successful
-        if not self.load(private_key=private_key):
-            return False
-
-        return True
+        return bool(self.load(private_key=private_key))
 
     def decode_public_key(self, encoded):
         """
-        Based on spotnab, this is the gzipped version of the key
-        with base64 applied to it.  We decode it and load it.
-
+        Loads a public key encoded as spotnab has them (see _unpacked());
+        returns True if it could be
         """
-        fileobj = BytesIO()
-        try:
-            fileobj.write(b64decode(encoded))
-        except (TypeError, ValueError):
-            # Not valid base64 content
+        self.public_key = None
+        public_key = self._unpacked(encoded)
+        if not public_key:
             return False
 
-        fileobj.seek(0, SEEK_SET)
-        self.public_key = None
-        with GzipFile(fileobj=fileobj, mode="rb") as f:
-            try:
-                self.public_key = serialization.load_pem_public_key(
-                    f.read(),
-                    backend=default_backend()
-                )
-            except ValueError:
-                # Could not decrypt content
-                return False
+        try:
+            self.public_key = serialization.load_pem_public_key(
+                public_key, backend=default_backend())
 
-        if not self.public_key:
+        except (TypeError, ValueError):
+            # Not a key
             return False
 
         return True
@@ -494,14 +484,21 @@ class NNTPCryptography:
              alg=None, mgf1=None):
         """
         Loads a private key from disk (and public if specified)
+
+        - alg / mgf1: the hashes used from now on (the ones we have when
+          not given)
+        - a public key given has to belong to the private key; when it
+          doesn't, nothing is loaded and False is returned
         """
 
         # Reset our internal variables
         self.private_key = None
         self.public_key = None
         self.password = None
-        self.alg = None
-        self.mgf1 = None
+        if alg is not None:
+            self.alg = alg
+        if mgf1 is not None:
+            self.mgf1 = mgf1
 
         if isinstance(private_key, RSAPrivateKey):
             # Easy-Peasy
@@ -517,8 +514,9 @@ class NNTPCryptography:
                         backend=default_backend()
                     )
 
-            except ValueError as e:
-                # specified password was inevitably bad
+            except (TypeError, ValueError) as e:
+                # A bad password (or one given for a key that needs none,
+                # or none for one that does)
                 logger.error(
                     'Cryptography / Could not load private key file %s' % (
                         private_key,
@@ -540,8 +538,9 @@ class NNTPCryptography:
                     backend=default_backend()
                 )
 
-            except ValueError as e:
-                # specified password was inevitably bad
+            except (TypeError, ValueError) as e:
+                # A bad password (or one given for a key that needs none,
+                # or none for one that does)
                 logger.error(
                     'Cryptography / Could not load specified private key.')
                 logger.debug(
@@ -620,18 +619,28 @@ class NNTPCryptography:
             # We just don't support this feature
             raise AttributeError('Invalid public key specified.')
 
-        return self.verify()
+        if not self.verify():
+            logger.error(
+                "Cryptography / The public key doesn't belong to the "
+                'private key.')
+            self.private_key = None
+            self.public_key = None
+            self.password = None
+            return False
+
+        return True
 
     def verify(self):
         """
-        Verifies that our public/private keys are the correct match
-
+        Returns True when our public key belongs to our private key (False
+        when they don't match, or one of them is missing)
         """
+        if not isinstance(self.private_key, RSAPrivateKey) or \
+                not isinstance(self.public_key, RSAPublicKey):
+            return False
 
-        # TODO
-
-        # Verification Passed!
-        return True
+        return self.private_key.public_key().public_numbers() == \
+            self.public_key.public_numbers()
 
     def save(self, private_keyfile=DEFAULT_KEYFILE, public_keyfile=None,
              password=None):
@@ -657,14 +666,19 @@ class NNTPCryptography:
             # Generate our Public Key
             self.public_key = self.private_key.public_key()
 
+        private_keyfile = expanduser(private_keyfile)
         try:
-            with open(private_keyfile, "wb") as key_file:
+            # Only we can read it (an existing file is made so too)
+            fd = os.open(private_keyfile, os.O_WRONLY | os.O_CREAT |
+                         os.O_TRUNC, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as key_file:
                 key_file.write(self.private_pem(password=password))
 
         except OSError as e:
             logger.error(
                 'Cryptography / Private Key %s could not be written.' % (
-                    key_file,
+                    private_keyfile,
                 )
             )
             logger.debug(
@@ -674,9 +688,8 @@ class NNTPCryptography:
             )
             return False
 
-        if public_keyfile is None:
-            # Safety
-            public_keyfile = '%s.pub' % private_keyfile
+        public_keyfile = '%s.pub' % private_keyfile \
+            if public_keyfile is None else expanduser(public_keyfile)
 
         try:
             with open(public_keyfile, "wb") as key_file:
@@ -685,7 +698,7 @@ class NNTPCryptography:
         except OSError as e:
             logger.error(
                 'Cryptography / Public Key %s could not be written.' % (
-                    key_file,
+                    public_keyfile,
                 )
             )
             logger.debug(

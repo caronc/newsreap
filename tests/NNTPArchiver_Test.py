@@ -1,4 +1,4 @@
-# Test the archive of small articles (nr update archive)
+# Test the archive of small articles (nr update --content)
 #
 # Copyright (C) 2026 Chris Caron <lead2gold@gmail.com>
 #
@@ -479,6 +479,48 @@ def test_posts_are_found_by_their_words(archive):
     assert ids(archive) == ['3@x', '2@x', '1@x']
 
 
+def test_posts_found_can_be_read_a_few_at_a_time(
+        archive, index_engine, monkeypatch):
+    """
+    find(stream=True) hands the posts over as they are read (not as a
+    list), with the same results; nr search --posts reads them that way
+    """
+    from newsreap.NNTPArchiver import NNTPArchiver
+    from newsreap.plugins.cli.search import post_lines
+
+    found = archive.find(('holiday', ), stream=True)
+    assert not isinstance(found, list)
+    assert [post.message_id for post in found] == ['3@x', '1@x']
+    assert ids(archive, 'holiday', stream=True, limit=1) == ['3@x']
+
+    asked = []
+    find = NNTPArchiver.find
+
+    def spy(self, *args, **kwargs):
+        asked.append(kwargs.get('stream'))
+        return find(self, *args, **kwargs)
+
+    monkeypatch.setattr(NNTPArchiver, 'find', spy)
+
+    # One at a time, so more is read while the database is still sending
+    # the rest (MySQL streams on the same connection)
+    monkeypatch.setattr('newsreap.plugins.cli.search.STREAM_SIZE', 1)
+    monkeypatch.setattr('newsreap.NNTPIndexer.STREAM_SIZE', 1)
+
+    class Settings:
+        def index_database(self):
+            return index_engine
+
+    lines = list(post_lines({'NNTPSettings': Settings()}, ('holiday', ),
+                            None, None, {}, (), False))
+    assert [entry.key for entry in lines] == ['3@x', '1@x']
+    assert asked == [True]
+
+    # Each carries a group it was posted to (so the parts of files are
+    # only put together within one group)
+    assert [entry.data['group'] for entry in lines] == [OTHER, GROUP]
+
+
 def test_post_searches_ignore_case_and_accents(archive):
     """
     Case and accents don't matter unless asked
@@ -587,11 +629,11 @@ def test_posts_kept_again_are_searched_by_their_new_text(index_engine):
 
 
 #
-# Fetching (nr update archive)
+# Fetching (nr update --content)
 #
 def test_archive_from_the_command_line(tmp_path):
     """
-    nr update archive fetches the small articles (once), and they can be
+    nr update --content fetches the small articles (once), and they can be
     searched and read
     """
     from newsreap.cli import cli
@@ -640,25 +682,25 @@ def test_archive_from_the_command_line(tmp_path):
             return runner.invoke(cli, ['--config', config, *args], obj={})
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         # Nothing has been cached yet
-        result = nr('update', 'archive', GROUP)
+        result = nr('update', '--cached', '--content', '--no-nzb', GROUP)
         assert result.exit_code == 1
         assert 'Nothing archived yet' in nr('search', '--posts', 'x').output
 
-        assert nr('update', 'search', GROUP).exit_code == 0
+        assert nr('update', GROUP).exit_code == 0
 
         # The server fails one of them (it isn't missing; it is asked for
         # again next time)
         server.on(r'^ARTICLE <talk@x>$', Reply('503 Try again later'),
                   once=True)
-        result = nr('update', 'archive', GROUP)
+        result = nr('update', '--cached', '--content', '--no-nzb', GROUP)
         assert result.exit_code == 0, result.output
         assert '%s: 2 article(s) kept (1 text, 1 binary), 1 missing, ' \
             '0 refused, 0 already kept, 1 failed' % GROUP in result.output
 
-        result = nr('update', 'archive', GROUP)
+        result = nr('update', '--cached', '--content', '--no-nzb', GROUP)
         assert '%s: 1 article(s) kept (1 text, 0 binary), 0 missing' % \
             GROUP in result.output
         fetched = len([c for c in server.commands()
@@ -666,15 +708,15 @@ def test_archive_from_the_command_line(tmp_path):
         assert fetched == 5
 
         # Nothing is fetched twice
-        result = nr('update', 'archive', GROUP)
+        result = nr('update', '--cached', '--content', '--no-nzb', GROUP)
         assert '0 article(s) kept' in result.output
         assert len([c for c in server.commands()
                     if c.startswith('ARTICLE')]) == fetched
 
         # Posted to another group too: it is only noted there, not fetched
         # again
-        assert nr('update', 'search', OTHER).exit_code == 0
-        result = nr('update', 'archive', OTHER)
+        assert nr('update', OTHER).exit_code == 0
+        result = nr('update', '--cached', '--content', '--no-nzb', OTHER)
         assert '%s: 0 article(s) kept (0 text, 0 binary), 0 missing, ' \
             '0 refused, 1 already kept' % OTHER in result.output
         assert len([c for c in server.commands()
@@ -682,7 +724,7 @@ def test_archive_from_the_command_line(tmp_path):
         assert '<talk@x>' in nr('search', '--posts', 'cafe', '-g', OTHER).output
 
         # Unless asked to try the missing ones again
-        result = nr('update', 'archive', GROUP, '--force')
+        result = nr('update', '--cached', '--content', '--no-nzb', GROUP, '--force')
         assert '1 missing, 0 refused, 3 already kept' in result.output
 
         # Search them (case and accents don't matter)
@@ -703,3 +745,77 @@ def test_archive_from_the_command_line(tmp_path):
         assert 'Holds:      menu.pdf (yenc, 4.00B, crc32 0badf00d)' in \
             result.output
         assert nr('archive', 'show', 'nope@x').exit_code == 1
+
+
+def test_a_slow_article_doesnt_hold_up_the_rest(tmp_path):
+    """
+    Articles are handed back as they arrive: one that takes a while comes
+    last, and more are asked for meanwhile
+    """
+    import gevent
+    from newsreap.NNTPArchiver import NNTPArchiver
+
+    asked = []
+
+    class Manager:
+        def put(self, request):
+            message_id = request.actions[0][1][0]
+            asked.append(message_id)
+
+            def answer():
+                request.response.extend(['article %s' % message_id, 'found'])
+                request.set()
+
+            gevent.spawn_later(0.3 if message_id == 'slow' else 0.01, answer)
+
+    wanted = [(name, None) for name in ('slow', 'a', 'b', 'c')]
+    found = [entry[0] for entry, _ in NNTPArchiver._fetch(
+        Manager(), wanted, str(tmp_path), 'alt.test', 2)]
+
+    assert found == ['a', 'b', 'c', 'slow']
+    assert asked == ['slow', 'a', 'b', 'c']
+
+
+
+def test_ctrl_c_keeps_what_was_already_asked_for(tmp_path, monkeypatch):
+    """
+    Ctrl-C stops asking for more; the articles already on their way are
+    still handed back, then KeyboardInterrupt is raised
+    """
+    import gevent
+    import pytest
+    from newsreap import NNTPArchiver as module
+
+    asked = []
+
+    class Manager:
+        def put(self, request):
+            message_id = request.actions[0][1][0]
+            asked.append(message_id)
+
+            def answer():
+                request.response.extend(['article', 'found'])
+                request.set()
+
+            gevent.spawn_later(0.05, answer)
+
+    wait = module.wait
+    calls = []
+
+    def pressed(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return wait(*args, **kwargs)
+
+    monkeypatch.setattr(module, 'wait', pressed)
+    found = []
+    wanted = [(name, None) for name in ('a', 'b', 'c', 'd')]
+    with pytest.raises(KeyboardInterrupt):
+        for entry, _ in module.NNTPArchiver._fetch(
+                Manager(), wanted, str(tmp_path), 'alt.test', 2):
+            found.append(entry[0])
+
+    assert sorted(found) == ['a', 'b']
+    assert asked == ['a', 'b']
+    assert 'timeout' in calls[1]

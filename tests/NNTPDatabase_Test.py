@@ -354,7 +354,8 @@ def test_transfer_statistics_are_kept_per_server_and_day(db):
     - what each command did adds to the day's row (workers share it)
     - the fastest action seen is kept, not added
     - servers that did nothing, or aren't in the database, are skipped
-    - a database made before statistics were kept gets the table
+    - a database made before statistics were kept gets the table the next
+      time it is opened
     - old days are pruned (a dry run only counts them)
     """
     from datetime import timedelta
@@ -364,6 +365,9 @@ def test_transfer_statistics_are_kept_per_server_and_day(db):
 
     with db.transaction() as session:
         session.execute(text('DROP TABLE server_stats'))
+    engine = db.engine_str()
+    db.close()
+    assert db.open(engine=engine, reset=None) is not None
     assert db.server_stats() == {}
     assert db.prune_stats(31) == 0
 
@@ -447,3 +451,212 @@ def test_today_is_compared_with_a_usual_day(db):
         finished=20.0)}, day=today)
     found = {t.host: t for t in db.transfers(today=today)}
     assert found['b.example.com'].warnings == []
+
+
+def test_claims_go_by_the_database_servers_clock(db, monkeypatch):
+    """
+    On a database server, when a claim runs out is worked out by the
+    server's clock, so a worker whose clock is wrong can't take what
+    another has (SQLite is on one machine, so its clock is ours)
+    """
+    from datetime import timedelta
+    from newsreap import NNTPDatabase as module
+    from newsreap.Utils import utcnow
+
+    assert db.claim(['group:x'], 'a', 120) == ['group:x']
+
+    # Our clock is now an hour ahead
+    ahead = utcnow() + timedelta(hours=1)
+    monkeypatch.setattr(module, 'utcnow', lambda: ahead)
+    with db.transaction() as session:
+        dialect = session.get_bind().dialect.name
+        now = db._now(session)
+
+    if dialect == 'sqlite':
+        assert now == ahead
+        assert db.claim(['group:x'], 'b', 120) == ['group:x']
+
+    else:
+        assert abs(now - (ahead - timedelta(hours=1))) < timedelta(minutes=5)
+        assert db.claim(['group:x'], 'b', 120) == []
+        assert set(db.claims()) == {'group:x'}
+        assert db.renew_claims('a', 120) == 1
+
+
+def test_only_one_worker_can_claim_something(db):
+    """
+    - what another worker has is skipped; our own is renewed
+    - a limit stops once that many are ours
+    - letting go (or the time running out, or the worker having stopped)
+      frees it for the others
+    """
+    assert db.claims() == {}
+    assert db.release_claims('a') == 0
+
+    assert db.claim(['group:x', 'group:y'], 'a', 60) == ['group:x', 'group:y']
+    assert db.claim(['group:y', 'group:z'], 'b', 60) == ['group:z']
+    assert db.claim(['group:x'], 'a', 60) == ['group:x']
+    assert set(db.claims(prefix='group:')) == {'group:x', 'group:y',
+                                               'group:z'}
+    assert db.claims(prefix='settle') == {}
+
+    slots = ['slot:%d' % no for no in range(4)]
+    assert db.claim(slots, 'a', 60, limit=3) == slots[:3]
+    assert db.claim(slots, 'b', 60, limit=3) == slots[3:]
+
+    assert db.release_claims('a', ['group:x']) == 1
+    assert db.claim(['group:x'], 'b', 60) == ['group:x']
+
+    # Run out (a worker that stopped without letting go)
+    assert db.claim(['settle'], 'a', -1) == ['settle']
+    assert db.claim(['settle'], 'b', 60) == ['settle']
+
+    # Known to have stopped
+    assert db.claim(['group:y'], 'c', 60) == []
+    assert db.claim(['group:y'], 'c', 60, free=['a']) == ['group:y']
+
+    assert db.renew_claims('b', 60) == 4
+    assert db.release_claims('b') == 4
+    assert {owner for owner, _ in db.claims().values()} == {'a', 'c'}
+
+
+def test_claims_of_a_stopped_worker_are_taken_over(db):
+    """
+    - a worker on this machine whose process is gone loses its claims at
+      once; one still running keeps them
+    - closing lets go of everything
+    """
+    import subprocess
+    import sys
+    from newsreap.NNTPClaims import NNTPClaims
+
+    gone = subprocess.Popen([sys.executable, '-c', 'pass'])
+    gone.wait()
+
+    ours = NNTPClaims(db)
+    dead = NNTPClaims(db, owner='%s:%d:x' % (ours.host, gone.pid))
+    alive = NNTPClaims(db, owner='%s:%d:y' % (ours.host, os.getpid()))
+    away = NNTPClaims(db, owner='elsewhere:%d:z' % gone.pid)
+
+    assert dead.claim(['group:a']) == ['group:a']
+    assert alive.claim(['group:b']) == ['group:b']
+    assert away.claim(['group:c']) == ['group:c']
+
+    assert ours.stopped() == [dead.owner]
+    assert ours.claim(['group:a', 'group:b', 'group:c']) == ['group:a']
+
+    ours.close()
+    assert 'group:a' not in db.claims()
+    for claims in (dead, alive, away):
+        claims.close()
+    assert db.claims() == {}
+
+
+def test_closing_doesnt_wait_long_on_a_stuck_renewal(monkeypatch):
+    """
+    close() waits only a little while for a renewal that is stuck on the
+    database (ie: it is locked), then lets go of our claims anyway
+    """
+    import threading
+    import time
+    from newsreap import NNTPClaims as module
+
+    stuck = threading.Event()
+    released = []
+
+    class Database:
+        def claim(self, names, owner, seconds, limit=None, free=()):
+            return list(names)
+
+        def renew_claims(self, owner, seconds):
+            stuck.wait(30)
+
+        def claims(self, prefix=None):
+            return {}
+
+        def release_claims(self, owner, names=None):
+            released.append(owner)
+            return 1
+
+    monkeypatch.setattr(module, 'CLOSE_WAIT', 0.2)
+    claims = module.NNTPClaims(Database(), lease=0.15)
+    claims.claim(['group:x'])
+
+    # Its first renewal is under way (and stuck)
+    time.sleep(0.2)
+    started = time.monotonic()
+    claims.close()
+    assert time.monotonic() - started < 5
+    assert released == [claims.owner]
+    stuck.set()
+
+
+def test_two_accounts_on_one_server_are_kept_apart(db):
+    """
+    Each account (or port) of a server is a server of its own: its id,
+    group listing and statistics; a plain one is still known by its host
+    """
+    from newsreap.NNTPStatistics import NNTPStatistics
+
+    servers = [{'host': 'news.example.com', 'username': 'first'},
+               {'host': 'news.example.com', 'username': 'second'},
+               {'host': 'news.example.com', 'port': 8119},
+               'plain.example.com']
+    assert db.add_servers(servers) == [
+        'first@news.example.com', 'second@news.example.com',
+        'news.example.com:8119', 'plain.example.com']
+    assert db.add_servers(servers) == []
+
+    ids = {db.server_id(key) for key in (
+        'first@news.example.com', 'second@news.example.com',
+        'news.example.com:8119', 'plain.example.com')}
+    assert len(ids) == 4
+
+    with pytest.raises(UnknownServer):
+        db.server_id('news.example.com')
+
+    db.record_stats({
+        'first@news.example.com': NNTPStatistics(rx_bytes=10, commands=1),
+        'second@news.example.com': NNTPStatistics(rx_bytes=20, commands=1)})
+    found = db.server_stats()
+    assert {key: sum(day.rx_bytes for day in days.values())
+            for key, days in found.items()} == {
+        'first@news.example.com': 10, 'second@news.example.com': 20}
+
+
+def test_server_keys_are_kept_the_same_way(db):
+    """
+    A server's host is kept in lower case without spaces (its user as it
+    was given), however it is handed to us
+    """
+    from newsreap.Utils import normal_server_key
+
+    assert normal_server_key(' Me@News.Example.COM ') == 'Me@news.example.com'
+    assert normal_server_key('News.Example.com:8119') == \
+        'news.example.com:8119'
+
+    assert db.add_servers([' News.Example.com ', 'Me@NEWS.example.com']) \
+        == ['news.example.com', 'Me@news.example.com']
+    assert db.add_servers(['news.example.COM']) == []
+    assert db.server_id('NEWS.example.com ') == \
+        db.server_id('news.example.com')
+    assert db.server_id(' Me@News.Example.com') == \
+        db.server_id('Me@news.example.com')
+
+    with db.transaction() as session:
+        hosts = sorted(host for host, in session.query(Server.host))
+    assert hosts == ['news.example.com', 'news.example.com']
+
+
+def test_group_counts_past_two_billion_are_kept(db):
+    """
+    A group's article count (and so its article numbers) can pass 2
+    billion on every database
+    """
+    with db.transaction() as session:
+        session.query(Group).filter(Group.name == TEST).update(
+            {Group.count: 5000000000})
+
+    with db.transaction() as session:
+        assert session.query(Group.count).filter(
+            Group.name == TEST).scalar() == 5000000000

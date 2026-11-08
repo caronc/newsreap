@@ -14,12 +14,19 @@
 # GNU Lesser General Public License for more details.
 
 
+from contextlib import contextmanager
+from copy import deepcopy
+
 from gevent import Greenlet
+from gevent import sleep
+from time import time
 from gevent.event import Event
 from gevent.lock import Semaphore
 from gevent.queue import Queue
 from gevent.queue import Empty as EmptyQueueException
 
+from .Database import DatabaseUnavailable
+from .codecs.CodecBase import CodecBase
 from .HookManager import HookManager
 from .NNTPConnection import NNTPConnection
 from .NNTPnzb import NNTPnzb
@@ -30,11 +37,33 @@ from .NNTPConnectionRequest import NNTPConnectionRequest
 from .NNTPRequest import NNTPRequest
 from .NNTPSettings import NNTPSettings
 from .NNTPStatistics import NNTPStatistics
+from .Utils import server_key
 
 # Logging
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
+
+# What a connection to a server is claimed as (see NNTPClaims); a server
+# allowing 10 connections has 10 of them, shared by every worker
+CONNECTION_CLAIM = 'connection:'
+
+# When other workers have every connection to a server: how often (seconds)
+# we ask again, and how long we wait at most for our first one (then one is
+# used anyway, so the work is never stuck)
+SLOT_RETRY = 10
+SLOT_WAIT = 600
+
+
+def own_decoders(decoders):
+    """
+    Returns decoders one request can use on its own: a copy of the codecs
+    given (a codec keeps what it is decoding, so two connections can't
+    share one); None and False are passed on as they are
+    """
+    if isinstance(decoders, (CodecBase, list, tuple)):
+        return deepcopy(decoders)
+    return decoders
 
 
 class WorkTracker:
@@ -197,11 +226,21 @@ class NNTPManager:
     NNTPManager() requires an NNTPSettings() object to work correctly
 
     """
-    def __init__(self, settings=None, hooks=None, *args, **kwargs):
+    def __init__(self, settings=None, hooks=None, claims=None, *args,
+                 **kwargs):
         """
         Initialize the NNTPManager() based on the provided settings.
         it is presumed settings is a loaded NNTPSettings() object.
+
+        - claims: an NNTPClaims; each server's connections setting is then
+          shared with the other workers using the same database (several
+          'nr update' running at once never go over it together)
         """
+        # The connections we claimed (see _slot()), and when asking for one
+        # last failed
+        self._claims = claims
+        self._slots = []
+        self._slot_failed = {}
 
         # A connection pool of NNTPConnections
         self._pool = []
@@ -282,6 +321,12 @@ class NNTPManager:
         """
         _count = 0
         while len(self._pool) < self._settings.connections():
+            # One of the server's connections has to be ours; without any
+            # yet, we wait for one
+            if not self._slot(self._settings.nntp_servers[0],
+                              wait=not self._pool):
+                break
+
             # First we build our connection object
             connection = NNTPConnection(**self._settings.nntp_servers[0])
 
@@ -294,7 +339,8 @@ class NNTPManager:
                 # workers as a backup allows connections get one
                 for idx in range(1, len(self._settings.nntp_servers)):
                     backup = self._settings.nntp_servers[idx]
-                    if len(self._pool) >= self._settings.connections(backup):
+                    if len(self._pool) >= self._settings.connections(backup) \
+                            or not self._slot(backup):
                         continue
 
                     _connection = NNTPConnection(**backup)
@@ -329,6 +375,58 @@ class NNTPManager:
             return True
 
         return False
+
+    def _slot(self, server, wait=False):
+        """
+        Claims one of a server's connections for us (see CONNECTION_CLAIM);
+        returns True if we may make one
+
+        - wait: when other workers have them all, wait for one (up to
+          SLOT_WAIT seconds); otherwise we ask again at most every
+          SLOT_RETRY seconds
+        - without claims (or a database to keep them in) we always may
+        """
+        if self._claims is None:
+            return True
+
+        host = server_key(**server)
+        if not wait and time() - self._slot_failed.get(host, 0.0) < \
+                SLOT_RETRY:
+            # We asked this server a moment ago
+            return False
+
+        names = ['%s%s:%d' % (CONNECTION_CLAIM, host, no)
+                 for no in range(self._settings.connections(server))]
+        started = time()
+        while True:
+            try:
+                found = self._claims.claim(
+                    [name for name in names if name not in self._slots],
+                    limit=1)
+
+            except DatabaseUnavailable:
+                # Nobody to share them with
+                self._claims = None
+                return True
+
+            if found:
+                self._slots.extend(found)
+                return True
+
+            self._slot_failed[host] = time()
+            if not wait:
+                return False
+
+            if time() - started >= SLOT_WAIT:
+                logger.warning(
+                    'Other workers kept every connection to %s for %d '
+                    'seconds; using one anyway.' % (host, SLOT_WAIT))
+                return True
+
+            if time() - started < SLOT_RETRY:
+                logger.info('Other workers have every connection to %s; '
+                            'waiting for one.' % host)
+            sleep(SLOT_RETRY)
 
     def close(self):
         """
@@ -368,6 +466,11 @@ class NNTPManager:
         self._workers = []
         self._pool = []
 
+        if self._slots and self._claims is not None:
+            # Our connections are free for other workers again
+            self._claims.release(self._slots)
+            self._slots = []
+
     @property
     def stats(self):
         """
@@ -385,23 +488,57 @@ class NNTPManager:
 
     def stats_by_host(self):
         """
-        Returns {host: NNTPStatistics} of all of our connections (backups
-        included), by the server each one talked to
+        Returns {server key: NNTPStatistics} of all of our connections
+        (backups included), by the server each one talked to (see
+        Utils.server_key(); for a plain server it is its host)
         """
         found = {host: stats.copy()
                  for host, stats in self._closed_by_host.items()}
         for connection in self._pool:
             for each in (connection, *connection._backups):
-                found.setdefault(each.host, NNTPStatistics())
-                found[each.host] += each.stats
+                found.setdefault(each.key, NNTPStatistics())
+                found[each.key] += each.stats
 
         return found
+
+    @contextmanager
+    def connection(self, server):
+        """
+        A connection of our own to one of our servers (its settings, as in
+        NNTPSettings.nntp_servers), ie: to list its groups:
+
+            with manager.connection(server) as connection:
+                connection.groups()
+
+        - it counts against how many connections the server allows, with
+          every other worker's (it waits for one to be free, as our
+          workers do)
+        - it is closed afterwards, and what it did is part of our
+          statistics
+        """
+        before = set(self._slots)
+        self._slot(server, wait=True)
+        ours = [name for name in self._slots if name not in before]
+
+        connection = NNTPConnection(**server)
+        try:
+            yield connection
+
+        finally:
+            connection.close()
+            self.add_stats(connection.stats, host=connection.key)
+            if ours:
+                # Free for the others again
+                self._slots = [
+                    name for name in self._slots if name not in ours]
+                if self._claims is not None:
+                    self._claims.release(ours)
 
     def add_stats(self, stats, host=None):
         """
         Adds statistics gathered elsewhere (ie: by a connection of your own)
-        to ours, so they are part of our total (and of the host's, when
-        given)
+        to ours, so they are part of our total (and of the server's, when
+        its key is given; see stats_by_host())
         """
         self._closed_stats += stats
         if host is not None:
@@ -465,6 +602,51 @@ class NNTPManager:
             return request.response[0]
 
         # We aren't blocking, so just return the request object
+        return request
+
+    def overview_format(self, block=True):
+        """
+        Returns what the fields after the first seven of an overview (XOVER)
+        line are, asked of one of our connections (see
+        NNTPConnection.overview_format()); with block=False the request is
+        returned instead (its response[0] holds the answer once it is done)
+        """
+        request = NNTPConnectionRequest(actions=[
+            ('overview_format', (), {}),
+        ])
+        self.put(request)
+
+        if block:
+            request.wait()
+            return request.response[0]
+
+        return request
+
+    def send(self, command, group=None, decoders=None, timeout=None,
+             retries=0, block=True):
+        """
+        Sends a command (ie: 'DATE' or 'HELP') on one of our connections
+        and returns its NNTPResponse (see NNTPConnection.send()); with
+        block=False the request is returned instead (its response[0] holds
+        the answer once it is done)
+
+        - group: join this group first, for commands that depend on it; a
+          connection is otherwise in whatever group it was used for last.
+          When it can't be joined, the command isn't sent and an
+          INVALID_GROUP response is returned
+        - decoders: what the answer is decoded with (a copy is used)
+        - retries: how many more times it is sent if the connection drops;
+          only for commands safe to send twice (not POST)
+        """
+        request = NNTPConnectionRequest(actions=[('send', (command, ), {
+            'decoders': own_decoders(decoders), 'timeout': timeout,
+            'retries': retries, 'group': group or None})])
+        self.put(request)
+
+        if block:
+            request.wait()
+            return request.response[0] if request.response else None
+
         return request
 
     def groups(self, filters=None, lazy=True, block=True):
@@ -721,7 +903,7 @@ class NNTPManager:
                         # Append list of NNTPConnection requests in a list
                         # ('function, (*args), (**kwargs) )
                         ('get', (article, work_dir), {
-                            'decoders': decoders,
+                            'decoders': own_decoders(decoders),
                             'group': group,
                             'max_bytes': max_bytes,
                         }),
@@ -747,7 +929,7 @@ class NNTPManager:
                     # Append list of NNTPConnection requests in a list
                     # ('function, (*args), (**kwargs) )
                     ('get', (article, work_dir), {
-                        'decoders': decoders,
+                        'decoders': own_decoders(decoders),
                         'group': group,
                         'max_bytes': max_bytes,
                     }),

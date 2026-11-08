@@ -163,7 +163,8 @@ class NNTPNzbReader:
                     fp.write(data)
 
                 try:
-                    collection, added = self.indexer.import_nzb(path)
+                    collection, added = self.indexer.import_nzb(
+                        path, work_dir=work_dir)
 
                 finally:
                     unlink(path)

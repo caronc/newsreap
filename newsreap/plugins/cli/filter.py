@@ -13,8 +13,8 @@
 # GNU Lesser General Public License for more details.
 
 # The filter commands keep the database trim and ranked:
-#   nr filter purge --iposter '*@spam.example' -n   # see what would go
-#   nr filter purge --iposter '*@spam.example' --save
+#   nr filter purge --iposter '*@spam.example*' -n   # see what would go
+#   nr filter purge --iposter '*@spam.example*' --save
 #                                    # remove it, and keep dropping it later
 #   nr filter purge --saved          # apply every saved rule again
 #   nr filter score --isubject '*.par2*' --score 10 --tag recovery --save
@@ -135,10 +135,10 @@ def make_rule(ctx, action, conditions, score=None, tags=()):
     """
     entry = {}
     for term in conditions['terms']:
-        # Written the way filters.yaml takes it (a whole match, as the
-        # search options are)
+        # Written the way filters.yaml takes it: a whole match where a dot
+        # matches line endings too, as the search options are
         if term.kind == 'regex':
-            found = {'regex': '^(?:%s)$' % term.original}
+            found = {'regex': r'(?s)\A(?:%s)\Z' % term.original}
 
         else:
             found = {'glob': term.original}
@@ -372,7 +372,7 @@ def filter_purge(ctx, conditions, score, dry_run, save, saved, nzb, show):
     leaves out what matches); every one given narrows it down further:
 
     \b
-        nr filter purge --iposter '*@spam.example' --dry-run
+        nr filter purge --iposter '*@spam.example*' --dry-run
         nr filter purge --isubject '*casino*' --isubject '!*review*'
         nr filter purge --ibody '*buy now*' --tagged '!trusted' --save
         nr filter purge --score '<-50' --dry-run
@@ -441,9 +441,11 @@ def filter_purge(ctx, conditions, score, dry_run, save, saved, nzb, show):
         click.echo('Nothing was removed.')
         return
 
-    # Only this rule; the scores and tags stored are what it sees
+    # This rule and the saved keep rules (they protect what they match);
+    # the scores and tags stored are what it sees
     purger = NNTPPurger(
-        NNTPFilter(rules=[rule]),
+        NNTPFilter(rules=[*(r for r in filters
+                            if r.action == FilterAction.Keep), rule]),
         index_db=ctx['NNTPSettings'].index_database(), rescore=False,
         dry_run=dry_run, nzb=nzb,
         groups=scope(ctx, groups) if groups else None,

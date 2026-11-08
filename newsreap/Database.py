@@ -13,10 +13,20 @@
 # GNU Lesser General Public License for more details.
 
 from contextlib import contextmanager
+
+try:
+    from fcntl import LOCK_EX
+    from fcntl import LOCK_UN
+    from fcntl import flock
+
+except ImportError:
+    # ie: Windows
+    flock = None
 from os.path import getsize
 from os.path import isfile
 
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy import create_engine
@@ -26,6 +36,7 @@ from sqlalchemy.engine import make_url
 from .Utils import parse_url
 
 # Logging
+import re
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
@@ -46,6 +57,16 @@ VSP_DEFAULT_GROUP = 'newsreap.common'
 # exits
 MEMORY_DATABASE_ENGINE = 'sqlite:///:memory:'
 
+# The password part of a database URL (user:password@)
+URL_PASSWORD_RE = re.compile(r'(://[^:/@]*:)[^@]*@')
+
+
+def hide_password(engine):
+    """
+    Returns a database URL with its password (if it has one) as ***
+    """
+    return URL_PASSWORD_RE.sub(r'\1***@', str(engine))
+
 # The catch with SQLite when referencing paths is:
 # sqlite:///relative/path/to/where we are now
 # sqlite:////absolute/path/
@@ -62,6 +83,38 @@ class DatabaseUnavailable(Exception):
     The database can't be used: it couldn't be opened, or its tables were
     never made (ie: 'nr db init' wasn't run)
     """
+
+
+# What a database says when another worker is in the way (a lock it waited
+# too long for, or two writers stuck waiting on each other); trying again
+# usually works:
+# - SQLite: the database is locked (or busy)
+# - MySQL: 1205 (waited too long for a lock), 1213 (deadlock)
+# - PostgreSQL: 40001 (serialization), 40P01 (deadlock), 55P03 (lock
+#   not available)
+CONTENDED_MYSQL = (1205, 1213)
+CONTENDED_POSTGRESQL = ('40001', '40P01', '55P03')
+
+
+def contended(error):
+    """
+    Returns True if a database error only means another worker was in the
+    way (see CONTENDED_MYSQL); the work can be tried again
+    """
+    original = getattr(error, 'orig', None)
+    if original is None:
+        return False
+
+    if getattr(original, 'sqlstate', None) in CONTENDED_POSTGRESQL or \
+            getattr(original, 'pgcode', None) in CONTENDED_POSTGRESQL:
+        return True
+
+    args = getattr(original, 'args', ())
+    if args and args[0] in CONTENDED_MYSQL:
+        return True
+
+    text = str(original).lower()
+    return 'database is locked' in text or 'database is busy' in text
 
 
 def database_size(url_or_path):
@@ -115,6 +168,71 @@ def sqlite_optimize(path):
     return before, getsize(path)
 
 
+# The files SQLite (and setting_up()) keep next to a database file
+SQLITE_SIDE_FILES = ('-journal', '-wal', '-shm', '-setup.lock')
+
+# Held while a worker sets up a database (see setting_up()), and how long
+# (seconds) another waits for it
+SETUP_LOCK = 'newsreap_setup'
+SETUP_WAIT = 600
+
+
+@contextmanager
+def setting_up(engine):
+    """
+    Lets one worker at a time set up a database (create its tables and so
+    on); the others wait for it.  Two creating the same table at once fails
+    ("already exists"), as both see it missing first.
+
+        with setting_up(engine):
+            ObjectBase.metadata.create_all(engine)
+
+    - PostgreSQL and MySQL: a named lock, held by a connection of its own
+      (so the setting up can use any other)
+    - an SQLite file: a lock on a small file next to it (<file>-setup.lock;
+      locking the database file itself would undo SQLite's own locks)
+    """
+    dialect = engine.dialect.name
+    if dialect == 'sqlite':
+        path = engine.url.database
+        if flock is None or not path or path == ':memory:':
+            # Nothing else can reach it (or nothing to lock with)
+            yield
+            return
+
+        with open(path + '-setup.lock', 'a') as fp:
+            flock(fp, LOCK_EX)
+            try:
+                yield
+
+            finally:
+                flock(fp, LOCK_UN)
+        return
+
+    if dialect not in ('postgresql', 'mysql'):
+        yield
+        return
+
+    with engine.connect() as conn:
+        if dialect == 'postgresql':
+            take = "SELECT pg_advisory_lock(hashtext('%s'))" % SETUP_LOCK
+            give = "SELECT pg_advisory_unlock(hashtext('%s'))" % SETUP_LOCK
+
+        else:
+            take = "SELECT GET_LOCK('%s', %d)" % (SETUP_LOCK, SETUP_WAIT)
+            give = "SELECT RELEASE_LOCK('%s')" % SETUP_LOCK
+
+        conn.exec_driver_sql(take)
+        conn.commit()
+        try:
+            yield
+
+        finally:
+            # Given back to the pool, so let go of it ourselves
+            conn.exec_driver_sql(give)
+            conn.commit()
+
+
 def sqlite_tuned(engine):
     """
     Sets up every connection of an SQLite engine for heavy use (call it
@@ -124,8 +242,6 @@ def sqlite_tuned(engine):
       leaves a broken database; at worst the last commit is lost
     - synchronous NORMAL: doesn't wait on the disk after every commit
     - temporary tables (ie: for sorting) are kept in memory
-    - foreign keys are enforced (as PostgreSQL and MySQL do), so a row
-      can't be removed while others still point to it
     """
     @event.listens_for(engine, 'connect')
     def connect(dbapi_connection, _):
@@ -133,6 +249,19 @@ def sqlite_tuned(engine):
         cursor.execute('PRAGMA journal_mode = WAL')
         cursor.execute('PRAGMA synchronous = NORMAL')
         cursor.execute('PRAGMA temp_store = MEMORY')
+        cursor.close()
+
+
+def sqlite_foreign_keys(engine):
+    """
+    Enforces foreign keys on every connection of an SQLite engine (as
+    PostgreSQL and MySQL do), so a row can't be removed while others still
+    point to it; a database kept in memory too (call it before the engine
+    connects)
+    """
+    @event.listens_for(engine, 'connect')
+    def connect(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
         cursor.execute('PRAGMA foreign_keys = ON')
         cursor.close()
 
@@ -263,15 +392,25 @@ class Database:
             # A database server drops connections left idle (MySQL after 8
             # hours by default); each one is checked before it is used, so
             # a long running program (ie: a web server) never gets a dead one
-            self._engine = create_engine(
-                engine, echo=False, pool_pre_ping=make_url(
-                    engine).get_backend_name() != 'sqlite')
+            try:
+                self._engine = create_engine(
+                    engine, echo=False, pool_pre_ping=make_url(
+                        engine).get_backend_name() != 'sqlite')
+
+            except (ArgumentError, ImportError) as e:
+                # Not a database URL, or its driver isn't installed
+                logger.error("The database '%s' can't be used: %s" % (
+                    hide_password(engine), e))
+                self._engine = None
+                return None
 
             logger.debug('Preparing engine: %s' % (
                 self._engine.url.render_as_string(hide_password=True)))
             if self._engine.dialect.name == 'sqlite':
-                # What our searches need
+                # What our searches need, and the same rules as the
+                # database servers
                 sqlite_functions(self._engine)
+                sqlite_foreign_keys(self._engine)
 
             if self._engine.dialect.name == 'sqlite' and \
                     self._engine.url.database not in (None, '', ':memory:'):
@@ -311,6 +450,10 @@ class Database:
                                  .filter_by(group=VSP_VERSION_GROUP)
                                  .order_by(self.Vsp.order).all()]
 
+                # Nothing is left waiting on the database (a server would
+                # otherwise hold this read open until our next commit)
+                self._session.commit()
+
                 # Toggle Exists Flag
                 self._exists = True
 
@@ -331,40 +474,42 @@ class Database:
                 self._session.rollback()
                 self._exists = False
 
-        if reset is False:
-            if len(self._version) == 0 or \
-               len(set(self._version) - set(VSP_VERSION_KEYS)):
-                # TODO: if self._exists and the version is newer, research how
-                #       to do a schema migration. Alternatively; definitely
-                #       spit out an error if the version is older!
-                logger.debug('Applying any database schema changes...')
+        if reset is False or self._exists:
+            # Any table we don't have yet is made (the others are left as
+            # they are), so a table added later is always there; reset=None
+            # never sets up a database that was never made
+            with setting_up(self._engine):
                 try:
                     self.Base.metadata.create_all(self._engine)
 
                 except OperationalError as e:
                     logger.error('Database Initialization failed.')
-                    logger.debug('Database Initialization error: %s' % str(e))
+                    logger.debug(
+                        'Database Initialization error: %s' % str(e))
                     raise
 
-                for v in VSP_VERSION_KEYS:
-                    if not self._session.query(self.Vsp)\
-                            .filter(self.Vsp.group == VSP_VERSION_GROUP)\
-                            .filter(self.Vsp.key == v[0])\
-                            .update({self.Vsp.value: v[1]}):
+                if reset is False and (
+                        len(self._version) == 0 or
+                        len(set(self._version) - set(VSP_VERSION_KEYS))):
+                    for v in VSP_VERSION_KEYS:
+                        if not self._session.query(self.Vsp)\
+                                .filter(self.Vsp.group == VSP_VERSION_GROUP)\
+                                .filter(self.Vsp.key == v[0])\
+                                .update({self.Vsp.value: v[1]}):
 
-                        self._session.add(
-                            self.Vsp(
-                                group=VSP_VERSION_GROUP,
-                                key=v[0],
-                                value=v[1],
-                            ),
-                        )
+                            self._session.add(
+                                self.Vsp(
+                                    group=VSP_VERSION_GROUP,
+                                    key=v[0],
+                                    value=v[1],
+                                ),
+                            )
 
-                # update our version listing
-                self._version = list(VSP_VERSION_KEYS)
+                    # update our version listing
+                    self._version = list(VSP_VERSION_KEYS)
 
-                self._session.commit()
-                self._exists = True
+                    self._session.commit()
+                    self._exists = True
 
         if self._exists is True:
             # Return our session object

@@ -19,8 +19,8 @@
 #   nr get 42                      # a collection's id (see nr search)
 #   nr get release.nzb --password secret --no-cleanup
 #
-# Running it again carries on where it stopped.  A Message-ID downloads
-# that one article as it is (--headers and --inspect show what it holds).
+# Running it again carries on where it stopped.  One article is fetched
+# by its Message-ID with nr fetch.
 
 import logging
 import click
@@ -45,7 +45,6 @@ except ImportError:
 from newsreap.NNTPDownloader import NNTPDownloader
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.Utils import parse_bool
-from newsreap.NNTPGetFactory import NNTPGetFactory
 
 # initialize our logger
 logger = logging.getLogger(NEWSREAP_CLI)
@@ -56,15 +55,6 @@ NEWSREAP_CLI_PLUGINS = 'get'
 
 @click.command()
 @click.pass_obj
-@click.option('--group', type=str,
-              default=None,
-              help="Identify the group to reference")
-@click.option('--workdir', type=str, default=None,
-              help="A directory we can manage our fetched content from.")
-@click.option('--headers', default=False, flag_value=True,
-              help="Return header details")
-@click.option('--inspect', default=False, flag_value=True,
-              help="Inspect the first few bytes of the body only")
 @click.option('--hooks', '-k', default=None, type=str,
               help='Specify one or more hooks to load')
 @click.option('--output', '-o', default=None,
@@ -88,8 +78,8 @@ NEWSREAP_CLI_PLUGINS = 'get'
                    'for again while the post is new, or once you add a '
                    'server).')
 @click.argument('sources', nargs=-1)
-def get(ctx, group, workdir, headers, inspect, sources, hooks, output,
-        password, repair, extract, cleanup, retry_missing):
+def get(ctx, sources, hooks, output, password, repair, extract, cleanup,
+        retry_missing):
     """
     Download what NZB files (or indexed collections) hold.
 
@@ -111,78 +101,24 @@ def get(ctx, group, workdir, headers, inspect, sources, hooks, output,
     par2 couldn't fix), the files put together are placed for you to look
     at and nothing is removed.
 
-    A Message-ID downloads that one article as it is (--headers and
-    --inspect show what it holds instead).
+    One article is fetched by its Message-ID with 'nr fetch' ('nr show'
+    tells you about it).
     """
     if len(sources) == 0:
         logger.error("You must specify at least one source.")
         exit(1)
 
-    if not (headers or inspect):
-        # NZB files and collections are downloaded and put together; a
-        # Message-ID is fetched as it is (below)
-        nzbs = [s for s in sources if isfile(s) or s.strip().isdigit()]
-        sources = [s for s in sources if s not in nzbs]
-        failed = download(ctx, nzbs, hooks, output, password, repair,
-                          extract, cleanup, retry_missing)
-        if not sources:
-            exit(1 if failed else 0)
+    # NZB files and collections are downloaded and put together
+    unknown = [s for s in sources if not (isfile(s) or s.strip().isdigit())]
+    for source in unknown:
+        logger.error(
+            "'%s' is neither an NZB file nor a collection's id (an article "
+            "is fetched with 'nr fetch')." % source)
 
-    else:
-        failed = 0
-
-    # Link to our NNTP Manager
-    mgr = ctx['NNTPManager']
-
-    # Initialize our GetFactory
-    gf = NNTPGetFactory(connection=mgr, hooks=hooks, groups=group)
-
-    # initialize our return code to zero (0) which means okay
-    # but we'll toggle it if we have any sort of failure
-    return_code = 1 if failed else 0
-
-    for source in sources:
-
-        if not gf.load(source):
-            return_code = 1
-            continue
-
-        if not (headers or inspect):
-            # We're just here to fetch content
-            if not gf.download():
-                # our download failed
-                return_code = 1
-
-            # Move on
-            continue
-
-        if inspect:
-            # inspect will pull headers as well
-            response = gf.inspect()
-            if not response:
-                # our retrieval failed; this is the case if we had a problem
-                # communicating with our server.  Successfully connecting by
-                # finding out the article simply doesn't exist does not cause
-                # headers() to fail.
-                return_code = 1
-                continue
-
-        elif headers:
-            # We just want to retrive our headers
-            response = gf.headers()
-            if not response:
-                # our retrieval failed; this is the case if we had a problem
-                # communicating with our server.  Successfully connecting by
-                # finding out the article simply doesn't exist does not cause
-                # headers() to fail.
-                return_code = 1
-                continue
-
-        # Print our response
-        print((gf.str(headers=headers, inspect=inspect)))
-
-    # return our return code
-    exit(return_code)
+    failed = download(ctx, [s for s in sources if s not in unknown], hooks,
+                      output, password, repair, extract, cleanup,
+                      retry_missing)
+    exit(1 if failed or unknown else 0)
 
 
 def download(ctx, sources, hooks, output, password, repair, extract,

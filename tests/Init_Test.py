@@ -353,7 +353,7 @@ def test_version_is_shown(option):
     from newsreap import __version__
     from newsreap.cli import cli
 
-    result = CliRunner().invoke(cli, [option, 'update', 'search'], obj={})
+    result = CliRunner().invoke(cli, [option, 'update', 'a.b.test'], obj={})
     assert result.exit_code == 0
     assert result.output.startswith('NewsReap v%s\n' % __version__)
     assert 'GPLv3' in result.output

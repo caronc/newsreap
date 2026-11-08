@@ -1,4 +1,4 @@
-# Tests caching the article headers of a group (nr update search)
+# Tests caching the article headers of a group (nr update)
 #
 # Copyright (C) 2026 Chris Caron <lead2gold@gmail.com>
 #
@@ -205,6 +205,76 @@ def test_group_is_cached_once(usenet):
 
     # The headers are part of our statistics
     assert manager.stats.headers == 281
+
+
+def test_a_slow_batch_doesnt_hold_up_the_rest(usenet):
+    """
+    Batches are saved as they come back: while the first one is still on
+    its way, the others are saved and more are asked for
+    """
+    import gevent
+
+    _, settings, manager = usenet
+    xover = manager.xover
+    asked = []
+
+    def slow_first(**kwargs):
+        request = xover(**kwargs)
+        asked.append(kwargs['start'])
+        if len(asked) > 1:
+            return request
+
+        # The first batch takes a while to come back
+        late = NNTPConnectionRequest(actions=[])
+
+        def deliver():
+            request.wait()
+            gevent.sleep(0.5)
+            late.response.extend(request.response)
+            late.set()
+
+        gevent.spawn(deliver)
+        return late
+
+    manager.xover = slow_first
+    scanner = scanner_for(settings, manager, window=2)
+    saved = []
+    mark = scanner.mark
+
+    def marked(session, low, high):
+        saved.append(low)
+        return mark(session, low, high)
+
+    scanner.mark = marked
+    assert scanner.scan() is True
+
+    # The first range was saved last; the third was asked for (and saved)
+    # without waiting for it
+    assert saved[-1] == asked[0] == 1
+    assert len(saved) == len(asked) >= 3
+    assert cached(settings)[0][-1] == 300
+
+
+def test_a_batch_whose_scores_cant_be_kept_is_fetched_again(usenet):
+    """
+    When a batch's scores and tags can't be saved, its range isn't marked
+    as fetched, so the next scan fetches it again (and scores it)
+    """
+    _, settings, manager = usenet
+    scanner = scanner_for(settings, manager, window=1)
+
+    def broken():
+        raise RuntimeError('index is gone')
+
+    scanner._save_ranks = broken
+    with pytest.raises(RuntimeError):
+        scanner.scan()
+
+    assert cached(settings) == ([], [])
+
+    # Next time it is all fetched
+    assert scanner_for(settings, manager).scan() is True
+    assert cached(settings)[1] == [(1, 300)]
 
 
 def test_new_articles_are_picked_up(usenet):
@@ -524,7 +594,7 @@ def test_failed_request_still_finishes():
 #
 def test_update_from_the_command_line(tmp_path):
     """
-    nr update groups, then update search, then search finds the articles
+    nr group refresh, then nr update, then search finds the articles
     """
     from newsreap.cli import cli
 
@@ -545,27 +615,27 @@ def test_update_from_the_command_line(tmp_path):
             return runner.invoke(cli, ['--config', config, *args], obj={})
 
         # The server isn't in the database yet
-        result = nr('update', 'search', GROUP)
+        result = nr('update', GROUP)
         assert result.exit_code == 1
 
         assert nr('db', 'init').exit_code == 0
 
-        result = nr('update', 'groups')
+        result = nr('group', 'refresh')
         assert result.exit_code == 0
         assert '1 group(s) listed, 1 new.' in result.output
 
         # Listing again updates what we have
-        result = nr('update', 'groups')
+        result = nr('group', 'refresh')
         assert '1 group(s) listed, 0 new.' in result.output
 
         assert nr('alias', 'add', 'photos', GROUP).exit_code == 0
 
-        result = nr('--statistics', 'update', 'search', 'photos')
+        result = nr('--statistics', 'update', 'photos')
         assert result.exit_code == 0
         assert '%s: 3 article(s) cached' % GROUP in result.output
         assert 'Headers       3 received' in result.output
 
-        result = nr('update', 'search', 'photos')
+        result = nr('update', 'photos')
         assert '%s: already up to date' % GROUP in result.output
 
         result = nr('search', '--raw', '-g', 'photos', 'photos 2')
@@ -574,7 +644,7 @@ def test_update_from_the_command_line(tmp_path):
         assert 'holiday photos 1' not in result.output
 
         # Bad dates are refused
-        result = nr('update', 'search', 'photos', '--date-from', '!!!')
+        result = nr('update', 'photos', '--date-from', '!!!')
         assert result.exit_code == 1
 
 

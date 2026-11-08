@@ -17,6 +17,7 @@ from sqlalchemy import DateTime
 from sqlalchemy import Integer
 from sqlalchemy import SmallInteger
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ArchivedPost import LongText
 from .ObjectBase import ObjectBase
@@ -48,7 +49,7 @@ class PGPKey(ObjectBase):
     id = Column(Integer, primary_key=True)
 
     # The key's fingerprint (40 hex characters, 64 for newer keys)
-    fingerprint = Column(String(64), nullable=False, unique=True)
+    fingerprint = Column(Key(64), nullable=False, unique=True)
 
     # Its key ID (16 hex characters), which is what posts name
     key_id = Column(String(16), nullable=False, index=True)
@@ -74,7 +75,7 @@ class PGPKey(ObjectBase):
     # post it was first seen in (if any)
     source = Column(SmallInteger, nullable=False, default=PGPKeySource.Post)
     first_seen = Column(DateTime)
-    message_id = Column(String(250))
+    message_id = Column(Key(250))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

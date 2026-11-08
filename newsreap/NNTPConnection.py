@@ -47,6 +47,7 @@ from .SocketBase import SocketException
 from .SocketBase import SocketRetryLimit
 from .SocketBase import SignalCaughtException
 from .Utils import mkdir
+from .Utils import server_key
 from .Utils import SEEK_SET
 from .Utils import SEEK_END
 from .NNTPnzb import NNTPnzb
@@ -83,7 +84,10 @@ EOD = '\r\n.'
 
 # These are applied to the raw (bytes) data read from the server
 EOL_RE = re.compile(br'([\r]?\n)', re.ASCII)
-EOD_RE = re.compile(br'(\.([\r]?\n))$', re.ASCII)
+# The end of data marker: a line holding just a dot (in compressed data,
+# a dot and a line ending at the very end)
+EOD_RE = re.compile(br'(?:^|\n)(\.\r?\n)$', re.ASCII)
+GZIP_EOD_RE = re.compile(br'(\.\r?\n)$', re.ASCII)
 
 # The end of data marker (a line holding just a dot) at the very end of
 # what we've received
@@ -311,7 +315,7 @@ class NNTPConnection(SocketBase):
         self.password = password
 
         # Attempt to gzip the connection
-        if isinstance(iostream, str):
+        if isinstance(iostream, str) and iostream.strip():
             try:
                 self._iostream = iostream.lower()
                 if self._iostream not in NNTP_SUPPORTED_IO_STREAMS:
@@ -333,10 +337,7 @@ class NNTPConnection(SocketBase):
                            "using default: '%s'." % self._iostream)
 
         else:
-            # iostream is None (0, or False)
-            # used RFC3977 Standards but without Compresssion
-            logger.info('An invalid iostream was specified; '
-                        "using default: '%s'." % self._iostream)
+            # None, 0 or False: plain RFC3977, without compression
             self._iostream = NNTPIOStream.RFC3977
 
         # can_post is a flag that gets set after authenticating
@@ -389,6 +390,10 @@ class NNTPConnection(SocketBase):
         # bandwidth. This value is set to None if there simply wasn't a payload
         # at all (or an initialization value)
         self.payload_gzipped = None
+
+        # A compressed reply _has_eod() already decompressed:
+        # (where it starts, where it ends, what it holds)
+        self._inflated = None
 
         self.lines = []
         self.line_count = 0
@@ -604,7 +609,9 @@ class NNTPConnection(SocketBase):
         if isinstance(payload, (set, tuple, sortedset, list)):
             # iterate over all items and append them to our resultset
             for entry in payload:
-                _results = self.post(entry, update_headers=True)
+                _results = self.post(
+                    entry, update_headers=update_headers,
+                    success_only=success_only)
                 if _results is not None:
                     # Append our results
                     results |= _results
@@ -615,11 +622,10 @@ class NNTPConnection(SocketBase):
         elif isinstance(payload, NNTPSegmentedPost):
             postable = iter(payload)
 
-        # Initialize a bound respose object
-        response = None
-
         for content in postable:
             if content not in results:
+                # Set once we know how it went
+                response = None
 
                 try:
                     weak_content = weakref.proxy(content)
@@ -640,7 +646,8 @@ class NNTPConnection(SocketBase):
                     # post
                     if HookManager.allows(_response):
 
-                        response = self._post(content, update_headers=True)
+                        response = self._post(
+                            content, update_headers=update_headers)
 
                     else:
                         response = NNTPResponse(
@@ -659,8 +666,17 @@ class NNTPConnection(SocketBase):
                     )
 
                 finally:
-                    # Point our body to our content
-                    response.body = weakref.proxy(content)
+                    if response is None:
+                        # Something unexpected went wrong (it is raised
+                        # once our hooks know)
+                        response = NNTPResponse(
+                            NNTPResponseCode.BAD_RESPONSE,
+                            'NNTP POST failed',
+                        )
+
+                    # The answer keeps what was posted (it is read
+                    # afterwards, when nothing else may still hold it)
+                    response.body = content
 
                     self.hooks.call(
                         'post_post',
@@ -785,16 +801,12 @@ class NNTPConnection(SocketBase):
             # Attempt to establish a connection
             if not self.connect():
                 logger.error('Could not establish a connetion to NNTP Server.')
-                return None
+                return (None, None, None, name)
 
         response = self.send('GROUP %s' % name)
 
-        self.group_name = name
-        self.group_count = 0
-        self.group_head = 0
-        self.group_tail = 0
-        self.group_index = 0
-
+        # A group that can't be joined leaves the server in the one it was
+        # in, so ours is only changed once the server says yes
         if response.code in NNTPResponseCode.SUCCESS:
             match = NNTP_GROUP_RESPONSE_RE.match(response.code_str)
             if match:
@@ -815,7 +827,7 @@ class NNTPConnection(SocketBase):
                 )
 
         logger.warning('Bad Group: %s' % name)
-        return (None, None, None, self.group_name)
+        return (None, None, None, name)
 
     def groups(self, filters=None, lazy=True):
         """
@@ -899,7 +911,7 @@ class NNTPConnection(SocketBase):
                 return None
 
             # Pop the group list off
-            grouplist = response.decoded.pop()
+            grouplist = response.decoded.pop() if response.decoded else None
             if not isinstance(grouplist, NNTPMetaContent):
                 # could not retrieve list
                 logger.error('Failed to fetch NNTP LIST ACTIVE content.')
@@ -1128,24 +1140,24 @@ class NNTPConnection(SocketBase):
 
     def next(self, count=50000):
         """
-        A wrapper to the xover but using a counter offset based
-        on a set index value
+        Returns the overviews (see xover()) of the next `count` articles
+        from where we are, then moves past them; the last article is
+        included.  An NNTPResponse 423 comes back once there are none left.
 
-        use the seek() function to over-ride the default
-        index value (which is usually set to the head of
-        group.
-
+        Use seek() to move somewhere else first (a group starts at its
+        first article).
         """
-        # Control Count gracefully
-        count = min(count, self.group_tail - self.group_index)
+        # From where we are up to the last article (both included)
+        count = min(count, self.group_tail - self.group_index + 1)
 
         if count <= 0:
             # 423: Empty Range
             return NNTPResponse(423, 'Empty Range')
 
         # Fetch our results and adjust our pointer accordingly
-        response = self.xover(self.group_index, self.group_index + count - 1)
-        if response:
+        response = self.xover(
+            start=self.group_index, end=self.group_index + count - 1)
+        if response is not None:
             self.group_index += count
 
         # Return results
@@ -1153,25 +1165,22 @@ class NNTPConnection(SocketBase):
 
     def prev(self, count=50000):
         """
-        A wrapper to the xover but using a counter offset based
-        on a set index value
-
-        use the seek() function to over-ride the default
-        index value (which is usually set to the head of
-        group.
-
+        Returns the overviews (see xover()) of the `count` articles before
+        where we are, then moves back to the first of them; never before
+        the group's first article.  An NNTPResponse 423 comes back once
+        there are none left.
         """
-        # Control Count gracefully
-        count = min(
-            count, self.group_tail - self.group_index - self.group_head)
+        # The articles before where we are, back to the first one
+        count = min(count, self.group_index - self.group_head)
 
         if count <= 0:
             # 423: Empty Range
             return NNTPResponse(423, 'Empty Range')
 
         # Fetch our results and adjust our pointer accordingly
-        response = self.xover(self.group_index - count, self.group_index - 1)
-        if response:
+        response = self.xover(
+            start=self.group_index - count, end=self.group_index - 1)
+        if response is not None:
             self.group_index -= count
 
         # Return results
@@ -1477,7 +1486,7 @@ class NNTPConnection(SocketBase):
                 retries=None,
             )
 
-            if response.is_success(multiline=True):
+            if response.is_success(multiline=True) and response.decoded:
                 # Return our content
                 return response.decoded.pop()
 
@@ -1497,22 +1506,21 @@ class NNTPConnection(SocketBase):
             logger.warning('ARTICLE <%s> not found.' % id)
             return False
 
-        elif response.code in NNTPResponseCode.SERVER_ERROR:
-            # We have a problem
+        # Any other answer is a problem (servers send codes we don't know
+        # of too); a server error (5xx) gets a fresh connection next time
+        if response.code is None or response.code >= 500:
             self.close()
-            logger.error('NNTP Error %s' % response)
-            if self._backups:
-                # Try our backup servers in the sequential order they were
-                # added in; if they all fail; then we return None
-                return next((
-                    result for result in (
-                        b.stat(id=id, full=full, group=self.group_name)
-                        for b in self._backups)
-                    if result not in (None, False)), None)
-            return None
 
-        # Return
-        return True
+        logger.error('NNTP Error %s' % response)
+        if self._backups:
+            # Try our backup servers in the sequential order they were
+            # added in; if they all fail; then we return None
+            return next((
+                result for result in (
+                    b.stat(id=id, full=full, group=self.group_name)
+                    for b in self._backups)
+                if result not in (None, False)), None)
+        return None
 
     def get(self, id, work_dir=None, decoders=None, group=None, max_bytes=0):
         """
@@ -1543,101 +1551,68 @@ class NNTPConnection(SocketBase):
                 max_bytes=max_bytes,
             )
 
-        # A sorted list of all articles pulled down
+        if isinstance(id, NNTPArticle):
+            # Support NNTPArticle Objects if they have an id defined
+            if not id.id:
+                return None
+
+            return self._get_wrapper(
+                id=id.id,
+                work_dir=work_dir,
+                decoders=decoders,
+                group=group,
+                max_bytes=max_bytes,
+            )
+
+        # Everything else gives back a sorted set of articles
         results = sortedset(key=lambda x: x.key())
+        options = {'work_dir': work_dir, 'decoders': decoders,
+                   'group': group, 'max_bytes': max_bytes}
 
         if isinstance(id, (set, tuple, sortedset, list)):
-            # iterate over all items and append them to our resultset
+            # Each Message-ID (or article, post or NZB file) in turn
             for entry in id:
-                _results = self._get_wrapper(
-                    id=id.id,
-                    work_dir=work_dir,
-                    decoders=decoders,
-                    group=group,
-                    max_bytes=max_bytes,
-                )
-                if _results is not None:
-                    # Append our results
-                    results |= _results
+                found = self.get(entry, **options)
+                if isinstance(found, NNTPArticle):
+                    results.add(found)
 
-        elif isinstance(id, NNTPArticle):
-            # Support NNTPArticle Objects if they have an id defined
-            if id.id:
-                return self._get_wrapper(
-                    id=id.id,
-                    work_dir=work_dir,
-                    decoders=decoders,
-                    group=group,
-                    max_bytes=max_bytes,
-                )
+                elif found is not None:
+                    results |= found
 
         elif isinstance(id, NNTPSegmentedPost):
-            # Support NNTPSegmentedPost() Objects
+            # The group asked for, else each group the post was made to
+            # (when we join groups), else whatever group we are in
+            groups = [group] if group else \
+                list(id.groups) if self.join_group and id.groups else [None]
 
-            for part_no, _article in enumerate(id):
-                # We need to download each article define
-                if self.join_group:
-                    for group in id.groups:
-                        # Try each group
-                        article = self._get_wrapper(
-                            id=_article,
-                            work_dir=work_dir,
-                            decoders=decoders,
-                            group=group,
-                            max_bytes=max_bytes,
-                        )
-
-                        if article:
-                            # Found
-                            break
-
-                    # If we reach here we failed to fetch the item, so
-                    # we'll try the next group
-                    logger.warning(
-                        'Failed to fetch segment #%.2d (%s)' % (
-                            _article.no,
-                            _article.filename,
-                        ),
-                    )
-
-                    # mark our article invalid as part of it's response
-                    article._is_valid = False
-
-                else:
-                    # Fetch our content
+            for _article in id:
+                article = None
+                for name in groups:
                     article = self._get_wrapper(
-                        id=_article,
+                        id=_article.id,
                         work_dir=work_dir,
                         decoders=decoders,
+                        group=name,
                         max_bytes=max_bytes,
                     )
+                    if article is not None:
+                        break
 
-                if article:
+                if article is None:
+                    # Kept as it was (nothing fetched, so not valid)
+                    logger.warning(
+                        'Failed to fetch segment #%.2d (%s)' % (
+                            _article.no or 0, id.filename))
+
+                else:
                     if len(article) == 0:
                         logger.warning(
                             'No content found in segment #%.2d (%s)' % (
-                                _article.no, _article.filename,
-                            ),
-                        )
+                                _article.no or 0, id.filename))
 
-                else:
-                    # Uh oh, we failed to get anything; so just add
-                    # our current article generated from the nzb file.
-                    # Mark the object invalid and re-add it
-                    logger.warning(
-                        'Failed to retrieve segment (%s)' % (
-                            id.filename,
-                        ),
-                    )
+                    # What was fetched, kept in the post's own article
+                    _article.load(article)
 
-                    # mark our article invalid as part of it's response
-                    article._is_valid = False
-
-                # Store information from our nzb_article over top of
-                # the contents in the new article we retrieved
-                _article.load(article)
-
-                # Store our article
                 results.add(_article)
 
         elif isinstance(id, NNTPnzb):
@@ -1645,15 +1620,8 @@ class NNTPConnection(SocketBase):
             if not id.is_valid():
                 return None
 
-            # We iterate over each segment defined int our NZBFile and merge
-            # them into 1 file. We do this until we've processed all the
-            # segments and we return a list of articles
-            for segpost_no, segpost in enumerate(id):
-                for article in iter(segpost):
-                    _results = self.get(article)
-                    if _results is not None:
-                        # Append our results
-                        results |= _results
+            for segpost in id:
+                results |= self.get(segpost, **options) or ()
 
         else:
             # Unsupported
@@ -1753,6 +1721,23 @@ class NNTPConnection(SocketBase):
 
         return article
 
+    @staticmethod
+    def _from_backup(backup, id, work_dir, asked):
+        """
+        Asks a backup server for an article the way we were asked; decoders
+        we were given are reset first (we may have fed them part of an
+        answer already)
+        """
+        decoders = asked.get('decoders')
+        if isinstance(decoders, CodecBase):
+            decoders.reset()
+
+        elif isinstance(decoders, (list, tuple)):
+            for decoder in decoders:
+                decoder.reset()
+
+        return backup.get(id, work_dir, **asked)
+
     def _get_article(self, id, work_dir, decoders=None, group=None,
                      max_bytes=0):
         """
@@ -1786,6 +1771,18 @@ class NNTPConnection(SocketBase):
         if not isdir(work_dir) and not mkdir(work_dir):
             logger.error('Could not create directory %s' % work_dir)
             return None
+
+        # A backup server is asked the same way we were
+        asked = {'decoders': decoders, 'group': group, 'max_bytes': max_bytes}
+
+        # Decoders we were given start clean (one reused for the next part
+        # of a post would otherwise carry on from an article cut short)
+        if isinstance(decoders, CodecBase):
+            decoders.reset()
+
+        elif isinstance(decoders, (list, tuple)):
+            for decoder in decoders:
+                decoder.reset()
 
         if decoders is None:
             # Prepare a default list of decoders
@@ -1843,7 +1840,7 @@ class NNTPConnection(SocketBase):
                 # added in; if they all fail; then we return None
                 article = next(
                     (result for result in (
-                        b.get(id, work_dir, group=group)
+                        self._from_backup(b, id, work_dir, asked)
                         for b in self._backups)
                      if result is not None), None)
                 if article is not None:
@@ -1856,7 +1853,8 @@ class NNTPConnection(SocketBase):
             self.last_fetch = 'missing'
             return None
 
-        else:  # response.code in NNTPResponseCode.SERVER_ERROR:
+        else:
+            # Any other answer is a problem (ie: a server error)
             # Close our connection
             self.close()
 
@@ -1867,7 +1865,7 @@ class NNTPConnection(SocketBase):
                 # added in; if they all fail; then we return None
                 article = next(
                     (result for result in (
-                        b.get(id, work_dir, group=group)
+                        self._from_backup(b, id, work_dir, asked)
                         for b in self._backups)
                      if result is not None), None)
                 if article is not None:
@@ -1904,7 +1902,8 @@ class NNTPConnection(SocketBase):
         """
         return self.last_fetch
 
-    def send(self, command, timeout=None, decoders=None, retries=0):
+    def send(self, command, timeout=None, decoders=None, retries=0,
+             group=None):
         """
         A Simple wrapper for sending NNTP commands to the server
 
@@ -1919,17 +1918,33 @@ class NNTPConnection(SocketBase):
         connection) if the connection drops, stalls or gets garbage back.
         Set it to None to use the connection's own setting.  Only use
         retries for commands that are safe to send twice (not POST).
+
+        timeout is how many seconds the reply may go without sending us
+        anything before it counts as stalled (the stall_timeout setting
+        when not given).
+
+        group is joined first (if we aren't in it already), for commands
+        that depend on it.  When it can't be joined, the command isn't sent
+        and an INVALID_GROUP response is returned.
         """
+
+        if group is not None and group != self.group_name \
+                and self.group(group)[0] is None:
+            return NNTPResponse(
+                NNTPResponseCode.INVALID_GROUP,
+                'Could not join group %s' % group)
 
         with self._recording() as stats:
             response = self._send(
-                command, decoders=decoders, retries=retries, stats=stats)
+                command, decoders=decoders, retries=retries, stats=stats,
+                timeout=timeout)
 
         # Hand back what this command took
         response.stats = stats
         return response
 
-    def _send(self, command, decoders=None, retries=0, stats=None):
+    def _send(self, command, decoders=None, retries=0, stats=None,
+              timeout=None):
         """
         Sends a command (retrying it if we can) and returns the response;
         see send() for details.
@@ -1963,7 +1978,8 @@ class NNTPConnection(SocketBase):
             # A dropped connection forgets our group so we remember it here
             group = self.group_name
 
-            response = self._exchange(command, decoders=decoders)
+            response = self._exchange(
+                command, decoders=decoders, timeout=timeout)
             if attempt >= retries or response.code not in (
                     NNTPResponseCode.FETCH_ERROR,
                     NNTPResponseCode.BAD_RESPONSE,
@@ -1995,9 +2011,10 @@ class NNTPConnection(SocketBase):
                 # Rejoin the group we were in
                 self.group(group)
 
-    def _exchange(self, command, decoders=None):
+    def _exchange(self, command, decoders=None, timeout=None):
         """
-        Sends a command once and returns the response the server gave
+        Sends a command once and returns the response the server gave (see
+        send() for the timeout)
         """
         if not self.connected:
             return NNTPResponse(
@@ -2028,7 +2045,7 @@ class NNTPConnection(SocketBase):
             # Track what we sent
             self._action.tx_bytes += sent
 
-            response = self._recv(timeout=0, decoders=decoders)
+            response = self._recv(timeout=timeout or 0, decoders=decoders)
 
         except SocketException:
             # Connection Lost
@@ -2374,7 +2391,9 @@ class NNTPConnection(SocketBase):
                     offset += 1
 
                 # Check for the End of Data
-                eod_results = EOD_RE.search(data)
+                eod_results = (
+                    GZIP_EOD_RE if self.payload_gzipped else EOD_RE).search(
+                        data)
                 if eod_results:
                     # We can truncate here to trim the EOD off
                     self._buffer.truncate(
@@ -2405,11 +2424,12 @@ class NNTPConnection(SocketBase):
                     # Now we read what we can from the buffer
                     data = self._buffer.read()
 
-                # Check for end of line (in a compressed reply a line ending
-                # is just more of the compressed data; only the end of data
-                # marker above counts there)
-                eol_results = None if self.payload_gzipped \
-                    else EOL_RE.search(data)
+                # The line ending in front of the end of data marker is
+                # trimmed too (in a compressed reply a line ending is just
+                # more of the compressed data).  A reply only ends at its
+                # marker; a pause after any other line is just a pause.
+                eol_results = None if self.payload_gzipped or \
+                    not self.article_eod else EOL_RE.search(data)
                 if eol_results:
                     # We can truncate here to trim the EOL off
                     self._buffer.truncate(
@@ -2418,21 +2438,6 @@ class NNTPConnection(SocketBase):
 
                     # Correct Total Length
                     total_bytes = self._buffer.seek(0, SEEK_END)
-
-                    # We have our end of line
-                    eol = True
-
-                    if self.last_resp_code in NNTPResponseCode.SUCCESS \
-                       and not self.can_read():
-                        # If we're still not seeing more data pending on the
-                        # server; then we can safely assume we're done. This
-                        # handles the situations where we retrieved a
-                        # multi-line response code yet we didn't get one.
-                        #
-                        # the GROUP NNTP server command is known to return 211
-                        # which just returns 1 line, yet the command LISTGROUP
-                        # also returns 211 too and returns a listing
-                        self.article_eod = True
 
             ##################################################################
             #                                                                #
@@ -2480,12 +2485,20 @@ class NNTPConnection(SocketBase):
             if (tail_ptr - head_ptr) > 0:
                 if self.payload_gzipped is True:
 
-                    if dc_obj is None:
-                        dc_obj = decompressobj()
+                    # What _has_eod() already decompressed (all of it)
+                    inflated, self._inflated = self._inflated, None
                     try:
-                        self._data.write(self._unstuff(dc_obj.decompress(
-                            self._buffer.read(tail_ptr - head_ptr),
-                        )))
+                        if dc_obj is None and inflated is not None and \
+                                inflated[:2] == (head_ptr, tail_ptr):
+                            data = inflated[2]
+
+                        else:
+                            if dc_obj is None:
+                                dc_obj = decompressobj()
+                            data = dc_obj.decompress(
+                                self._buffer.read(tail_ptr - head_ptr))
+
+                        self._data.write(self._unstuff(data))
                         logger.debug("NNTP ZLIB decompression successful.")
 
                     except ZlibException:
@@ -2734,8 +2747,10 @@ class NNTPConnection(SocketBase):
             except:
                 pass
 
-        # SocketBase close() tries to grab the last
-        # content on the socket before closing it
+        # Our backup servers are let go of with us
+        for backup in self._backups:
+            backup.close()
+
         return super().close()
 
     def _stuff(self, chunks):
@@ -2814,12 +2829,18 @@ class NNTPConnection(SocketBase):
         self._buffer.seek(head_ptr, SEEK_SET)
         dc_obj = decompressobj()
         try:
-            dc_obj.decompress(self._buffer.read(total_bytes - head_ptr - 3))
+            inflated = dc_obj.decompress(
+                self._buffer.read(total_bytes - head_ptr - 3))
 
         except ZlibException:
             return False
 
-        return dc_obj.eof and not dc_obj.unused_data
+        if not dc_obj.eof or dc_obj.unused_data:
+            return False
+
+        # Kept, so the reply isn't decompressed a second time
+        self._inflated = (head_ptr, total_bytes - 3, inflated)
+        return True
 
     def _soft_reset(self):
         """
@@ -2857,6 +2878,7 @@ class NNTPConnection(SocketBase):
         # bandwidth. This value is set to None if there simply wasn't a payload
         # at all (or an initialization value)
         self.payload_gzipped = None
+        self._inflated = None
 
         self.lines = []
         self.line_count = 0
@@ -2874,6 +2896,14 @@ class NNTPConnection(SocketBase):
         Handle Deconstruction
         """
         self.close()
+
+    @property
+    def key(self):
+        """
+        What tells this server apart from our others: [user@]host[:port]
+        (see Utils.server_key())
+        """
+        return server_key(self.host, self.port, self.username, self.secure)
 
     def __str__(self):
         return '%s://%s@%s:%d' % (

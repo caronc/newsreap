@@ -395,7 +395,7 @@ def status(ctx):
     heading('Kept')
     detail('Groups', '%s known, %s watched%s' % (
         count(groups_known), count(watched),
-        '' if groups_known else "; run 'nr update groups' for them"))
+        '' if groups_known else "; run 'nr group refresh' for them"))
     detail('On disk', size(sum(
         found for found, _ in settings.storage().values() if found)))
 
@@ -426,6 +426,6 @@ def show_details(settings):
     heading('Groups')
     detail('Known', '%s (%s watched)%s' % (
         count(groups_known), count(watched),
-        '' if groups_known else "; run 'nr update groups' for them"))
+        '' if groups_known else "; run 'nr group refresh' for them"))
     click.echo('')
     show_groups(settings.group_report())

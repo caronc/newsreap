@@ -321,7 +321,7 @@ def test_pgp_from_the_command_line(tmp_path, server):
         return runner.invoke(cli, ['--config', config, *args], obj={})
 
     assert nr('db', 'init').exit_code == 0
-    assert nr('update', 'groups').exit_code == 0
+    assert nr('group', 'refresh').exit_code == 0
     result = nr('update', GROUP, '--content')
     assert result.exit_code == 0, result.output
     assert '5 article(s) kept' in result.output

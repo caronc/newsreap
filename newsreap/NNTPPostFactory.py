@@ -18,6 +18,7 @@ import secrets
 import string
 import weakref
 from collections import deque
+from itertools import chain
 from tqdm import tqdm
 
 from os.path import isfile
@@ -29,6 +30,8 @@ from os.path import expanduser
 from os.path import basename
 from os.path import dirname
 from datetime import datetime
+
+from sqlalchemy import tuple_
 
 from .objects.post.StagedArticle import StagedArticle
 from .objects.post.StagedArticleGroup import StagedArticleGroup
@@ -50,9 +53,11 @@ from .NNTPGroup import NNTPGroup
 from .NNTPnzb import NNTPnzb
 from .NNTPSegmentedPost import NNTPSegmentedPost
 from .NNTPArticle import NNTPArticle
+from .NNTPEmptyContent import NNTPEmptyContent
 from .NNTPPostDatabase import NNTPPostDatabase
 from .NNTPConnection import NNTPConnection
 from .NNTPManager import NNTPManager
+from .NNTPRequest import NNTPRequest
 from .NNTPHeader import NNTPHeader
 from .NNTPResponse import NNTPResponseCode
 
@@ -62,6 +67,13 @@ from .decorators import hook
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
 logger = logging.getLogger(NEWSREAP_ENGINE)
+
+# How many staged articles are read from the database at a time
+STAGED_CHUNK = 500
+
+# Noted in the staging database once an upload starts; only an upload
+# run again can find its articles already on the server
+UPLOAD_STARTED = 'upload_started'
 
 # The workspace we can stage our content in. It's always relative to the
 # content being posted nrws (short for NewsReap Work Space)
@@ -415,6 +427,12 @@ class NNTPPostFactory:
                 path=self.prep_path,
                 status=status,
             )
+
+            if status is False and self.prep_path != self.path:
+                # What was half made isn't used by a later stage()
+                rm(self.prep_path)
+                self.prep_path = self.path
+
         return status
 
     def _prepare(self, archive_size=None, password=None, *args, **kwargs):
@@ -447,8 +465,8 @@ class NNTPPostFactory:
                 self.prep_path)
             return False
 
-        # Get our entries (if any)
-        entries = find(self.path, min_depth=1, max_depth=1)
+        # What it holds (directories are archived with everything in them)
+        entries = [join(self.path, name) for name in os.listdir(self.path)]
         if not entries:
             # Nothing more to do if there isn't any entries
             logger.error("There is no content to prepare in '%s'." % self.path)
@@ -668,6 +686,14 @@ class NNTPPostFactory:
         if split_size is None:
             split_size = self.split_size
 
+        # Directories can only be posted inside an archive (prepare())
+        if any(isdir(join(self.prep_path, name))
+               for name in os.listdir(self.prep_path)):
+            logger.error(
+                "'%s' holds directories; prepare it first (they are only "
+                "kept inside an archive)." % self.prep_path)
+            return False
+
         # Find our content
         entries = find(self.prep_path, min_depth=1, max_depth=1)
         if not entries:
@@ -719,16 +745,24 @@ class NNTPPostFactory:
                 fullpath=entry,
                 filename=basename(entry),
             )
-            if isinstance(response, str):
-                # Set the provided filename
-                post.filename = basename(response.strip())
+            # The first hook to answer with a name wins
+            name = next((
+                r['result'].strip() for r in response or ()
+                if isinstance(r, dict) and isinstance(r.get('result'), str)
+                and r['result'].strip()), None)
+            if name:
+                # The name it is posted under (its yEnc name=)
+                post.filename = basename(name)
+                for article in post:
+                    for content in article:
+                        content.filename = post.filename
 
             # Split our content up based on our split-size
             if strsize_to_bytes(split_size):
                 if not post.split(size=split_size):
                     logger.error(
                         "Could not split content '%s' (split-size=%s)." % (
-                            split_size, entry))
+                            entry, split_size))
                     return False
 
             # Encode our content so that it's post-able
@@ -741,10 +775,17 @@ class NNTPPostFactory:
                 logger.error("Could not apply posting template.")
                 return False
 
-            # Save our content (written to our work_dir)
-            if not post.save():
-                logger.error("Could write yEncoded content '%s'." % entry)
-                return False
+            # Each part is kept in a file of its own; the name it is posted
+            # under stays the file's
+            for article in post:
+                content = article[0]
+                name = content.filename
+                if not content.save(join(self.stage_path, '%.5d.%.5d.%s' % (
+                        sort_no + 1, content.part, name))):
+                    logger.error(
+                        "Could write yEncoded content '%s'." % entry)
+                    return False
+                content.filename = name
 
             # The best hook of them all as you can adjust the contents of the
             # segment (add headers, remove them, etc)
@@ -813,7 +854,9 @@ class NNTPPostFactory:
                 name=self.name,
                 path=self.prep_path,
                 status=status,
-                nzb=weakref.proxy(self.nzb),
+                # None when the upload stopped before one was made
+                nzb=weakref.proxy(self.nzb) if self.nzb is not None
+                else None,
             )
 
         return status
@@ -845,32 +888,32 @@ class NNTPPostFactory:
         # Our NZB-File
         self.nzb = NNTPnzb(work_dir=self.staging_root)
 
-        # using the database we rebuild NNTPSegmentedPost objects and do
-        # our upload.
-        sa_query = session.query(StagedArticle)\
-            .order_by(
-                StagedArticle.sort_no.asc(),
-                StagedArticle.sequence_no.asc()).all()
-
-        # Simply maps the filename to a response
-        upload_map = {}
-
         # A flag we'll use to track the upload status
         upload_status = True
 
         # Load our size into our progress bar object
         self.xfer_tqdm = tqdm(total=dirsize(self.stage_path), unit_scale=True)
 
-        # Our segment
-        segment = None
-
-        # Track our pending updates
-        pending_updates = 0
+        # The posts still going up; only a few wait at once so memory stays
+        # flat however big the post is (see _posted())
+        pending = deque()
+        window = self._window()
 
         # Get default groups
         groups = NNTPGroup.split(groups)
 
-        for entry in sa_query:
+        # A run that stopped part way may have posted a few articles it
+        # never got to mark as posted; only then is each one checked for
+        # on the server first (a round trip per article otherwise wasted)
+        resumed = self._db.get(UPLOAD_STARTED) is not None
+        if not resumed and not self._db.set(UPLOAD_STARTED, '1'):
+            logger.error('Could not note the upload starting.')
+            return False
+
+        staged = 0
+        for entry, article_groups, headers in self._staged(session):
+            staged += 1
+
             # Assemble our expected file
             path = join(self.stage_path, entry.localfile)
 
@@ -879,35 +922,9 @@ class NNTPPostFactory:
                 logger.error("Missing article '%s'." % entry.localfile)
                 return False
 
-            # Our Groups
-            article_groups = [
-                x.name for x in session.query(StagedArticleGroup)
-                .filter(StagedArticleGroup.article_id == entry.id).all()]
-
             if not article_groups:
                 # Fall back to default specified
                 article_groups = groups
-
-            # Our Headers
-            headers = {
-                x.key: x.value for x in session.query(StagedArticleHeader)
-                .filter(StagedArticleHeader.article_id == entry.id).all()}
-
-            if segment is None or entry.sort_no != segment.sort_no:
-                if segment is not None:
-                    # Add our old entry
-                    self.nzb.add(segment)
-
-                # a new file; only index 1 is important for our SegmentedPost
-                # Entry
-                segment = NNTPSegmentedPost(
-                    filename=entry.localfile,
-                    subject=entry.subject,
-                    poster=entry.poster,
-                    groups=article_groups,
-                    work_dir=self.staging_root,
-                    sort_no=entry.sort_no,
-                )
 
             # Prepare our article
             article = NNTPArticle(
@@ -938,14 +955,12 @@ class NNTPPostFactory:
 
             article[0].filename = entry.remotefile
 
-            # Add our article to our segment
-            segment.add(article)
-
             # Only upload our content if we have a group associated with it
             if len(article.groups) == 0:
-                logger.warning("Skipping '%s' Reason: No groups defined." % (
+                logger.error("Could not post '%s' (no groups defined)." % (
                     entry.localfile,
                 ))
+                upload_status = False
                 continue
 
             if entry.verified_date is not None:
@@ -961,13 +976,15 @@ class NNTPPostFactory:
                     article.msgid(),
                     full=False,
                     group=next(iter(article.groups)),
-                )
+                ) if resumed else False
 
                 if response is None:
-                    logger.warning("Could not pre-verify Message-ID '%s'." % (
-                        article.msgid(),
-                    ))
-                    continue
+                    # It couldn't be checked (ie: the server wants a group
+                    # joined first); it is posted anyway, as a server
+                    # refuses a Message-ID it already has
+                    logger.debug(
+                        "Could not check whether Message-ID '%s' is already "
+                        "posted." % article.msgid())
 
                 elif response:
                     logger.warning("Message-ID exists already '%s'." % (
@@ -993,7 +1010,8 @@ class NNTPPostFactory:
                     ))
 
                     # Perform (async) post
-                    upload_map[entry.id] = self.connection.post(
+                    pending.append((entry, self._request(
+                        'post',
                         # our payload
                         article,
                         # We must update our headers because there is a
@@ -1003,72 +1021,70 @@ class NNTPPostFactory:
                         # We want the result of all of our posted content, not
                         # just the ones that were successful.
                         success_only=False,
-                        # Never block
-                        block=False,
-                    )[0]
+                    )))
 
-        if segment is not None:
-            # Add our segment
-            self.nzb.add(segment)
+                    while len(pending) > window:
+                        if not self._posted(
+                                session, *pending.popleft(),
+                                commit=commit_on_file):
+                            upload_status = False
 
-        # The password the archives need (if they have one)
+                else:
+                    logger.error(
+                        "Did not post '%s' (an upload_article hook stopped "
+                        "it)." % entry.localfile)
+                    upload_status = False
+
+        # Wait for the rest of our uploads to finish
+        while pending:
+            if not self._posted(
+                    session, *pending.popleft(), commit=commit_on_file):
+                upload_status = False
+
+        session.commit()
+
+        if not staged:
+            logger.error("Nothing is staged to upload (stage it first).")
+            return False
+
+        if not upload_status:
+            # The NZB-File is only written once everything it lists is up
+            return False
+
+        # Its meta is always a dict, ready for hooks to add to; the
+        # password the archives need (if they have one) goes in it
+        self.nzb.meta = dict(self.nzb.meta or {})
         password = self.load_password()
         if password is not None:
-            self.nzb.meta = dict(self.nzb.meta or {}, password=password)
+            self.nzb.meta['password'] = password
 
-        # Set any last minute items to the NZB-File prior to it being saved
-        # to disk
-        self.hooks.call(
-            'post_staged_nzb',
-            name=self.name,
-            path=self.prep_path,
-            nzb=weakref.proxy(self.nzb),
-        )
+        # pre_nzb hooks can set its meta and add files of their own; one
+        # answering False means no NZB-File is written
+        if not HookManager.allows(self.hooks.call(
+                'pre_nzb',
+                name=self.name,
+                path=self.prep_path,
+                nzb=weakref.proxy(self.nzb),
+                )):
+            logger.info("No NZB-File written (a pre_nzb hook said not to).")
+            self.nzb = None
+            return True
 
-        # At this stage we have an NZB-File created; save it
-        if not self.nzb.save('{0}.nzb'.format(self.path)):
-            logger.warning("Could not save NZB-File: %s.nzb." % (
+        # The NZB-File is written from the staging database a file at a
+        # time (so a post of any size is never held in memory); each goes
+        # by the nzb_file hooks, and the files a pre_nzb hook added are
+        # written after
+        if not self.nzb.save('{0}.nzb'.format(self.path), posts=chain(
+                self._nzb_posts(session, groups), self.nzb.segments)):
+            logger.error("Could not save NZB-File: %s.nzb." % (
                 basename(self.path)))
             return False
 
-        # Block until our uploads have finished and report them accordingly
-        for article_id, _connection in upload_map.items():
-            # Ensure we're done
-            _connection.wait()
-
-            # Update the pointer to our response object
-            response = _connection.response[0][0]
-            article = _connection.response[0][0].body
-
-            if NNTPResponseCode.SUCCESS not in response:
-                upload_status = False
-                logger.warning("Could not post Message-ID: %s." % article_id)
-                continue
-
-            # Mark our content as posted
-            if not session\
-                    .query(StagedArticle)\
-                    .filter(StagedArticle.id == article_id)\
-                    .update({
-                        # Our posted date
-                        StagedArticle.posted_date: response.created,
-                    }):
-                logger.warning("Failed to mark upload successful.")
-                continue
-
-            # Save the rest of our article details (in case they changed)
-            if not self.save_article(article, id=article_id, commit=False):
-                logger.warning("Failed to update article details.")
-
-            if commit_on_file:
-                session.commit()
-            else:
-                pending_updates += 1
-
-        if pending_updates:
-            session.commit()
-
-        return upload_status
+        # What hooks are handed from here on is the NZB-File just written
+        # (read from it a file at a time)
+        self.nzb = NNTPnzb(
+            '{0}.nzb'.format(self.path), work_dir=self.staging_root)
+        return True
 
     def verify(self, *args, **kwargs):
         """
@@ -1125,9 +1141,6 @@ class NNTPPostFactory:
 
         """
 
-        # Simply maps the filename to a response
-        verification_map = {}
-
         # A flag we'll use to track the verification status
         verification_status = True
 
@@ -1145,17 +1158,12 @@ class NNTPPostFactory:
             logger.error("No connection object defined for upload.")
             return False
 
-        # Verification
-        # using the database we rebuild NNTPSegmentedPost objects and do
-        # our upload.
-        sa_query = session.query(StagedArticle)\
-            .order_by(
-                StagedArticle.sort_no.asc(),
-                StagedArticle.sequence_no.asc()).all()
+        # Each article's checks (one for each group it was posted to); only
+        # a few wait at once so memory stays flat (see _verified())
+        pending = deque()
+        window = self._window()
 
-        pending_updates = 0
-
-        for entry in sa_query:
+        for entry, groups, _ in self._staged(session, headers=False):
 
             if entry.verified_date is not None:
                 # Nothing more to do; content has been pushed
@@ -1166,65 +1174,32 @@ class NNTPPostFactory:
                 continue
 
             if entry.posted_date is None:
-                # Nothing more to do; content has been pushed
-                logger.warning('Content not posted: %s' % entry.localfile)
-                continue
-
-            # Our Groups
-            groups = [x.name for x in
-                      session.query(StagedArticleGroup)
-                      .filter(StagedArticleGroup.article_id == entry.id).all()]
-
-            for group in groups:
-                key = '{group}::{id}'.format(
-                    group=group,
-                    id=entry.message_id,
-                )
-                # Verify that our article got posted
-                verification_map[key] = {
-                    'response': self.connection.stat(
-                        entry.message_id,
-                        full=True,
-                        group=group,
-                        block=False,
-                    ),
-                    'id': entry.id,
-                    'msgid': entry.message_id,
-                    'group': group,
-                }
-
-        # Update our verification map
-        for key, meta in verification_map.items():
-            # Ensure we're done
-            meta['response'].wait()
-
-            response = meta['response'].response[0]
-            if not isinstance(response, NNTPHeader):
-                logger.warning("Could not verify Message-ID %s." % (
-                    meta['msgid']))
-
-                # Toggle flag
+                # It never went up, so it can't be verified
+                logger.error('Content not posted: %s' % entry.localfile)
                 verification_status = False
                 continue
 
-            # we're good!
-            # Mark our content as verified
-            reference = datetime.now()
-            if not session\
-                    .query(StagedArticle)\
-                    .filter(StagedArticle.id == meta['id'])\
-                    .update({StagedArticle.verified_date: reference}):
-                logger.warning("Failed to mark verification successful.")
+            if not groups:
+                # Nowhere to look for it, so it can't be verified
+                logger.warning("Could not verify Message-ID %s (it has no "
+                               "groups)." % entry.message_id)
+                verification_status = False
+                continue
 
-            else:
-                logger.info("Successful verification of Message-ID %s." % (
-                    meta['msgid'],
-                ))
-                pending_updates += 1
+            pending.append((entry, [
+                (group, self._request(
+                    'stat', entry.message_id, full=True, group=group))
+                for group in groups]))
 
-        if pending_updates > 0:
-            session.commit()
+            while len(pending) > window:
+                if not self._verified(session, *pending.popleft()):
+                    verification_status = False
 
+        while pending:
+            if not self._verified(session, *pending.popleft()):
+                verification_status = False
+
+        session.commit()
         return verification_status
 
     def clean(self, *args, **kwargs):
@@ -1307,6 +1282,213 @@ class NNTPPostFactory:
 
         return True
 
+    def _window(self):
+        """
+        Returns how many posts (or checks) may be waiting on our connection
+        at once
+        """
+        if isinstance(self.connection, NNTPManager):
+            return self.connection.window()
+
+        # A single connection answers each one as it is asked
+        return 1
+
+    def _staged(self, session, headers=True):
+        """
+        Yields (article, its groups, its headers) for every staged article,
+        in the order they are posted
+
+        - articles are read a page at a time (each page picks up after the
+          last article of the one before), each page's groups and headers
+          with one query each
+        - the articles are detached from the session, so commits along
+          the way never reload them
+        - headers: False leaves them out (an empty dict is given instead)
+        """
+        order = (StagedArticle.sort_no, StagedArticle.sequence_no,
+                 StagedArticle.id)
+        last = None
+        while True:
+            query = session.query(StagedArticle).order_by(*order)
+            if last is not None:
+                query = query.filter(tuple_(*order) > tuple_(*last))
+
+            rows = query.limit(STAGED_CHUNK).all()
+            if not rows:
+                return
+
+            ids = []
+            for row in rows:
+                session.expunge(row)
+                ids.append(row.id)
+
+            groups = {}
+            for row in session.query(StagedArticleGroup).filter(
+                    StagedArticleGroup.article_id.in_(ids)):
+                groups.setdefault(row.article_id, []).append(row.name)
+
+            found = {}
+            if headers:
+                for row in session.query(StagedArticleHeader).filter(
+                        StagedArticleHeader.article_id.in_(ids)):
+                    found.setdefault(row.article_id, {})[row.key] = \
+                        row.value
+
+            for row in rows:
+                yield row, groups.get(row.id, []), found.get(row.id, {})
+
+            last = (rows[-1].sort_no, rows[-1].sequence_no, rows[-1].id)
+
+    def _nzb_posts(self, session, groups=None):
+        """
+        Yields each staged file for the NZB-File (see _staged_files()) that
+        the nzb_file hooks keep; each hook is handed the file (`post`) and
+        can change it, or answer False to leave it out
+        """
+        for post in self._staged_files(session, groups):
+            if HookManager.allows(self.hooks.call(
+                    'nzb_file',
+                    name=self.name,
+                    path=self.prep_path,
+                    post=weakref.proxy(post),
+                    )):
+                yield post
+
+    def _staged_files(self, session, groups=None):
+        """
+        Yields each staged file (an NNTPSegmentedPost holding its articles)
+        one file at a time
+
+        - groups: where the articles staged without any groups were posted
+        """
+        post = None
+        for entry, article_groups, _ in self._staged(session, headers=False):
+            article_groups = article_groups or groups
+
+            if post is None or entry.sort_no != post.sort_no:
+                if post is not None:
+                    yield post
+
+                post = NNTPSegmentedPost(
+                    filename=entry.localfile,
+                    subject=entry.subject,
+                    poster=entry.poster,
+                    groups=article_groups,
+                    work_dir=self.staging_root,
+                    sort_no=entry.sort_no,
+                )
+
+            article = NNTPArticle(
+                id=entry.message_id,
+                work_dir=self.staging_root,
+                subject=entry.subject,
+                poster=entry.poster,
+                groups=article_groups,
+                no=entry.sequence_no,
+            )
+            # Only its size is listed, as noted when it was posted (the
+            # staged file isn't read again)
+            article.add(NNTPEmptyContent(
+                filepath=entry.remotefile, part=entry.sequence_no,
+                total_size=entry.size, work_dir=self.staging_root))
+            post.add(article)
+
+        if post is not None:
+            yield post
+
+    def _posted(self, session, entry, request, commit=True):
+        """
+        Waits for a post to finish and notes it as posted; returns False
+        when it didn't go up
+
+        - entry: the article's StagedArticle
+        - commit: save it to the database right away
+        """
+        request.wait()
+        found = request.response[0] if request.response else None
+        response = found[0] if found else None
+
+        if response is None or NNTPResponseCode.SUCCESS not in response:
+            logger.error("Could not post Message-ID: %s." % (
+                response.body.msgid() if response is not None
+                else entry.message_id))
+            return False
+
+        # Mark our content as posted
+        if not session.query(StagedArticle)\
+                .filter(StagedArticle.id == entry.id)\
+                .update({StagedArticle.posted_date: response.created},
+                        synchronize_session=False):
+            logger.error("Failed to mark upload successful.")
+            return False
+
+        # Save the rest of our article details (in case they changed); it
+        # keeps its place in the post
+        if not self.save_article(
+                response.body, sequence_no=entry.sequence_no,
+                sort_no=entry.sort_no, id=entry.id, commit=False):
+            logger.warning("Failed to update article details.")
+
+        if commit:
+            session.commit()
+
+        return True
+
+    def _verified(self, session, entry, checks):
+        """
+        Waits for an article's checks and marks it verified once every
+        group it was posted to has it; returns False when one doesn't
+
+        - entry: the article's StagedArticle
+        - checks: [(group, request)], a STAT of the article in each group
+        """
+        every = True
+        for group, request in checks:
+            request.wait()
+            response = request.response[0] if request.response else None
+            if not isinstance(response, NNTPHeader):
+                logger.warning("Could not verify Message-ID %s in %s." % (
+                    entry.message_id, group))
+                every = False
+
+        if not every:
+            return False
+
+        if not session.query(StagedArticle)\
+                .filter(StagedArticle.id == entry.id)\
+                .update({StagedArticle.verified_date: datetime.now()},
+                        synchronize_session=False):
+            # It was found, but we couldn't note it
+            logger.error("Could not mark Message-ID %s as verified." % (
+                entry.message_id))
+            return False
+
+        logger.info("Successful verification of Message-ID %s." % (
+            entry.message_id))
+        return True
+
+    def _request(self, action, *args, **kwargs):
+        """
+        Runs an action (ie: 'post' or 'stat') on our connection and returns
+        the request holding its answer (wait() on it, then read
+        response[0])
+
+        - an NNTPManager queues it, so many run at once
+        - a single NNTPConnection runs it now; the request returned is
+          already done
+        """
+        if isinstance(self.connection, NNTPManager):
+            found = getattr(self.connection, action)(
+                *args, block=False, **kwargs)
+            # post() hands back one request per article
+            return found[0] if isinstance(found, list) else found
+
+        request = NNTPRequest()
+        request.response.append(
+            getattr(self.connection, action)(*args, **kwargs))
+        request.set()
+        return request
+
     def save_article(self, article, sequence_no=1, sort_no=1, id=None,
                      commit=True):
         """
@@ -1335,12 +1517,15 @@ class NNTPPostFactory:
                 # Does not exist
                 return None
 
-            # Perform update
+            # Perform update (the session's other objects aren't looked
+            # through; with many loaded that would take longer each time)
             session.query(StagedArticleGroup)\
-                .filter(StagedArticleGroup.article_id == sa.id).delete()
+                .filter(StagedArticleGroup.article_id == sa.id)\
+                .delete(synchronize_session=False)
 
             session.query(StagedArticleHeader)\
-                .filter(StagedArticleHeader.article_id == sa.id).delete()
+                .filter(StagedArticleHeader.article_id == sa.id)\
+                .delete(synchronize_session=False)
 
             session\
                 .query(StagedArticle)\
@@ -1349,7 +1534,7 @@ class NNTPPostFactory:
                     # The localfile is the path on our disk (stage path)
                     # This should never change or our post will fail,
                     # This is also our primary key
-                    StagedArticle.localfile: article[0].filename,
+                    StagedArticle.localfile: basename(article[0].path()),
                     # The sha1() of our content
                     StagedArticle.sha1: article[0].sha1(),
 
@@ -1363,7 +1548,7 @@ class NNTPPostFactory:
                     StagedArticle.size: article.size(),
                     StagedArticle.sequence_no: sequence_no,
                     StagedArticle.sort_no: sort_no,
-                })
+                }, synchronize_session=False)
 
         else:
             # Perform Insert
@@ -1371,7 +1556,7 @@ class NNTPPostFactory:
                 # The localfile is the path on our disk (stage path)
                 # This should never change or our post will fail,
                 # This is also our primary key
-                localfile=article[0].filename,
+                localfile=basename(article[0].path()),
                 # The sha1() of our content
                 sha1=article[0].sha1(),
 

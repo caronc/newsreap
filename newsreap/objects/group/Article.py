@@ -65,22 +65,13 @@ class Article(ObjectBase):
     # score and tags are kept with the index (see ArticleRank)
     xref = Column(Text, default='', server_default='', nullable=False)
 
-    # There are to just to many articles to delete them individually.
-    # The easiest way is to mark them for purging and clear them when
-    # the count gets to high.
-    deleted = Column(DateTime, default=None, index=True)
-
-    # Set once `nr update index` has put the article into a collection
+    # Set once `nr update` has put the article into a collection
     indexed = Column(
         Boolean, default=False, server_default='0', nullable=False)
 
-    # Set once `nr update archive` has fetched (and kept) the article
+    # Set once `nr update --content` has fetched (and kept) the article
     archived = Column(
         Boolean, default=False, server_default='0', nullable=False)
-
-    # A flag that can be used to determine if the record should be
-    # displayed or not; this over-rides any calculated score.
-    hidden = Column(Boolean, default=False, nullable=False, index=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

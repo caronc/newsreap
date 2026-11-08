@@ -69,7 +69,6 @@ from os.path import isdir
 from os.path import isfile
 from os.path import join
 from shutil import copyfile
-from shutil import move
 from shutil import rmtree
 from time import time
 from zlib import crc32
@@ -376,8 +375,12 @@ class NNTPDownloader:
         self.checks = {}
 
         # The file each staged path was given to ({path: file}), so two
-        # files of the same name never share one
+        # files of the same name never share one; for a name many files
+        # share, the next number to try ({path: number}) and the path each
+        # file was given ({(path, file): path})
         self._staged = {}
+        self._staged_next = {}
+        self._staged_as = {}
 
         # What is wrong with each file put together ({its path: [lines]}),
         # and the files nothing of could be had ([(name, [lines])]); see
@@ -621,16 +624,19 @@ class NNTPDownloader:
         returns how many were fetched now
         """
         now = utcnow()
-        noted = {row.message_id: row for row in
-                 session.query(DownloadedSegment)}
+
+        # The rows of the segments still needed
+        noted = {}
 
         # The segments still needed, by group (each is asked for in the
         # group its file was posted to)
         wanted = {}
         for f in files:
             posted = NNTPRetry.posted(f.get('posted'))
+            rows = DownloadedSegment.noted(
+                session, (m for _, m in f['segments']))
             for number, message_id in f['segments']:
-                row = noted.get(message_id)
+                row = rows.get(message_id)
                 if row is not None and row.valid and row.path and \
                         isfile(row.path):
                     # Had already
@@ -642,6 +648,9 @@ class NNTPDownloader:
                     # won't help yet; what we have of it is used
                     self.held += 1
                     continue
+
+                if row is not None:
+                    noted[message_id] = row
 
                 wanted.setdefault(f['group'], []).append(
                     (message_id, (f['name'], number, posted)))
@@ -759,13 +768,12 @@ class NNTPDownloader:
         crc32 of each one put together whole is noted in checks.
         """
         assembled = {}
+
+        # The next number to try for an NZB name given more than once
+        next_key = {}
         for f in files:
             ids = [message_id for _, message_id in f['segments']]
-            rows = {}
-            for start in range(0, len(ids), 500):
-                rows.update((row.message_id, row) for row in session.query(
-                    DownloadedSegment).filter(DownloadedSegment.message_id
-                                              .in_(ids[start:start + 500])))
+            rows = DownloadedSegment.noted(session, ids)
 
             have = [rows[m] for m in ids if m in rows and rows[m].path and
                     isfile(rows[m].path)]
@@ -793,10 +801,15 @@ class NNTPDownloader:
             base, dot, extension = path.rpartition('.')
             if not base or '/' in extension:
                 base, dot, extension = path, '', ''
-            no = 2
-            while self._staged.setdefault(path, owner) != owner:
-                path = '%s (%d)%s%s' % (base, no, dot, extension)
-                no += 1
+            wanted = path
+            path = self._staged_as.get((wanted, owner))
+            if path is None:
+                path, no = wanted, self._staged_next.get(wanted, 2)
+                while self._staged.setdefault(path, owner) != owner:
+                    path = '%s (%d)%s%s' % (base, no, dot, extension)
+                    no += 1
+                self._staged_next[wanted] = no
+                self._staged_as[(wanted, owner)] = path
 
             # Where each part goes: where it says, or (parts that don't say,
             # ie: uuencoded ones) by their place in the file.  Every part but
@@ -825,13 +838,15 @@ class NNTPDownloader:
                 laid_out = True
 
             # A part claiming to be somewhere no file reaches is damaged
-            fits = [(at, row) for at, row in placed
-                    if at + max(0, row.end - row.begin) <= MAX_FILE_SIZE]
+            fits = []
+            for at, row in placed:
+                if at + max(0, row.end - row.begin) <= MAX_FILE_SIZE:
+                    fits.append((at, row))
+                else:
+                    problems.append(
+                        'Part %d <%s>: it says it goes beyond any file (left '
+                        'out)' % (row.number, row.message_id))
             laid_out = laid_out and len(fits) == len(placed)
-            problems.extend(
-                'Part %d <%s>: it says it goes beyond any file (left out)' % (
-                    row.number, row.message_id)
-                for at, row in placed if (at, row) not in fits)
             if len(have) < len(ids) and not laid_out and len(fits) == len(
                     placed):
                 problems.append(
@@ -885,10 +900,11 @@ class NNTPDownloader:
                 session.commit()
 
             # Two NZB entries can share a name too
-            key, no = f['name'], 2
+            key, no = f['name'], next_key.get(f['name'], 2)
             while key in assembled:
                 key = '%s (%d)' % (f['name'], no)
                 no += 1
+            next_key[f['name']] = no
             assembled[key] = (path, complete)
             if complete and checksum is not None and written == size:
                 self.checks[path] = (size, '%08x' % checksum)
@@ -974,11 +990,23 @@ class NNTPDownloader:
                 "repaired.")
             return None
 
-        # True when every file is right; otherwise par2's answer (which is
-        # a number, so 1 for Repairable mustn't be taken as True)
-        result = par.test(indexes[0])
-        if result is True or result == ParReturnCode.NoRepairRequired and \
-                not isinstance(result, bool):
+        # Each par2 set covers its own files, so every one is checked: True
+        # when its files are right; otherwise par2's answer (which is a
+        # number, so 1 for Repairable mustn't be taken as True)
+        damaged, needed = False, 0
+        for index in indexes:
+            result = par.test(index)
+            if result is True or result == ParReturnCode.NoRepairRequired \
+                    and not isinstance(result, bool):
+                continue
+
+            damaged = True
+            if result == ParReturnCode.Unrepairable:
+                # It needs recovery blocks (every volume when it didn't
+                # say how many)
+                needed += par.needed or float('inf')
+
+        if not damaged:
             return True
 
         if not self.repair:
@@ -986,10 +1014,10 @@ class NNTPDownloader:
             return False
 
         # Just enough recovery volumes (the smallest that will do); none
-        # when par2 already has what it needs
-        needed = par.needed if result == ParReturnCode.Unrepairable else 0
-        if result == ParReturnCode.Unrepairable and not needed:
-            # It didn't say how many; every volume, to be sure
+        # when par2 already has what it needs.  Volumes can't be told apart
+        # by set, so with more than one set needing blocks every one is
+        # fetched.
+        if needed and len(indexes) > 1:
             needed = float('inf')
 
         chosen = self.recovery_volumes(volumes, needed)
@@ -997,9 +1025,18 @@ class NNTPDownloader:
             self._fetch(session, chosen)
             assembled.update(self._assemble(session, chosen))
 
-        if not self._step('repair', lambda: par.decode(
-                [path for path, _ in assembled.values()]) is not None,
-                staging=self.staging):
+        def repair():
+            rebuilt = par.decode([path for path, _ in assembled.values()])
+            if rebuilt is None:
+                return False
+
+            # What par2 wrote (ie: a file no server had) is kept for us to
+            # place (see _staged_files())
+            for content in rebuilt:
+                content.detach()
+            return True
+
+        if not self._step('repair', repair, staging=self.staging):
             self.problem = "par2 couldn't repair it (not enough recovery " \
                 'blocks)'
             return False
@@ -1095,16 +1132,20 @@ class NNTPDownloader:
     def _move_into(source, target):
         """
         Moves what a directory holds into another, keeping its layout (a
-        name already there gets ' (2)' and so on)
+        name already there gets ' (2)' and so on); each file only takes its
+        name once it is all there (see place_file())
         """
         for entry in sorted(listdir(source)):
-            destination = join(target, entry)
-            if exists(destination) and isdir(destination) and \
-                    isdir(join(source, entry)):
-                NNTPDownloader._move_into(join(source, entry), destination)
+            path, destination = join(source, entry), join(target, entry)
+            if isdir(path):
+                if not isdir(destination):
+                    destination = NNTPDownloader._unique(destination)
+                    makedirs(destination)
+
+                NNTPDownloader._move_into(path, destination)
                 continue
 
-            move(join(source, entry), NNTPDownloader._unique(destination))
+            place_file(path, NNTPDownloader._unique(destination))
 
     @staticmethod
     def _unique(path, tidy=False):

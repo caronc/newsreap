@@ -368,3 +368,19 @@ def test_headers_in_other_character_sets_are_read(tmp_path):
     codec = CodecHeader(work_dir=str(tmp_path), encoding='utf-8')
     header = codec.decode(BytesIO(b'X-B: caf\xe9\r\n\r\n'))
     assert header['X-B'] == 'caf\ufffd'
+
+
+def test_headers_end_at_a_blank_line_that_arrives_late(tmp_path):
+    """
+    The blank line ending the headers ends them even when it comes in the
+    next piece read; a body line that looks like a header stays out
+    """
+    from io import BytesIO
+    from newsreap.codecs.CodecHeader import CodecHeader
+
+    codec = CodecHeader(work_dir=str(tmp_path))
+    assert codec.decode(BytesIO(b'Subject: hello\r\n')) is True
+
+    body = BytesIO(b'\r\nNote: this is the body\r\n')
+    header = codec.decode(body)
+    assert dict(header) == {'Subject': 'hello'}

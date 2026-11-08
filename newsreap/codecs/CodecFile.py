@@ -25,6 +25,7 @@ from os.path import expanduser
 
 from os import X_OK
 from os import access
+from os import sep
 
 from tempfile import mkdtemp
 
@@ -85,10 +86,8 @@ class CodecFile:
         until they can be properly handled.
         """
 
-        # If the password is set to None then it is presumed that
-        # you don't want to use it.  Keep in mind that setting this
-        # to an empty string presumes that you want to set a blank
-        # password (but a password none the less)
+        # The archives' password; None (or an empty one, which rar and 7z
+        # can't use) means none
         self.password = password
 
         # Stores the name to associate with the archive being encoded or
@@ -292,54 +291,14 @@ class CodecFile:
             # Save ourselves some energy
             return results
 
-        # Acquire a list of directories since these will trump any file
-        # entries found that reside in them.
-        _dirs = set([r for r in results if isdir(r)])
+        # A directory takes in everything inside it, so what is inside one
+        # of the others is left out:
+        #   /data/dir, /data/dir/a/file, /data/dir.txt, /other
+        # keeps /data/dir, /data/dir.txt and /other
+        dirs = [r.rstrip(sep) + sep for r in results if isdir(r)]
+        return sortedset(r for r in results if not any(
+            r.startswith(d) for d in dirs))
 
-        if _dirs:
-            # Adjust our results to eliminate any files that reside within
-            # directories that have been queued as well.
-            #
-            # Basically we want to look for files that reside in a directory
-            # we've already identified to include too and turf the files that
-            # reside within them.  Thus directories trump!
-            #
-            # Hence if we find:
-            #   - /path/to/data/dir/a/great/file
-            #   - /path/to/data/dir/a.wonderful.file
-            #   - /path/to/data/dir
-            #   - /path/to/another.file
-            #
-            # We would keep:
-            #   - /path/to/data/dir
-            #   - /path/to/another.file
-            #
-            # We would turf the remaining files because they can be
-            # found within the /path/to/data/dir
-            results = sortedset([r for r in results if r not in _dirs and next(
-                (False for d in _dirs \
-                 if r.startswith(d, 0, len(d)) is True), True)])
-
-            if len(_dirs) > 1:
-                # Perform the same check with our directories (a directory
-                # can not include another directory higher up) The shortest
-                # directory trumps a larger one.
-                # hence if we find:
-                #   - /path/to/data/dir/
-                #   - /path/to/data
-                #
-                # We would drop the /path/to/data/dir/ since the /path/to/data
-                # already includes it
-                _dirs = set([_d for _d in _dirs if next(
-                    (True for d in _dirs if _d != d and \
-                     d.startswith(_d, 0, len(d)) is True), False)])
-
-            # Since we stripped out directories earlier for some pre-processing
-            # we need to add them back here
-            results |= _dirs
-
-        # Return our results
-        return results
 
     def watch_dir(self, path, regex=None, prefix=None, suffix=None,
             ignore=None, case_sensitive=True, seconds=15):

@@ -16,6 +16,7 @@ import errno
 import hashlib
 import weakref
 
+from os import close as close_fd
 from os import unlink
 from os import fdopen
 from os import stat as os_stat
@@ -305,15 +306,24 @@ class NNTPContent:
         file and read back the entire chunk into memory
         and return it.
         """
+        if self.stream is None and not self.filepath:
+            # Nothing was ever written (there's no file to make for it)
+            return b''
 
+        # A file we open just for this is closed again after
+        opened = self.stream is None
         if not self.open(mode=NNTPFileMode.BINARY_RO, eof=False):
             # Error
             return None
 
-        # Head of data
-        self.stream.seek(0, SEEK_SET)
+        try:
+            # Head of data
+            self.stream.seek(0, SEEK_SET)
+            return self.read()
 
-        return self.read()
+        finally:
+            if opened:
+                self.close()
 
     def can_post(self):
         """
@@ -430,7 +440,7 @@ class NNTPContent:
             except OSError as e:
                 logger.error(
                     'Could not open %s (mode=%s) (flag=D)' %
-                    (self.filepath, mode),
+                    (filepath, mode),
                 )
                 logger.debug(
                     'open({0}, {1}, wd={2}) exception ({3})'.format(
@@ -630,21 +640,19 @@ class NNTPContent:
 
         """
 
-        with pushd(self.work_dir, create_if_missing=True):
-            # mkstemp used to genrate an unused temporary file
-            _, filepath = mkstemp(dir=self.work_dir)
-            try:
-                # Remove the created file to silence any warnings
-                # from the save() call coming next
-                unlink(filepath)
-            except:
-                pass
+        if not isdir(self.work_dir):
+            mkdir(self.work_dir)
+
+        # An unused name for the copy (save() writes it)
+        fileno, filepath = mkstemp(dir=self.work_dir)
+        close_fd(fileno)
+        unlink(filepath)
 
         if not self.save(filepath, copy=True):
             return None
 
-        # Initialize a new object
-        obj = NNTPContent(
+        # The copy is the same kind of content (ie: text stays text)
+        obj = type(self)(
             filepath, part=self.part, total_parts=self.total_parts,
             begin=self._begin, end=self._end, total_size=self._total_size,
             work_dir=self.work_dir, sort_no=self.sort_no, unique=False,
@@ -773,7 +781,11 @@ class NNTPContent:
         """
         if not self.filepath:
             # Create a Temporary File
-            _, self.filepath = mkstemp(dir=self.work_dir)
+            if not isdir(self.work_dir):
+                mkdir(self.work_dir)
+
+            fileno, self.filepath = mkstemp(dir=self.work_dir)
+            close_fd(fileno)
 
         return self.filepath
 
@@ -789,8 +801,9 @@ class NNTPContent:
         # File Length
         file_size = len(self)
         if file_size == 0:
-            # Object can not be split
-            return None
+            # An empty file is posted as it is; no file at all is an error
+            return sortedset([self], key=lambda x: x.key()) \
+                if self.filepath and isfile(self.filepath) else None
 
         if not isinstance(size, int):
             # try to support other types
@@ -861,9 +874,9 @@ class NNTPContent:
 
                 if f_length == 0:
 
-                    # Create a new object
-                    obj = NNTPContent(
-                        filepath=self.filename,
+                    # A new part of the same kind, in a file of its own
+                    # (never one that happens to share its name)
+                    obj = type(self)(
                         part=part+1,
                         total_parts=total_parts,
                         begin=(part*size),
@@ -872,6 +885,7 @@ class NNTPContent:
                         work_dir=self.work_dir,
                         sort_no=self.sort_no,
                     )
+                    obj.filename = self.filename
 
                     # Increment our part
                     part += 1
@@ -1047,10 +1061,10 @@ class NNTPContent:
         This result is the same as len() if there is only 1 part to
         the entire object
         """
-        if self.total_parts <= 1:
-            return len(self)
+        if self._total_size is not None:
+            return self._total_size
 
-        return self.end() - self.begin()
+        return len(self)
 
     def is_attached(self):
         """
@@ -1094,7 +1108,7 @@ class NNTPContent:
             lambda x : x.key()
         """
         if self.part is not None:
-            result = '%.5d/%s/%.5d' % (self.sort_no, self.filename, self.part)
+            result = '%.5d/%s/%.10d' % (self.sort_no, self.filename, self.part)
         else:
             result = '%.5d/%s//' % (self.sort_no, self.filename)
 
@@ -1144,13 +1158,21 @@ class NNTPContent:
         if signature is not None and cached and cached[0] == signature:
             return cached[1]
 
+        # A file we open just for this is closed again after (a post of
+        # thousands of articles would otherwise run out of open files)
+        opened = self.stream is None
         if not self.open(mode=NNTPFileMode.BINARY_RO):
             return None
 
-        # Always read from the start of our content
-        self.stream.seek(0, SEEK_SET)
-        value = calculate(
-            iter(lambda: self.stream.read(DIGEST_BLOCK_SIZE), b''))
+        try:
+            # Always read from the start of our content
+            self.stream.seek(0, SEEK_SET)
+            value = calculate(
+                iter(lambda: self.stream.read(DIGEST_BLOCK_SIZE), b''))
+
+        finally:
+            if opened:
+                self.close()
 
         if signature is not None:
             self._lazy_cache[name] = (signature, value)
@@ -1179,8 +1201,12 @@ class NNTPContent:
         # Initialize our Mime object
         m = Mime()
 
+        opened = self.stream is None
         if self.open(mode=NNTPFileMode.BINARY_RO):
             mr = m.from_content(self.stream.read(128))
+            if opened:
+                # Only opened to look; it isn't left open
+                self.close()
         else:
             mr = None
 

@@ -386,6 +386,32 @@ def test_loose_articles_become_files_by_their_subjects():
         ('a.rar', 'other', [(1, 'd@x')])]
 
 
+def test_loose_files_of_the_same_name_stay_apart():
+    """
+    Loose articles are only parts of one file when their subjects match
+    (apart from the part counter): two posts of a file with the same name
+    stay apart, as does a copy posted again; parts go in the order their
+    subjects say
+    """
+    files = NNTPFetcher.files_of([
+        {'message_id': 'a@x', 'subject': 'release-a "sample.mkv" (1/1)',
+         'group': 'g'},
+        {'message_id': 'b@x', 'subject': 'release-b "sample.mkv" (1/1)',
+         'group': 'g'},
+        {'message_id': 'c@x', 'subject': 'release-a "sample.mkv" (1/1)',
+         'group': 'g'},
+        {'message_id': 'd2@x', 'subject': 'big "movie.mkv" (2/2)',
+         'group': 'g'},
+        {'message_id': 'd1@x', 'subject': 'big "movie.mkv" (1/2)',
+         'group': 'g'}])
+
+    assert [(f['name'], f['segments']) for f in files] == [
+        ('sample.mkv', [(1, 'a@x')]),
+        ('sample.mkv', [(1, 'b@x')]),
+        ('sample.mkv', [(1, 'c@x')]),
+        ('movie.mkv', [(1, 'd1@x'), (2, 'd2@x')])]
+
+
 def test_file_parts_are_read_from_an_article():
     """
     The yEnc and uuencoded parts an article's body holds are decoded
@@ -433,7 +459,7 @@ def test_articles_and_posts_found_are_downloaded(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         assert nr('update', GROUP, '--no-index').exit_code == 0
 
         # Either word finds the articles (and - in front leaves them out)
@@ -525,7 +551,7 @@ def test_what_the_archive_knows_saves_fetching(tmp_path):
                                  **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
         assert nr('update', GROUP, '--content').exit_code == 0
         assert len(asked(server)) == 4
 
@@ -623,3 +649,135 @@ def test_message_ids_never_share_a_file_name():
         'part1/abc@host', 'part1.abc@host', 'part1$abc@host')}
     assert len(names) == 3
     assert NNTPFetcher._id_name('part1.abc@host') == 'part1.abc@host'
+
+
+def test_text_errors_keep_what_other_downloads_said(tmp_path):
+    """
+    Two downloads into the same folder (ie: two batches): the second only
+    changes what text.ERRORS says of its own articles, so the first one's
+    missing article stays listed until it comes
+    """
+    from newsreap.NNTPManager import NNTPManager
+    from newsreap.NNTPSettings import NNTPSettings
+
+    with FakeNNTPServer(join_group=False) as server:
+        chatter(server, tmp_path)
+        other = tmp_path / 'other.msg'
+        other.write_bytes(
+            b'Subject: more words\r\nFrom: me@example.com\r\n'
+            b'Message-ID: <other.1@example.com>\r\n\r\nMore words.\r\n')
+        server.add_article('other.1@example.com', str(other), GROUP)
+        server.on(r'^ARTICLE <%s>$' % CHATTER_ID,
+                  Reply('430 No such article'), once=True)
+
+        settings = NNTPSettings(cfg_file=config_for(
+            server, tmp_path / 'config.yaml'))
+        manager = NNTPManager(settings)
+        try:
+            def fetch(message_id, **kwargs):
+                fetcher = NNTPFetcher(
+                    manager, str(tmp_path / 'staging'), str(tmp_path / 'out'),
+                    files=False, text=True, keep=False, **kwargs)
+                return fetcher.fetch('words', NNTPFetcher.files_of([{
+                    'message_id': message_id, 'subject': 'words',
+                    'group': GROUP}]))
+
+            errors = tmp_path / 'out' / 'words' / 'text.ERRORS'
+            assert fetch(CHATTER_ID) is False
+            assert '<%s>:' % CHATTER_ID in errors.read_text()
+
+            # Another article saved into the same folder leaves it listed
+            assert fetch('other.1@example.com') is True
+            assert '<%s>:' % CHATTER_ID in errors.read_text()
+            assert 'other.1@example.com' not in errors.read_text()
+
+            # What it remembers of it is kept too: no server had it, so it
+            # isn't asked for again
+            before = len(server.commands())
+            assert fetch(CHATTER_ID) is False
+            assert not [c for c in server.commands()[before:]
+                        if c.startswith('ARTICLE')]
+
+            # Once it comes, text.ERRORS goes
+            assert fetch(CHATTER_ID, retry_missing=True) is True
+            assert not errors.exists()
+
+        finally:
+            manager.close()
+            settings.close()
+
+
+def test_loose_articles_are_downloaded_a_batch_at_a_time(tmp_path):
+    """
+    --articles -d fetches a batch of whole files at a time (batch_size): a
+    file whose parts are far apart still comes out whole, and the NZB
+    file lists every batch
+    """
+    from datetime import datetime
+    from newsreap.cli import cli
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000004 0000000001 y\n' % GROUP)
+    posted = datetime(2026, 1, 1, 12, 0)
+
+    with FakeNNTPServer(join_group=False,
+                        group_list=str(group_list)) as server:
+        # The text article comes between the parts of the file
+        _, segments = post(server, tmp_path, 'notes.txt', NOTES, parts=3)
+        for no, (part, message_id) in zip((1, 3, 4), segments):
+            server.add_overview(
+                GROUP, no, '"notes.txt" yEnc (%d/3)' % part,
+                'me@example.com', posted, message_id, size=500)
+        chatter(server, tmp_path)
+        server.add_overview(GROUP, 2, 'about the release', 'me@example.com',
+                            posted, CHATTER_ID, size=100)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        with open(config) as fp:
+            content = fp.read()
+        with open(config, 'w') as fp:
+            fp.write(content.replace(
+                '# batch_size: 10000', 'batch_size: 1', 1))
+
+        runner = CliRunner()
+
+        def nr(*args, **kwargs):
+            return runner.invoke(cli, ['--config', config, *args], obj={},
+                                 **kwargs)
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+        assert nr('update', GROUP, '--no-index').exit_code == 0
+
+        out = tmp_path / 'out'
+        result = nr('-y', 'search', '--articles', '-g', GROUP, '-d', '-x',
+                    '-z', '-o', str(out))
+        assert result.exit_code == 0, result.output
+        assert 'articles (batch 1 of 2): 1 files' in result.output
+        assert 'articles (batch 2 of 2): 1 text' in result.output
+        assert (out / 'articles' / 'notes.txt').read_bytes() == NOTES
+        assert (out / 'articles' / 'text' / ('%s.txt' % CHATTER_ID)).exists()
+
+        nzb = (out / 'articles.nzb').read_text()
+        assert nzb.count('<segment ') == 4
+        assert nzb.count('<file ') == 2
+
+
+def test_many_reposts_are_told_apart_quickly():
+    """
+    Each repost of a file is a file of its own, however many there are
+    (without looking through the copies found so far)
+    """
+    import time
+
+    articles = [{'message_id': '%d@x' % no, 'group': 'g',
+                 'subject': '"r.bin" yEnc (%d/2)' % (no % 2 + 1)}
+                for no in range(40000)]
+
+    started = time.monotonic()
+    files = NNTPFetcher.files_of(articles)
+    assert time.monotonic() - started < 2
+
+    assert len(files) == 20000
+    assert files[0]['segments'] == [(1, '0@x'), (2, '1@x')]
+    assert files[-1]['segments'] == [(1, '39998@x'), (2, '39999@x')]

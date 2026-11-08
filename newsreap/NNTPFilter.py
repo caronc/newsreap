@@ -396,8 +396,10 @@ class NNTPFilter(NNTPFilterBase):
         # them out again)
         self._changed = set()
 
-        # Group(s) -> their _Plan (worked out when first needed)
+        # The rules that apply to the items of a set of groups, as a _Plan
+        # (worked out when first needed; see plan())
         self._plans = {}
+        self._group_rules = {}
 
         if self.path and (isdir(self.path) or not isfile(self.path) and
                           not self.path.lower().endswith(FILTERS_EXTENSIONS)):
@@ -532,6 +534,7 @@ class NNTPFilter(NNTPFilterBase):
         self.sources.update((name, path) for name in rules)
         self.files.append(path)
         self._plans = {}
+        self._group_rules = {}
         logger.info('Loaded %d filter rule(s) from %s' % (len(rules), path))
 
     def add(self, rule):
@@ -549,6 +552,7 @@ class NNTPFilter(NNTPFilterBase):
 
         self._rules[rule.name] = rule
         self._plans = {}
+        self._group_rules = {}
         return rule
 
     def remove(self, name):
@@ -562,6 +566,7 @@ class NNTPFilter(NNTPFilterBase):
             self._changed.add(source or self.path)
 
         self._plans = {}
+        self._group_rules = {}
         return rule
 
     def source(self, name):
@@ -620,14 +625,31 @@ class NNTPFilter(NNTPFilterBase):
         if isinstance(groups, str):
             groups = (groups, )
 
-        key = tuple(sorted(set(group.lower() for group in groups or ())))
+        # A plan is shared by every set of groups that the same rules apply
+        # to (crossposts make countless sets of groups, but few sets of
+        # rules)
+        key = frozenset().union(*(
+            self._rules_of(group.lower()) for group in groups or ()))
         plan = self._plans.get(key)
         if plan is None:
             plan = self._plans[key] = _Plan([
-                rule for rule in self._rules.values()
-                if rule.applies_to(key)])
+                rule for name, rule in self._rules.items()
+                if not rule.groups or name in key])
 
         return plan
+
+    def _rules_of(self, group):
+        """
+        Returns the names of the rules made for a group (worked out once a
+        group); the rules for every group aren't part of it
+        """
+        found = self._group_rules.get(group)
+        if found is None:
+            found = self._group_rules[group] = frozenset(
+                name for name, rule in self._rules.items()
+                if rule.groups and rule.applies_to((group, )))
+
+        return found
 
     def check(self, groups, subject='', poster='', message_id='',
               posted=None, size=None, score=0, tags=(), rescore=True,

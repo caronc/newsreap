@@ -352,3 +352,19 @@ def test_binary_data_is_armored():
     assert contents[0].getvalue() == data
     assert contents[0].pgp['checksum'] is True
     assert CodecPGP.armor(b'', 'SIGNATURE').splitlines()[-2] == '=twTO'
+
+
+def test_a_version_6_key_has_the_fingerprint_rfc_9580_gives(tmp_path):
+    """
+    A version 6 key's fingerprint is the one RFC 9580 gives for its sample
+    key (appendix A.3)
+    """
+    block = (
+        b'-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n'
+        b'xioGY4d/4xsAAAAg+U2nu0jWCmHlZ3BqZYfQMxmZu52JGggkLq2EVD34laM=\n'
+        b'-----END PGP PUBLIC KEY BLOCK-----\n')
+    _, (keys, ) = CodecPGP(work_dir=str(tmp_path)).read(block)
+    fingerprint = \
+        'CB186C4F0609A697E4D52DFA6C722B0C1F1E27C18A56708F6525EC27BAD9ACC9'
+    assert [(k['fingerprint'], k['key_id']) for k in keys.pgp['keys']] == [
+        (fingerprint, fingerprint[:16])]

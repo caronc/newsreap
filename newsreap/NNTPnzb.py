@@ -12,9 +12,15 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
+from copy import deepcopy
 from datetime import UTC
 
 from newsreap.SortedSet import sortedset
+from os import replace
+from os import unlink
+from uuid import uuid4
+from os.path import abspath
+from os.path import expanduser
 from os.path import join
 from os.path import isfile
 from os.path import dirname
@@ -143,6 +149,17 @@ NZB_XML_DTD_FILE = join(
 # Defined globally for namespace lookups with lxml calls
 NZB_LXML_NAMESPACES = {'ns': NZB_XML_NAMESPACE}
 
+# An NZB file can come from anyone, so it is read without fetching
+# anything it points to (other files, web addresses, a DTD of its own) and
+# without expanding entities it defines; set on every version of lxml (old
+# ones fetched external entities by default)
+SAFE_XML = {
+    'resolve_entities': False,
+    'no_network': True,
+    'load_dtd': False,
+    'huge_tree': False,
+}
+
 # NZB-Filename
 NZB_EXTENSION_RE = re.compile(
     r'^(?P<fname>.+)\.nzb$', re.IGNORECASE | re.ASCII)
@@ -178,9 +195,9 @@ class NNTPnzb(NNTPContent):
         self.xml_root = None
         self.xml_itr_count = 0
 
-        # Meta information placed into (or read from) the <head/> tag; a
-        # type given more than once (ie: several passwords) holds a list
-        self.meta = None
+        # Meta information placed into (or read from) the <head/> tag (see
+        # the meta property)
+        self._meta = None
 
         # Encoding to use when handling the NZB File
         self.encoding = encoding
@@ -253,8 +270,79 @@ class NNTPnzb(NNTPContent):
         self._nzb_mode = mode
         return True
 
+    @property
+    def meta(self):
+        """
+        The NZB-File's meta information (its <head/>), ie: {'password':
+        'abc', 'title': 'My Post'}; a type given more than once (ie: several
+        passwords) holds a list.
+
+        It is read from the file the first time it is asked for (only the
+        top of the file is read); None if there is no file to read it from
+        and none was set.
+        """
+        if self._meta is None and self._readable():
+            self._meta = self._read_meta()
+
+        return self._meta
+
+    @meta.setter
+    def meta(self, value):
+        self._meta = value
+
+    def _readable(self):
+        """
+        True if our NZB-File is on disk to be read (a file still being
+        written has nothing to read yet)
+        """
+        return bool(self.filepath) and isfile(self.filepath) and (
+            self.stream is None or self.filemode in (
+                NNTPFileMode.BINARY_RO, NNTPFileMode.ASCII_R))
+
+    def _read_meta(self):
+        """
+        Returns the meta information in the file's <head/> (an empty dict if
+        it has none or can't be read); reading stops where the <head/> (or
+        the first file) ends
+        """
+        meta = {}
+        head = '{%s}head' % NZB_XML_NAMESPACE
+        try:
+            for _, element in etree.iterparse(
+                    self.filepath, tag=(
+                        '{%s}meta' % NZB_XML_NAMESPACE, head,
+                        '{%s}file' % NZB_XML_NAMESPACE), **SAFE_XML):
+
+                if element.tag != '{%s}meta' % NZB_XML_NAMESPACE:
+                    # The <head/> (there is only the one) is done
+                    break
+
+                # What parsing gives is already unescaped; one without a
+                # type says nothing
+                key = element.attrib.get('type')
+                parent = element.getparent()
+                if not key or parent is None or parent.tag != head:
+                    continue
+
+                value = (element.text or '').strip()
+                if key not in meta:
+                    meta[key] = value
+
+                elif isinstance(meta[key], list):
+                    meta[key].append(value)
+
+                else:
+                    # Given more than once; keep them all
+                    meta[key] = [meta[key], value]
+
+        except (OSError, XMLSyntaxError) as e:
+            logger.warning("NZB-File '%s' meta could not be read: %s" % (
+                self.filepath, e))
+
+        return meta
+
     def save(self, nzbfile=None, pretty=True, dtd_type=XMLDTDType.Public,
-             numbering=NZBSegmentNumber.Position):
+             numbering=NZBSegmentNumber.Position, posts=None):
         """
         Write an nzbfile to the file and path specified. If no path is
         specified, then the one used to open the class is used.
@@ -267,6 +355,19 @@ class NNTPnzb(NNTPContent):
 
         The numbering (see NZBSegmentNumber) sets how the segments of each
         file are numbered.
+
+        posts writes those (NNTPSegmentedPost objects, ie: a generator)
+        instead of the ones we hold, each as it comes, so an NZB file of
+        any size never has to be held in memory.
+
+        An NZB-File opened from disk but never loaded (see load()) has its
+        files read from the disk as they're written, so a copy holds all
+        of them.
+
+        It is written next to the file first (under a name of its own) and
+        only takes the file's place once all of it was written, so a save
+        that fails part way (or raises) leaves the file that was there as
+        it was.
         """
         if numbering not in NZB_SEGMENT_NUMBERS:
             # We don't know how to number our segments
@@ -274,6 +375,75 @@ class NNTPnzb(NNTPContent):
                 "Unsupported NZB segment numbering '%s'." % numbering)
             return False
 
+        reader = None
+        if posts is None and self._segments_loaded is not True \
+                and self._readable():
+            # Our files are still on disk; a second copy of us reads them
+            # one at a time while they're written
+            reader = posts = NNTPnzb(
+                self.filepath, encoding=self.encoding,
+                work_dir=self.work_dir, mode=self._nzb_mode,
+                codecs=self._codecs)
+
+        target = nzbfile or self.filepath
+        if not target:
+            # (with nothing to read from, there is no reader to close)
+            logger.error('An NZB-File needs a path to be saved to.')
+            return False
+
+        target = abspath(expanduser(target))
+        # A name nothing else uses, so whatever is already there is never
+        # written over (or removed)
+        temp = '%s.%s.new' % (target, uuid4().hex[:8])
+        previous = self.filepath
+
+        # Read before writing starts (an NZB-File read from disk keeps the
+        # meta it had)
+        self._meta = self.meta
+        saved = False
+        try:
+            saved = self._write(temp, pretty, dtd_type, numbering, posts)
+            if saved and reader is not None \
+                    and reader._lazy_is_valid is False:
+                # It broke off part way; the copy would be missing files
+                logger.error(
+                    "NZB-File '%s' could not be read in full; it was not "
+                    "saved." % reader.filepath)
+                saved = False
+
+        finally:
+            if reader is not None:
+                reader.close()
+
+            if saved:
+                try:
+                    replace(temp, target)
+                    self.filepath = target
+
+                except OSError as e:
+                    logger.error("NZB-File '%s' could not be replaced: %s" % (
+                        target, e))
+                    saved = False
+
+            if not saved:
+                # What was written so far goes; the file stays as it was
+                self.close()
+                try:
+                    unlink(temp)
+
+                except OSError:
+                    # It was never made
+                    pass
+
+                self.filepath = previous
+
+        return saved
+
+    def _write(self, nzbfile, pretty, dtd_type, numbering, posts):
+        """
+        Writes the NZB-File to the path given (see save()); returns True
+        once all of it was written
+        """
         if self.open(filepath=nzbfile, mode=NNTPFileMode.BINARY_RW_TRUNCATE):
             eol = '\n'
             indent = ''
@@ -333,7 +503,8 @@ class NNTPnzb(NNTPContent):
                     eol,
                 ))
 
-            for segno, segment in enumerate(self.segments):
+            for segno, segment in enumerate(
+                    self.segments if posts is None else posts):
                 if not len(segment):
                     logger.error(
                         "NZB-File '%s' has no defined articles." % self.path())
@@ -375,7 +546,7 @@ class NNTPnzb(NNTPContent):
                 for group in segment.groups:
                     self.write('%s<group>%s</group>%s' % (
                         indent,
-                        group,
+                        self.escape_xml(str(group)),
                         eol,
                     ))
 
@@ -447,7 +618,8 @@ class NNTPnzb(NNTPContent):
             self.close()
             return True
 
-        logger.error("NZB-File '%s' could not be accessed." % self.path())
+        logger.error("NZB-File '%s' could not be accessed." % (
+            nzbfile or self.path()))
         return False
 
     def gid(self):
@@ -582,6 +754,7 @@ class NNTPnzb(NNTPContent):
             # Reset our variables
             self._lazy_is_valid = None
             self._lazy_gid = None
+            self._meta = None
             self.close()
 
             if not super().load(filepath=filepath):
@@ -607,30 +780,105 @@ class NNTPnzb(NNTPContent):
         returns False
         """
 
-        if self._lazy_is_valid is None:
-            if self.open():
-                # Open DTD file and create dtd object
-                dtdfd = open(NZB_XML_DTD_FILE)
-                dtd = etree.DTD(dtdfd)
-                # Verify our dtd file against our current stream
-                try:
-                    nzb = etree.parse(self.filepath)
+        if self._lazy_is_valid is None and self.filepath:
+            try:
+                self._lazy_is_valid = self._validate()
 
-                except XMLSyntaxError as e:
-                    if e.args and e.args[0] is not None:
-                        # We have corruption
-                        logger.error(
-                            "NZB-File '%s' is corrupt" % self.filepath)
-                        logger.debug(
-                            'NZB-File XMLSyntaxError Exception %s' % str(e))
-                        # Mark situation
-                        self._lazy_is_valid = False
-                        # We failed
-                        return False
+            except OSError:
+                logger.warning('NZB-File is missing: %s' % self.filepath)
+                self._lazy_is_valid = False
 
-                self._lazy_is_valid = dtd.validate(nzb)
+            except XMLSyntaxError as e:
+                logger.error("NZB-File '%s' is corrupt" % self.filepath)
+                logger.debug('NZB-File XMLSyntaxError Exception %s' % str(e))
+                self._lazy_is_valid = False
 
         return self._lazy_is_valid is True
+
+    def _validate(self):
+        """
+        Checks the NZB-File against our copy of its DTD a part at a time, so
+        a file of any size is checked without holding all of it:
+
+        - each part (the <head/>, then each <file/>) is checked on its own
+          inside a copy of the <nzb/> it sits in
+        - the <head/> may only come first, and the <nzb/> holds no text
+        - only the part being checked is kept
+        """
+        with open(NZB_XML_DTD_FILE) as dtdfd:
+            dtd = etree.DTD(dtdfd)
+
+        def check(root, part=None):
+            # The part inside an empty copy of its <nzb/>
+            wrapper = root.makeelement(
+                root.tag, dict(root.attrib), nsmap=root.nsmap)
+            if part is not None:
+                part = deepcopy(part)
+                part.tail = None
+                wrapper.append(part)
+            return dtd.validate(wrapper)
+
+        root = None
+        parts = 0
+        for _, element in etree.iterparse(
+                self.filepath, events=('end', ), **SAFE_XML):
+            parent = element.getparent()
+            if parent is None:
+                # The <nzb/> itself ended
+                if (element.text or '').strip():
+                    return False
+                return parts > 0 or check(element)
+
+            if root is None:
+                root = parent
+                while root.getparent() is not None:
+                    root = root.getparent()
+
+            if parent is not root or not isinstance(element.tag, str):
+                # Part of the <head/> or <file/> holding it (or a comment)
+                continue
+
+            if (element.tail or '').strip() or (
+                    parts and etree.QName(element).localname == 'head') \
+                    or not check(root, element):
+                return False
+
+            parts += 1
+
+            # Let go of what was checked
+            element.clear()
+            while element.getprevious() is not None:
+                del parent[0]
+
+        return False
+
+    def message_ids(self):
+        """
+        Yields the Message-ID of every article the NZB-File lists, in its
+        order (straight from the file; much quicker than reading every
+        file it lists, and nothing is held)
+        """
+        segment = '{%s}segment' % NZB_XML_NAMESPACE
+        try:
+            for _, element in etree.iterparse(
+                    self.filepath, tag=(
+                        segment, '{%s}file' % NZB_XML_NAMESPACE),
+                    **SAFE_XML):
+                message_id = (element.text or '').strip() \
+                    if element.tag == segment else None
+
+                # Let go of what was read (each segment, then each file it
+                # was in, so even an NZB-File of many files isn't held)
+                element.clear()
+                while element.getprevious() is not None:
+                    del element.getparent()[0]
+
+                if message_id:
+                    yield message_id
+
+        except (OSError, XMLSyntaxError) as e:
+            logger.error("NZB-File '%s' could not be read: %s" % (
+                self.filepath, e))
 
     def write(self, data, *args, **kwargs):
         """
@@ -657,11 +905,16 @@ class NNTPnzb(NNTPContent):
 
     def add(self, obj):
         """
-        Adds an NNTPSegmentedPost to an nzb object
+        Adds an NNTPSegmentedPost to an nzb object; one opened from disk
+        has its files loaded first, so the new one is added to them
         """
 
         if not isinstance(obj, NNTPSegmentedPost):
             return False
+
+        if self._segments_loaded is None and self._readable():
+            # The files it already lists come first
+            self.load(mode=self._nzb_mode)
 
         # duplicates are ignored in a sortedset and therefore
         # we just capture the length of our list before
@@ -814,8 +1067,11 @@ class NNTPnzb(NNTPContent):
         _iter = None
 
         if self.xml_root is not None:
-            # clear our unused memory
+            # Let go of the file read last, and of what came before it (an
+            # emptied file still takes room until it is taken out)
             self.xml_root.clear()
+            while self.xml_root.getprevious() is not None:
+                del self.xml_root.getparent()[0]
 
         if self._segment_iter:
             while 1:
@@ -874,33 +1130,15 @@ class NNTPnzb(NNTPContent):
 
             raise StopIteration()
 
-        if self.meta is None:
-            # Attempt to populate meta information
-            self.meta = {}
-
-            for meta in self.xml_root.xpath('/ns:nzb/ns:head[1]/ns:meta',
-                                            namespaces=NZB_LXML_NAMESPACES):
-                # Store the Meta Information Detected
-                key = meta.attrib['type']
-                value = self.unescape_xml((meta.text or '').strip())
-
-                if key not in self.meta:
-                    self.meta[key] = value
-
-                elif isinstance(self.meta[key], list):
-                    self.meta[key].append(value)
-
-                else:
-                    # Given more than once; keep them all
-                    self.meta[key] = [self.meta[key], value]
-
         # Acquire the Segments Groups
         groups = [
-            group.text.strip()
-            for group in self.xml_root.xpath(
-                'ns:groups/ns:group',
-                namespaces=NZB_LXML_NAMESPACES,
-            )
+            name for name in (
+                (group.text or '').strip()
+                for group in self.xml_root.xpath(
+                    'ns:groups/ns:group',
+                    namespaces=NZB_LXML_NAMESPACES,
+                ))
+            if name
         ]
 
         # The detected filename
@@ -920,12 +1158,10 @@ class NNTPnzb(NNTPContent):
                 _name = result.group('fname')
 
         # Subject
-        _subject = self.unescape_xml(
-                self.xml_root.attrib.get('subject', ''))
+        _subject = self.xml_root.attrib.get('subject', '')
 
         # Poster
-        _poster = self.unescape_xml(
-                self.xml_root.attrib.get('poster', ''))
+        _poster = self.xml_root.attrib.get('poster', '')
 
         # Use our Codec(s) to extract our Yenc Subject
         matched = None
@@ -993,7 +1229,7 @@ class NNTPnzb(NNTPContent):
             article = NNTPArticle(
                 subject=_file.subject,
                 poster=_file.poster,
-                id=self.unescape_xml(segment.text),
+                id=(segment.text or '').strip(),
                 no=_cur_index,
                 work_dir=self.work_dir,
                 codecs=self._codecs,
@@ -1027,8 +1263,10 @@ class NNTPnzb(NNTPContent):
         Grants usage of the next()
         """
 
-        # First get a ptr to the head of our data
+        # First get a ptr to the head of our data; lxml reads the file
+        # itself, so the stream isn't kept open
         super().__iter__()
+        self.close()
 
         if self._segments_loaded is True:
             self._segment_iter = iter(self.segments)
@@ -1049,6 +1287,7 @@ class NNTPnzb(NNTPContent):
             self.xml_iter = iter(etree.iterparse(
                 self.filepath,
                 tag="{%s}file" % NZB_XML_NAMESPACE,
+                **SAFE_XML,
             ))
 
         except OSError:
@@ -1125,7 +1364,8 @@ class NNTPnzb(NNTPContent):
         count = 0
         try:
             for _, element in etree.iterparse(
-                    self.filepath, tag="{%s}file" % NZB_XML_NAMESPACE):
+                    self.filepath, tag="{%s}file" % NZB_XML_NAMESPACE,
+                    **SAFE_XML):
                 count += 1
 
                 # Free each entry as we go
@@ -1142,8 +1382,8 @@ class NNTPnzb(NNTPContent):
         Support accessing NNTPSegmentedPost objects by index
         """
         if self._segments_loaded is None:
-            # Attempt to preload our content
-            self.load()
+            # Attempt to preload our content (as our mode reads it)
+            self.load(mode=self._nzb_mode)
 
         return self.segments[index]
 

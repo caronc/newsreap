@@ -77,3 +77,15 @@ def test_encoding_and_decoding_give_the_text_back(tmp_path):
     decoded = codec.decode(BytesIO(encoded.getvalue()))
     assert decoded.getvalue() == b'first\r\nsecond\r\n'
     assert str(codec) == 'Undetermined.File'
+
+
+def test_a_throttle_of_zero_cycles_still_decodes():
+    """
+    throttle_cycles of 0 (or less) pauses every pass instead of failing
+    """
+    from newsreap.codecs.CodecSample import CodecSample
+
+    for cycles in (0, -5):
+        codec = CodecSample(throttle_cycles=cycles)
+        assert codec.throttle_cycles == 1
+        assert codec.decode_loop() is True

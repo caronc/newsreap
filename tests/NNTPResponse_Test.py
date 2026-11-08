@@ -70,3 +70,19 @@ class NNTPResponse_Test(TestBase):
         response = NNTPResponse(200)
         assert(200 in response)
         assert(NNTPResponseCode.SUCCESS in response)
+
+
+def test_only_2xx_answers_are_a_success():
+    """
+    is_success() is True for 2xx answers only; a 3xx one (ie: 340 send the
+    article) means the server wants more, and an answer with no code is no
+    success either
+    """
+    from newsreap.NNTPResponse import NNTPResponse
+
+    assert NNTPResponse(200, 'Welcome').is_success() is True
+    assert NNTPResponse(240, 'Article received OK').is_success() is True
+    assert NNTPResponse(340, 'Send article').is_success() is False
+    assert NNTPResponse(381, 'Password required').is_success() is False
+    assert NNTPResponse(430, 'No such article').is_success() is False
+    assert NNTPResponse(None, '').is_success() is False

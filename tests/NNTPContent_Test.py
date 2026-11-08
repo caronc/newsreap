@@ -845,6 +845,7 @@ class NNTPContent_Test(TestBase):
         # Count how much gets read for the second round
         reads = []
         original = NNTPContentModule.DIGEST_BLOCK_SIZE
+        assert content.open(mode='rb')
         stream_read = content.stream.read
 
         def counting_read(*args):
@@ -898,3 +899,79 @@ class NNTPContent_Test(TestBase):
 
         content.seek(0)
         assert content.readlines(4) == [b'line 1\n']
+
+
+def test_splitting_never_touches_a_file_of_the_same_name(tmp_path,
+                                                         monkeypatch):
+    """
+    The parts of a split go into files of their own, of the same kind as
+    the content; a file in the current directory sharing its name is left
+    alone
+    """
+    from newsreap.NNTPBinaryContent import NNTPBinaryContent
+
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'photo.jpg').write_bytes(b'x' * 2500)
+
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    (elsewhere / 'photo.jpg').write_bytes(b'keep me')
+    monkeypatch.chdir(elsewhere)
+
+    content = NNTPBinaryContent(
+        str(source / 'photo.jpg'), work_dir=str(tmp_path / 'work'))
+    parts = content.split(1000)
+    assert len(parts) == 3
+    assert len({part.path() for part in parts}) == 3
+    assert all(type(part) is NNTPBinaryContent for part in parts)
+    assert [part.end() for part in parts] == [1000, 2000, 2500]
+    assert all(part.total_size() == 2500 for part in parts)
+    assert (elsewhere / 'photo.jpg').read_bytes() == b'keep me'
+
+
+def test_copies_keep_their_kind_and_leave_no_files_open(tmp_path):
+    """
+    A copy is the same kind of content as the original, and making copies
+    (or asking for a path) leaves no files open
+    """
+    import os
+    from newsreap.NNTPAsciiContent import NNTPAsciiContent
+
+    text = NNTPAsciiContent(work_dir=str(tmp_path))
+    text.write(b'hello\r\n')
+    text.close()
+
+    def open_files():
+        return len(os.listdir('/proc/self/fd'))
+
+    before = open_files()
+    copies = [text.copy() for _ in range(20)]
+    paths = [NNTPAsciiContent(work_dir=str(tmp_path)).path()
+             for _ in range(20)]
+    assert open_files() == before
+    assert all(type(copy) is NNTPAsciiContent for copy in copies)
+    assert str(copies[0]) == 'hello\r\n'
+    assert len(set(paths)) == 20
+
+
+def test_checking_a_file_leaves_it_closed(tmp_path):
+    """
+    Working out a file's checksums or type doesn't leave it open (a post
+    of thousands of articles would run out of open files)
+    """
+    from newsreap.NNTPContent import NNTPContent
+
+    path = tmp_path / 'photo.jpg'
+    path.write_bytes(b'\xff\xd8\xff\xe0' + bytes(5000))
+    content = NNTPContent(str(path), work_dir=str(tmp_path))
+
+    for check in ('sha1', 'md5', 'crc32', 'mime'):
+        getattr(content, check)()
+        assert content.stream is None, check
+
+    # One opened by its owner stays open for them
+    assert content.open()
+    content.sha1()
+    assert content.stream is not None
+    content.close()

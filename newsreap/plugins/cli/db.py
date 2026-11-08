@@ -62,7 +62,7 @@ def __db_prep(ctx):
     """
     settings = ctx['NNTPSettings']
     try:
-        settings.add_servers(s['host'] for s in settings.nntp_servers)
+        settings.add_servers(settings.nntp_servers)
 
     except DatabaseUnavailable:
         logger.error('Could not acquire a database connection.')

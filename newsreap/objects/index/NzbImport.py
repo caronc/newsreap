@@ -16,6 +16,7 @@ from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import Integer
 from sqlalchemy import String
+from newsreap.objects import Key
 
 from .ObjectBase import ObjectBase
 
@@ -30,7 +31,7 @@ class NzbImport(ObjectBase):
     __tablename__ = 'nzb_import'
 
     # The Message-ID of its first article (without its < and >)
-    message_id = Column(String(250), primary_key=True)
+    message_id = Column(Key(250), primary_key=True)
 
     # Its name (as it was posted)
     filename = Column(String(256), nullable=False, default='')

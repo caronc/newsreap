@@ -18,6 +18,7 @@ from newsreap.SortedSet import sortedset
 from os.path import basename
 from os.path import dirname
 from os.path import exists
+from os.path import join
 
 from newsreap.NNTPBinaryContent import NNTPBinaryContent
 from newsreap.codecs.CodecFile import CodecFile
@@ -148,13 +149,11 @@ class CodecPar(CodecFile):
 
     def encode(self, content=None, *args, **kwargs):
         """
-        Takes a specified path (and or file) and creates par2 files based on
-        it. If this function is successful, it returns a set of
-        NNTPBinaryContent() objects identifying the PAR2 files generated
-        based on the passed in content.
-
-        The function returns None if it fails in any way.
-
+        Makes par2 files for what was added (and the content given): one
+        set for each directory's files (named after its first file), all of
+        them covered by it.  Returns the par2 files made (NNTPBinaryContent
+        objects; they go away with the objects unless saved), or None if it
+        fails in any way.
         """
 
         if content is not None:
@@ -167,12 +166,14 @@ class CodecPar(CodecFile):
         if not self.can_exe(self._par):
             return None
 
-        for target in self.archive:
-            # Base entry on first file in the list
-            name = basename(target)
-            target_dir = dirname(target)
+        # The files of each directory go into one set
+        sets = {}
+        for target in sorted(self.archive):
+            sets.setdefault(dirname(target), []).append(target)
 
-            # tmp_path, tmp_file = self.mkstemp(content=name, suffix='.par2')
+        results = sortedset(key=lambda x: x.key())
+        for target_dir, targets in sets.items():
+            name = basename(targets[0])
 
             # Initialize our command
             execute = [
@@ -193,12 +194,9 @@ class CodecPar(CodecFile):
                 # to repair concurrently - uses multiple threads
                 execute.append('-t+')
 
-            # Stop Switch Parsing
-            execute.append('--')
-
-            # Now add our target (we can only do one at a time which i why we
-            # loop) and run our setups
-            execute.append(target)
+            # Stop Switch Parsing; the set is named after the first file
+            execute.extend(['--', '%s.par2' % join(target_dir, name)])
+            execute.extend(targets)
 
             found_set = sortedset()
             with pushd(target_dir):
@@ -227,24 +225,11 @@ class CodecPar(CodecFile):
             )
 
             # Let the caller know our status
-            if not sp.successful():
+            if not sp.successful() or not len(found_set):
                 # We're done; we failed
                 return None
 
-            if not len(found_set):
-                # We're done; we failed
-                return None
-
-            # Create a resultset
-            results = sortedset(key=lambda x: x.key())
-
-            part = 0
-            # iterate through our found_set and create NNTPBinaryContent()
-            # objects from them.
-            for path in found_set:
-                # Iterate over our found files and determine their part
-                # information
-                part += 1
+            for part, path in enumerate(found_set, 1):
                 content = NNTPBinaryContent(
                     path,
                     part=part,
@@ -260,7 +245,6 @@ class CodecPar(CodecFile):
         # Clean our are list of objects to archive
         self.clear()
 
-        # Return our
         return results
 
     def decode(self, content=None, *args, **kwargs):

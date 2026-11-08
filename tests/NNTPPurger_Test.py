@@ -483,8 +483,8 @@ def test_archiving_scores_and_drops(tmp_path):
             return runner.invoke(cli, ['--config', config, *args], obj={})
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
-        assert nr('update', 'search', GROUP).exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+        assert nr('update', GROUP).exit_code == 0
 
         # The rules arrive after the headers were cached
         (tmp_path / 'filters.yaml').write_text(
@@ -493,7 +493,7 @@ def test_archiving_scores_and_drops(tmp_path):
             '  - name: spam\n    poster: spam.example\n'
             '  - name: sneaky\n    body: {glob: "*buy now*"}\n')
 
-        result = nr('update', 'archive', GROUP)
+        result = nr('update', '--cached', '--content', '--no-nzb', GROUP)
         assert result.exit_code == 0, result.output
         assert '1 article(s) kept (1 text, 0 binary)' in result.output
         assert '2 dropped by filters' in result.output
@@ -570,9 +570,9 @@ def test_filters_from_the_command_line(tmp_path):
                                  obj={}, **kwargs)
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
-        assert nr('update', 'search', GROUP).exit_code == 0
-        assert nr('update', 'index', GROUP).exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+        assert nr('update', GROUP).exit_code == 0
+        assert nr('update', '--cached', GROUP).exit_code == 0
         assert len(headers(db_file, index_db)) == 4
 
         # Without -y you are asked, and no removes nothing
@@ -605,6 +605,19 @@ def test_filters_from_the_command_line(tmp_path):
         assert result.exit_code == 0, result.output
         assert 'header(s) dropped' not in result.output
         assert 'index: 0 file(s) dropped' in result.output
+
+        # A saved keep rule protects what it matches
+        filters_file.parent.mkdir(parents=True, exist_ok=True)
+        filters_file.write_text(
+            'filters:\n'
+            '  - name: casino\n'
+            "    subject: { glob: 'Casino*' }\n"
+            '    action: keep\n')
+        result = nr('filter', 'purge', '--iposter', '*@spam.example>', '-n')
+        assert result.exit_code == 0, result.output
+        assert '%s: 1 of 4 header(s) dropped' % GROUP in result.output
+        assert 'Casino [1/1]' not in result.output
+        filters_file.unlink()
 
         # See what would go
         result = nr('filter', 'purge', '--iposter', '*@SPAM.example>', '-n')
@@ -657,7 +670,7 @@ def test_filters_from_the_command_line(tmp_path):
         server.add_overview(
             GROUP, 5, 'More [1/1] - "more.exe" yEnc (1/1)', SPAMMER,
             POSTED + timedelta(minutes=5), 's3@x')
-        result = nr('update', 'search', GROUP)
+        result = nr('update', GROUP)
         assert result.exit_code == 0, result.output
         assert '0 article(s) cached, 1 dropped by filters' in result.output
         assert 's3@x' not in headers(db_file, index_db)
@@ -673,7 +686,7 @@ def test_filters_from_the_command_line(tmp_path):
         # Scanning the same articles again works their scores and tags out
         # from 0 again (they never add up)
         for _ in range(2):
-            result = nr('update', 'search', GROUP, '--force')
+            result = nr('update', GROUP, '--force')
             assert result.exit_code == 0, result.output
             assert headers(db_file, index_db)['g2@x'] == (10, 'recovery')
             assert headers(db_file, index_db)['g1@x'] == (0, '')
@@ -684,7 +697,7 @@ def test_filters_from_the_command_line(tmp_path):
 
         # Indexing them again leaves the collection as it was
         for _ in range(2):
-            assert nr('update', 'index', GROUP).exit_code == 0
+            assert nr('update', '--cached', GROUP).exit_code == 0
             result = nr('search', '--tag', 'recovery')
             assert result.output.count('{+10 recovery}') == 1
 
@@ -746,8 +759,8 @@ def test_filters_from_the_command_line(tmp_path):
                         ('search', '--posts', '--before', '9999999999y'),
                         ('search', '-t', '!'),
                         ('search', '-t', '  '),
-                        ('update', 'search', GROUP, '--date-from', 'x'),
-                        ('update', 'search', GROUP, '--date-to', ''),
+                        ('update', GROUP, '--date-from', 'x'),
+                        ('update', GROUP, '--date-to', ''),
                         ('filter', 'purge', '--after', '99999999d'),
                         ('search', '--after', '1d', '--before', '2d'),
                         ('search', '-t', 'a, !a'),
@@ -847,13 +860,13 @@ def test_broken_rules_are_left_out_and_broken_files_stop(tmp_path):
             return runner.invoke(cli, ['--config', config, *args], obj={})
 
         assert nr('db', 'init').exit_code == 0
-        assert nr('update', 'groups').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
 
         filters.write_text(
             'filters:\n  - name: x\n    subject: [unclosed\n')
         for command in (('update', GROUP),
-                        ('update', 'index', GROUP),
-                        ('update', 'archive', GROUP),
+                        ('update', '--cached', GROUP),
+                        ('update', '--cached', '--content', '--no-nzb', GROUP),
                         ('filter', 'purge', '--saved'),
                         ('filter', 'list')):
             result = nr(*command)

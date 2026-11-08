@@ -1220,3 +1220,38 @@ def test_programs_start_without_python_forking(monkeypatch):
     monkeypatch.setitem(
         Popen._execute_child.__globals__, '_fork_exec', forked)
     assert wait_program(start_program(['true'])) == 0
+
+
+def test_a_directory_size_counts_its_sub_directories(tmp_path):
+    """
+    dirsize() adds up everything in a directory, sub-directories included
+    """
+    (tmp_path / 'a').write_bytes(b'x' * 10)
+    (tmp_path / 'sub' / 'deeper').mkdir(parents=True)
+    (tmp_path / 'sub' / 'b').write_bytes(b'x' * 20)
+    (tmp_path / 'sub' / 'deeper' / 'c').write_bytes(b'x' * 30)
+    assert dirsize(str(tmp_path)) == 60
+    assert dirsize(str(tmp_path / 'missing')) == 0
+
+
+def test_sizes_can_have_decimals_and_nothing_after_them():
+    """
+    A size can have decimals, is always a whole number of bytes, and
+    anything after its unit makes it no size at all
+    """
+    assert strsize_to_bytes('1.5MB') == 1572864
+    assert strsize_to_bytes('1.5mB') == 1572864
+    assert strsize_to_bytes('1.5mb') == 1500000
+    assert strsize_to_bytes('2.5Kb') == 2500
+    assert strsize_to_bytes('1Mb') == 1000000
+    assert isinstance(strsize_to_bytes('1Mb'), int)
+    assert strsize_to_bytes('10MBX') is None
+    assert strsize_to_bytes('1.MB') is None
+
+
+def test_a_hexdump_takes_bytes_as_well_as_text():
+    """
+    hexdump() shows bytes (as files are read) the same way as text
+    """
+    assert hexdump(b'hi\x00\xff') == hexdump('hi\x00\xff') == \
+        '00000000:  68 69 00 ff%s|hi..|' % (' ' * 39)
