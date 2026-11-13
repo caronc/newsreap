@@ -15,9 +15,10 @@
 Downloads what an NZB file lists and puts it back together:
 
 1. Everything happens in a staging directory of its own, named after the
-   NZB and a hash of the articles it lists.  Running the same NZB again
-   carries on where it stopped, and different downloads never share one.
-   A lock keeps two runs of the same NZB apart.
+   NZB and the GID of its first article (see staging_key()).  Running the
+   same NZB again carries on where it stopped, and so does 'nr search
+   --download' of the collection it came from (the two share it).  A lock
+   keeps two runs of it apart.
 2. The data files (and the small par2 index files) are fetched first, two
    articles for each connection at a time.  Each decoded part is written
    under a temporary name, renamed once it is whole and only then noted
@@ -85,6 +86,7 @@ from .NNTPArchiver import NNTPArchiver
 from .Utils import utcnow
 from .NNTPBinaryContent import NNTPBinaryContent
 from .NNTPGetDatabase import NNTPGetDatabase
+from .NNTPIndexer import make_gid
 from .NNTPErrorsFile import ERRORS_EXTENSION
 from .NNTPErrorsFile import NNTPErrorsFile
 from .NNTPErrorsFile import PART_DAMAGED
@@ -249,6 +251,21 @@ def sweep(folder):
     for name in names:
         if name.endswith(ERRORS_EXTENSION + '.tmp'):
             NNTPErrorsFile.discard(join(folder, name))
+
+
+def staging_key(files):
+    """
+    Returns what a staging directory is named after (with the download's
+    name): the start of the GID of the first article of the first file
+    (see make_gid()), so a run that stopped carries on, and 'nr get' of an
+    NZB file shares it with 'nr search --download' of the collection it
+    came from
+
+    - files: [{'segments': [(part, message_id)]}] in the order an NZB file
+      lists them (only the first one with segments is looked at)
+    """
+    first = next((f['segments'][0][1] for f in files if f['segments']), '')
+    return make_gid(first)[:12]
 
 
 def tidy_name(name, default='download'):
@@ -418,10 +435,8 @@ class NNTPDownloader:
             nzb_file).rsplit('.', 1)[0])
 
         # Named after what it downloads, so running it again carries on
-        key = sha1('\n'.join(sorted(
-            message_id for f in files for _, message_id in f['segments']
-        )).encode('utf-8')).hexdigest()[:12]
-        self.staging = join(self.staging_dir, '%s-%s' % (name, key))
+        self.staging = join(self.staging_dir, '%s-%s' % (
+            name, staging_key(files)))
         for folder in (STAGING_PARTS, STAGING_FILES, STAGING_WORK):
             makedirs(join(self.staging, folder), exist_ok=True)
 

@@ -276,6 +276,77 @@ def test_a_damaged_part_is_fetched_again_once_staging_is_gone(
     assert not (out / 'notes.txt.ERRORS').exists()
 
 
+def test_a_collection_is_downloaded_a_page_of_files_at_a_time(
+        tmp_path, indexed, monkeypatch):
+    """
+    -d fetches a collection a page of whole files at a time (batch_size
+    articles each): only one page is held, what was learned is kept after
+    each, and it is all summed up once
+    """
+    from newsreap.NNTPSettings import NNTPSettings
+
+    server, nr = indexed
+    out = tmp_path / 'out' / 'release'
+    monkeypatch.setattr(NNTPSettings, 'batch_size', lambda self: 2)
+
+    pages = []
+    real_page = NNTPFetcher._fetch_page
+
+    def page(self, name, key, files, known, texts):
+        pages.append(sorted(f['name'] for f in files))
+        return real_page(self, name, key, files, known, texts)
+
+    noted = []
+    real_note = NNTPIndexer.note_fetched
+
+    def note(self, segments=None):
+        noted.append(sorted(segments))
+        return real_note(self, segments)
+
+    monkeypatch.setattr(NNTPFetcher, '_fetch_page', page)
+    monkeypatch.setattr(NNTPIndexer, 'note_fetched', note)
+
+    result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
+    assert result.exit_code == 0, result.output
+    assert (out / 'notes.txt').read_bytes() == NOTES
+    assert (out / 'readme.nfo').read_bytes() == README
+
+    # The three part file on its own, then the other two
+    assert pages == [['notes.txt'], ['chatter', 'readme.nfo']]
+    assert noted == [
+        ['notes.txt.%d@example.com' % no for no in (1, 2, 3)],
+        sorted([CHATTER_ID, 'readme.nfo.1@example.com'])]
+    assert result.output.count('release: 2 files') == 1
+
+    # Nothing is left in the staging directory
+    assert not list((tmp_path / 'cache' / 'downloads').iterdir())
+
+
+def test_nr_get_carries_on_a_download_a_search_started(
+        tmp_path, indexed, monkeypatch):
+    """
+    A collection -d couldn't all fetch (a page at a time) is finished by
+    nr get of the same collection: they share a staging directory, so only
+    what is still missing is fetched
+    """
+    from newsreap.NNTPSettings import NNTPSettings
+
+    server, nr = indexed
+    monkeypatch.setattr(NNTPSettings, 'batch_size', lambda self: 2)
+    server.on(r'^ARTICLE <notes.txt.2@example.com>$',
+              Reply('400 Try again later'), once=True)
+
+    result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
+    assert result.exit_code == 1, result.output
+    assert len(list((tmp_path / 'cache' / 'downloads').iterdir())) == 1
+
+    before = len(server.commands())
+    nr('get', '1')
+    assert {c.split('<', 1)[1].rstrip('>') for c in server.commands()[before:]
+            if c.startswith('ARTICLE <')} == {
+        'notes.txt.2@example.com', CHATTER_ID}
+
+
 def test_an_nzb_file_is_saved_and_only_replaced_when_it_changes(
         tmp_path, indexed):
     """

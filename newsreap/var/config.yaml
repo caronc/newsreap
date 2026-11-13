@@ -253,9 +253,10 @@ downloads:
    # --retry-missing asks again regardless.
    # retry_window: 60
 
-   # Loose articles a search finds (nr search --articles or --posts with
-   # -d) are downloaded this many at a time, so even a whole group never
-   # fills your memory.  A file is never split between two batches.
+   # What a search finds (nr search -d) is downloaded this many articles at
+   # a time (a collection a few of its files at a time, loose articles in
+   # batches), so even a huge collection or a whole group never fills your
+   # memory.  A file is never split between two batches.
    # batch_size: 10000
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

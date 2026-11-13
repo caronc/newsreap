@@ -35,6 +35,8 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from newsreap.CliOptions import confirmed
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.NNTPIndexer import Purged
@@ -64,8 +66,9 @@ def delete(ctx, ids):
     offline, and their scores and tags.
 
     """
-    # Track how many we removed, and what else went with them
-    removed = 0
+    # Track how many we removed (and the ones we couldn't find), and what
+    # else went with them
+    removed = missing = 0
     purged = Purged(0, 0, 0, 0, 0)
 
     indexer = NNTPIndexer(ctx['NNTPSettings'].index_database())
@@ -73,10 +76,11 @@ def delete(ctx, ids):
         # What would go, shown before anything is removed
         found = {}
         for value in dict.fromkeys(ids):
-            entry = indexer.get(value) if indexer.session() is not None \
-                else None
+            entry = indexer.get(value, unfinished=True) \
+                if indexer.session() is not None else None
             if entry is None:
                 logger.error('There is no collection %s.' % value)
+                missing += 1
                 continue
             found[entry.id] = entry.name
 
@@ -89,9 +93,22 @@ def delete(ctx, ids):
             return
 
         for collection_id, title in found.items():
+            try:
+                done = indexer.delete(collection_id, group_database=ctx[
+                    'NNTPSettings'].group_database)
 
-            if indexer.delete(collection_id, group_database=ctx[
-                    'NNTPSettings'].group_database):
+            except (OSError, SQLAlchemyError) as e:
+                # (ie: no room left); the chunk it was on was undone, and
+                # the next collection is tried.  A database error is shown
+                # as the database gave it (without the SQL)
+                logger.error(
+                    "Could not remove collection %d (%s); run 'nr delete "
+                    "%d' again to finish it." % (
+                        collection_id, getattr(e, 'orig', None) or e,
+                        collection_id))
+                continue
+
+            if done:
                 click.echo('Removed [%d] %s' % (collection_id, title))
                 removed += 1
                 purged = purged.plus(indexer.purged._replace(
@@ -107,5 +124,6 @@ def delete(ctx, ids):
     if str(purged):
         click.echo('Also removed %s.' % (purged, ))
 
-    if removed < len(set(ids)):
+    # (an id and a GID of the same collection count once)
+    if missing or removed < len(found):
         exit(1)

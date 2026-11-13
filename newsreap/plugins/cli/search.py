@@ -54,6 +54,7 @@ from sqlalchemy import and_
 from sqlalchemy import or_
 from sqlalchemy import func
 from sqlalchemy import literal
+from sqlalchemy.exc import SQLAlchemyError
 
 from newsreap.NNTPArchiver import DEFAULT_ARCHIVE_MAX_SIZE
 from newsreap.NNTPArchiver import NNTPArchiver
@@ -928,8 +929,11 @@ def downloaded(ctx, entries, wanted, download_dir, delete, title,
             name = entry.data['name'] or 'collection-%s' % entry.key
             done = True
             if fetching:
-                files, known = indexer.fetch_files(entry.key)
-                done = keep(ctx, fetcher, indexer, name, files, known)
+                # A page of its files at a time, so a collection of any
+                # size fits in memory
+                done = keep(ctx, fetcher, indexer, name, indexer
+                            .fetch_file_pages(
+                                entry.key, size=settings.batch_size()))
 
             if wanted['nzb']:
                 makedirs(folder, exist_ok=True)
@@ -1030,10 +1034,9 @@ def loose(ctx, found, name, kind, wanted, folder, indexer, fetcher, saved):
             # Each article is saved (or not) on its own
             unfinished = set()
             if fetching:
-                files, known = batches.files(batch)
                 ids = [article['message_id'] for article in batch]
                 if not keep(
-                        ctx, fetcher, indexer, name, files, known,
+                        ctx, fetcher, indexer, name, [batches.files(batch)],
                         texts=post_texts(ctx, ids) if kind == 'post' and
                         wanted['text'] else None,
                         label=name if total == 1 else
@@ -1052,26 +1055,27 @@ def loose(ctx, found, name, kind, wanted, folder, indexer, fetcher, saved):
         batches.close()
 
 
-def keep(ctx, fetcher, indexer, name, files, known, texts=None, label=None):
+def keep(ctx, fetcher, indexer, name, pages, texts=None, label=None):
     """
     Fetches what is wanted of the files given and keeps what was learned
     in the index; returns True when it was all saved
 
+    - pages: (files, known) for each page of files (see
+      NNTPFetcher.fetch_pages()); what was learned is kept after each one
     - label: how it is called in what is printed (its name when not given)
     """
     label = label or name
-    try:
-        done = fetcher.fetch(name, files, known, texts=texts)
 
-    finally:
+    def noted(learned):
         # Kept even when it was stopped
-        if fetcher.learned_segments and not indexer.note_fetched(
-                fetcher.learned_segments) and not ctx.get('unnoted'):
+        if not indexer.note_fetched(learned) and not ctx.get('unnoted'):
             # Said once; the downloads themselves are fine
             ctx['unnoted'] = True
             click.echo("Note: what was downloaded couldn't be noted in the "
                        'index, so running this again may fetch some '
                        'articles to find out what they hold.', err=True)
+
+    done = fetcher.fetch_pages(name, pages, texts=texts, learned=noted)
 
     click.echo('%s: %s' % (label, fetcher))
     if not done:
@@ -1151,8 +1155,21 @@ def forget(ctx, found):
     indexer = NNTPIndexer(settings.index_database())
     try:
         for entry in found.entries('collection'):
-            if not indexer.delete(
-                    entry.key, group_database=settings.group_database):
+            # One that fails (ie: no room left) doesn't stop the others; the
+            # chunk it was on was undone
+            try:
+                done = indexer.delete(
+                    entry.key, group_database=settings.group_database)
+
+            except (OSError, SQLAlchemyError) as e:
+                logger.error(
+                    "Could not remove collection %s (%s); run 'nr delete "
+                    "%s' to finish it." % (
+                        entry.key, getattr(e, 'orig', None) or e, entry.key))
+                failed += 1
+                continue
+
+            if not done:
                 logger.error('Could not remove collection %s.' % entry.key)
                 failed += 1
                 continue
@@ -1164,11 +1181,19 @@ def forget(ctx, found):
 
         for kind in ('post', 'article'):
             for chunk in found.chunks(kind):
-                removed = indexer.purge(
-                    [entry.key for entry in chunk],
-                    group_database=settings.group_database,
-                    groups={entry.data.get('group') for entry in chunk
-                            if entry.data.get('group')})
+                try:
+                    removed = indexer.purge(
+                        [entry.key for entry in chunk],
+                        group_database=settings.group_database,
+                        groups={entry.data.get('group') for entry in chunk
+                                if entry.data.get('group')})
+
+                except (OSError, SQLAlchemyError) as e:
+                    # Searching again finds what is left of them
+                    logger.error('Could not remove %d %s(s) (%s).' % (
+                        len(chunk), kind, getattr(e, 'orig', None) or e))
+                    failed += len(chunk)
+                    continue
 
                 # A post found is the post kept, and an article found its
                 # header in the group it was found in

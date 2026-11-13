@@ -506,9 +506,10 @@ DEFAULT_DOWNLOAD_VARIABLES = {
     # is this many minutes old or less (a new post takes a while to reach
     # every server), or once a server is added; see NNTPRetry
     'retry_window': 60,
-    # Loose articles a search finds (nr search --articles/--posts -d) are
-    # downloaded this many at a time; a file is never split between two
-    # batches (see NNTPArticleBatches)
+    # What a search finds (nr search -d) is downloaded this many articles
+    # at a time: a collection a page of its files at a time, and loose
+    # articles in batches; a file is never split between two (see
+    # NNTPIndexer.fetch_file_pages() and NNTPArticleBatches)
     'batch_size': 10000,
 }
 
@@ -1152,8 +1153,9 @@ class NNTPSettings(NNTPDatabase):
 
     def batch_size(self):
         """
-        Returns how many loose articles a search found are downloaded at a
-        time (the batch_size setting; see NNTPArticleBatches)
+        Returns about how many articles a search found are downloaded at a
+        time (the batch_size setting; see NNTPIndexer.fetch_file_pages()
+        and NNTPArticleBatches)
         """
         value = self.nntp_downloads.get('batch_size')
         try:

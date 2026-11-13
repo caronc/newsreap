@@ -42,8 +42,11 @@ Anything already there is skipped without fetching it: a file without a
 .ERRORS file beside it is whole (see NNTPErrorsFile), and so is a text
 file or an article that is there.
 
+A collection can be fetched a page of its files at a time (see
+fetch_pages()), so however big it is, only one page is held in memory.
+
 Files are put together in a staging directory (the one 'nr get' uses for
-the same files), so a run that stopped carries on where it left off, and
+the same post), so a run that stopped carries on where it left off, and
 are only moved into place once everything was tried.  A file missing a
 part (or with a damaged one) is still placed, with zeros where the part
 goes and a .ERRORS file beside it, but its articles are noted in
@@ -79,6 +82,7 @@ from .NNTPDownloader import STAGING_FILES
 from .NNTPDownloader import STAGING_WORK
 from .NNTPDownloader import COMMIT_EVERY
 from .NNTPDownloader import safe_name
+from .NNTPDownloader import staging_key
 from .NNTPDownloader import clear_errors
 from .NNTPDownloader import place_file
 from .NNTPDownloader import sweep
@@ -291,6 +295,14 @@ class NNTPFetcher(NNTPDownloader):
         # The articles our last fetch() was about
         self.covered = set()
 
+        # How many articles didn't all come out, over every page (see
+        # fetch_pages())
+        self.incomplete = 0
+
+        # The staging directory's database and lock, while a fetch has them
+        self._staged_db = None
+        self._staged_lock = None
+
     @property
     def archiver(self):
         """
@@ -305,24 +317,110 @@ class NNTPFetcher(NNTPDownloader):
         Fetches what is wanted of the files given (see
         NNTPIndexer.fetch_files()); returns True when all of it came out.
         It goes in a directory called `name` under the download directory
-        (see folder).
+        (see folder).  The same as fetch_pages() with one page.
 
         - known: {message_id: SegmentNote} learned by a run before
         - texts: {message_id: {'text', 'subject', 'poster', 'posted',
           'groups'}} for articles whose text is already known (ie: kept by
           'nr update --content'); written as they are, without fetching
         """
+        return self.fetch_pages(name, [(files, known)], texts=texts)
+
+    def fetch_pages(self, name, pages, texts=None, learned=None):
+        """
+        Fetches what is wanted of files given a page at a time (see
+        NNTPIndexer.fetch_file_pages()), so only one page is ever held;
+        returns True when all of it came out.  It goes in a directory
+        called `name` under the download directory (see folder).
+
+        - pages: (files, known) for each page (see fetch())
+        - texts: see fetch()
+        - learned: called with what was learned of each page's articles
+          once that page is done (or stopped), after which
+          learned_segments is emptied; without it, everything learned is
+          kept in learned_segments
+
+        What it did (written, skipped, fetched, ...) adds up over every
+        page.  unfinished holds the articles of the last page that didn't
+        all come out (fetch() has just the one page); incomplete counts
+        them over every page.
+
+        Files are put together in a staging directory named after `name`
+        and the first article (see staging_key()), the one 'nr get' uses
+        for an NZB file of the same post, so the two share what they fetch.
+        It is removed once everything came out.
+        """
         self.reset()
-        known = dict(known or {})
         texts = dict(texts) if self.text and texts else {}
         self.folder = join(self.download_dir, tidy_name(name))
 
-        # The articles this fetch is about (what text.ERRORS and
+        # Known already; written as they are
+        for message_id, entry in texts.items():
+            self.write_text(message_id, entry['text'], **{
+                key: entry.get(key) for key in (
+                    'subject', 'poster', 'posted', 'groups')})
+
+        # What a run before remembers of the articles no server had
+        for folder, wanted in ((TEXT_FOLDER, self.text),
+                               (ARTICLES_FOLDER, self.articles)):
+            if wanted:
+                self.memory.update(NNTPErrorsFile(
+                    join(self.folder, folder)).load().parts)
+
+        key = None
+        try:
+            for files, known in pages:
+                if key is None:
+                    key = staging_key(files)
+
+                try:
+                    if not self._fetch_page(name, key, files, known, texts):
+                        # The staging directory is another run's
+                        break
+
+                finally:
+                    # Kept even when it was stopped
+                    if learned is not None and self.learned_segments:
+                        learned(self.learned_segments)
+                        self.learned_segments = {}
+
+            if self._staged_db is not None and not self.incomplete:
+                # Still ours while it goes (another run can't take it up)
+                self._staged_db.close()
+                rmtree(self.staging, ignore_errors=True)
+
+        finally:
+            if self._staged_db is not None:
+                self._staged_db.close()
+            if self._staged_lock is not None:
+                self._staged_lock.close()
+            self._staged_db = self._staged_lock = None
+
+        if self.incomplete and not self.problem:
+            self.problem = '%d article(s) could not all be saved' % \
+                self.incomplete
+
+        return not self.incomplete
+
+    def _fetch_page(self, name, key, files, known, texts):
+        """
+        Fetches what is wanted of one page of files (see fetch_pages());
+        returns False if the staging directory is another run's
+        """
+        known = dict(known or {})
+
+        # Only this page is held
+        self.unfinished = set()
+        self.unsaved = {'text': [], 'article': []}
+        self.errors, self.lost, self.parts_of, self.checks = {}, [], {}, {}
+
+        # The articles this page is about (what text.ERRORS and
         # articles.ERRORS say of any other is left as it is)
         self.covered = {m for f in files for _, m in f['segments']}
 
         # What the archive already knows saves fetching it: whether a post
         # carries a file, and the text of the ones that don't
+        kept = {}
         if self.text or self.files:
             unknown = [m for f in files for _, m in f['segments']
                        if known.get(m, UNKNOWN).kind is None or (
@@ -339,21 +437,14 @@ class NNTPFetcher(NNTPDownloader):
 
                 if self.text and post.kind == ArchiveKind.Text and \
                         post.text and post.message_id not in texts:
-                    texts[post.message_id] = {
+                    kept[post.message_id] = {
                         'text': post.text, 'subject': post.subject,
                         'poster': post.poster, 'posted': post.posted}
 
-        for message_id, entry in texts.items():
+        for message_id, entry in kept.items():
             self.write_text(message_id, entry['text'], **{
                 key: entry.get(key) for key in (
                     'subject', 'poster', 'posted', 'groups')})
-
-        # What a run before remembers of the articles no server had
-        for folder, wanted in ((TEXT_FOLDER, self.text),
-                               (ARTICLES_FOLDER, self.articles)):
-            if wanted:
-                self.memory.update(NNTPErrorsFile(
-                    join(self.folder, folder)).load().parts)
 
         # What is still needed of each article ('file', 'text', 'article')
         needed = {}
@@ -387,7 +478,7 @@ class NNTPFetcher(NNTPDownloader):
                         needed.setdefault(message_id, set()).add('article')
 
                 if self.text and note.kind != ArchiveKind.Binary and \
-                        message_id not in texts:
+                        message_id not in texts and message_id not in kept:
                     if isfile(self._text_path(message_id)):
                         self.skipped += 1
                     else:
@@ -397,58 +488,36 @@ class NNTPFetcher(NNTPDownloader):
             self._note_unsaved()
             return True
 
-        db = lock = None
-        session = None
-        if assemble:
-            # Named as 'nr get' names it, so the two share what they fetch
-            key = sha1('\n'.join(sorted(
-                message_id for f in files for _, message_id in f['segments']
-            )).encode('utf-8')).hexdigest()[:12]
+        if assemble and self._staged_db is None:
+            # Opened by the first page that puts files together, and kept
+            # for the rest
             self.staging = join(self.staging_dir, '%s-%s' % (
                 tidy_name(name), key))
             for folder in (STAGING_PARTS, STAGING_FILES, STAGING_WORK):
                 makedirs(join(self.staging, folder), exist_ok=True)
 
-            lock = self._lock()
-            if lock is None:
+            self._staged_lock = self._lock()
+            if self._staged_lock is None:
                 self.problem = '%s is already being downloaded (%s)' % (
                     name, self.staging)
                 self.unfinished.update(needed)
+                self.incomplete += len(needed)
                 return False
 
-            db = NNTPGetDatabase(engine='sqlite:///%s' % join(
+            self._staged_db = NNTPGetDatabase(engine='sqlite:///%s' % join(
                 self.staging, STAGING_DATABASE), reset=False)
-            session = db.session()
 
-        try:
-            self._step('download', lambda: self._grab(
-                session, files, needed, known), name=name,
-                staging=self.staging)
+        session = self._staged_db.session() if assemble else None
+        self._step('download', lambda: self._grab(
+            session, files, needed, known), name=name, staging=self.staging)
 
-            if assemble:
-                self._step('move', lambda: self._put_together(
-                    session, assemble, known), name=name,
-                    staging=self.staging)
+        if assemble:
+            self._step('move', lambda: self._put_together(
+                session, assemble, known), name=name, staging=self.staging)
 
-            self._note_unsaved()
-            if db is not None:
-                db.close()
-
-            if assemble and not self.unfinished:
-                # Still ours while it goes (another run can't take it up)
-                rmtree(self.staging, ignore_errors=True)
-
-        finally:
-            if db is not None:
-                db.close()
-            if lock is not None:
-                lock.close()
-
-        if self.unfinished and not self.problem:
-            self.problem = '%d article(s) could not all be saved' % len(
-                self.unfinished)
-
-        return not self.unfinished
+        self._note_unsaved()
+        self.incomplete += len(self.unfinished)
+        return True
 
     def _note_unsaved(self):
         """

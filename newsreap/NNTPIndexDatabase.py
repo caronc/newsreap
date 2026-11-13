@@ -242,11 +242,15 @@ class NNTPIndexDatabase(Database):
         - from_nzb: collections read from NZB files
         - files: files in every collection; size: bytes of the collections
           (deleted ones left out)
+        - unfinished: deleted collections a stopped delete left part way
+          (they still have files); unfinished_ids: the first few of them
         - kinds: {ArchiveKind: how many posts kept}
         - ranked: articles with a score or tag
         - nzb_read, nzb_unusable: NZB files read, and the ones no use
         """
+        from sqlalchemy import exists
         from sqlalchemy import func
+        from .NNTPIndexer import ID_SAMPLES
         from .NNTPIndexer import SESSION_KEY
         from .objects.index.Collection import CollectionSource
         from .objects.index.Collection import CollectionState
@@ -256,6 +260,13 @@ class NNTPIndexDatabase(Database):
                 return query.scalar() or 0
 
             live = Collection.state != CollectionState.Deleted
+
+            # (only the deleted ones are looked at, each with one index
+            # lookup, so it stays quick however big the index is)
+            unfinished = session.query(Collection.id)\
+                .filter(Collection.state == CollectionState.Deleted)\
+                .filter(exists().where(
+                    CollectionFile.collection_id == Collection.id))
             return {
                 'states': dict(session.query(
                     Collection.state, func.count(Collection.id))
@@ -270,6 +281,11 @@ class NNTPIndexDatabase(Database):
                 'files': total(session.query(func.count(CollectionFile.id))),
                 'size': total(session.query(func.sum(Collection.size))
                               .filter(live)),
+                'unfinished': total(unfinished.with_entities(
+                    func.count(Collection.id))),
+                'unfinished_ids': [
+                    collection_id for collection_id, in unfinished
+                    .order_by(Collection.id).limit(ID_SAMPLES)],
                 'kinds': dict(session.query(
                     ArchivedPost.kind, func.count(ArchivedPost.id))
                     .group_by(ArchivedPost.kind)),
