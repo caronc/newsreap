@@ -62,6 +62,8 @@ from os.path import join
 from os.path import splitext
 
 from sqlalchemy import DateTime
+from sqlalchemy import delete
+from sqlalchemy import exists
 from sqlalchemy import bindparam
 from sqlalchemy import func
 from sqlalchemy import insert
@@ -265,6 +267,10 @@ SPOOL_SIZE = 8 * 1048576
 
 # How many of the files an NZB file has that we left out are named
 LEFT_OUT_SAMPLES = 10
+
+# How many collection ids an NZB file import names (the ones it replaced, or
+# the ones it shares articles with)
+ID_SAMPLES = 10
 
 # The longest Message-ID there can be (RFC 5536); a longer one can't be
 # kept as it is, so its article is left out
@@ -1239,6 +1245,20 @@ class NNTPIndexer:
                     'id': entry.id, 'state': entry.state,
                     'first': entry.first_posted, 'last': entry.last_posted})
 
+        # The ones looked at earlier in this run may have been removed since
+        # (nr delete); the index is ours now, so ask again
+        earlier = {
+            window['id']: window
+            for key in {info['collection_key'] for _, _, info in entries}
+            - missing for window in collections[key]
+            if window['id'] is not None
+            and window['state'] != CollectionState.Deleted}
+        for ids in chunked(earlier):
+            for collection_id, in session.query(Collection.id)\
+                    .filter(Collection.id.in_(ids))\
+                    .filter(Collection.state == CollectionState.Deleted):
+                earlier[collection_id]['state'] = CollectionState.Deleted
+
         # Work out which collection each article belongs to
         added = []
         kept = []
@@ -2067,19 +2087,24 @@ class NNTPIndexer:
                 Segment.part == lowest.c.part))
             .group_by(Segment.file_id)}
 
-    def get(self, value):
+    def get(self, value, unfinished=False):
         """
         Returns a collection by its id or GID (None if there is no such
         collection, or it was removed)
+
+        - unfinished: also find one a stopped delete() left part way
         """
         session = self.session()
         if session is None:
             return None
 
-        value = str(value).strip()
-        query = session.query(Collection)\
-            .filter(Collection.state != CollectionState.Deleted)
+        kept = Collection.state != CollectionState.Deleted
+        if unfinished:
+            kept = or_(kept, exists().where(
+                CollectionFile.collection_id == Collection.id))
 
+        value = str(value).strip()
+        query = session.query(Collection).filter(kept)
         if GID_RE.match(value):
             # Another NZB file's GID finds the collection we kept for it
             alias = session.get(CollectionAlias, value.lower())
@@ -2633,41 +2658,85 @@ class NNTPIndexer:
         its files and their articles, and what else is kept of those
         articles (see purge()).  What that took away is kept in `purged`.
 
-        The collection itself is kept (marked as deleted, with nothing in
-        it) so articles that belong to it, and NZB files of it, aren't
-        indexed again.  Returns True if the collection was removed.
+        - it is marked as deleted first, so nothing new is indexed into it
+          (and searches leave it out) while it is removed
+        - its articles go a chunk at a time, each chunk together with what
+          is kept of it elsewhere (and committed); if it fails, the chunk
+          it was on is undone, and running it again finishes the job
+        - the collection itself is kept (marked as deleted, with nothing in
+          it) so articles that belong to it, and NZB files of it, aren't
+          indexed again
+
+        Returns True if the collection was removed.
 
         - group_database: see purge() (the header caches are left alone
           without it)
         """
         self.purged = Purged(0, 0, 0, 0, 0)
-        collection = self.get(value)
+        collection = self.get(value, unfinished=True)
         if collection is None:
             logger.warning('There is no collection %s.' % value)
             return False
 
         session = self.session()
-        headers = posts = articles_removed = files = 0
-        for file_ids in self._file_pages(session, collection.id):
+        try:
+            self.purged = self._delete(session, collection.id, group_database)
+
+        except BaseException:
+            session.rollback()
+            raise
+
+        return True
+
+    def _delete(self, session, collection_id, group_database):
+        """
+        Removes a collection (see delete()); returns what went (see Purged)
+        """
+        self.lock(session)
+        session.query(Collection).filter(Collection.id == collection_id)\
+            .update({Collection.state: CollectionState.Deleted},
+                    synchronize_session=False)
+        session.commit()
+
+        headers = posts = articles = files = 0
+        for file_ids in self._file_pages(session, collection_id):
             files += len(file_ids)
+            more = True
+            while more:
+                # A chunk of their articles (one more is read to tell if
+                # there are others); nobody else changes the index until it
+                # is gone
+                self.lock(session)
+                ids = [m for m, in session.query(Segment.message_id)
+                       .filter(Segment.file_id.in_(file_ids))
+                       .limit(IN_LIST_SIZE + 1)]
+                more = len(ids) > IN_LIST_SIZE
+                del ids[IN_LIST_SIZE:]
 
-            # Every article of these files, with one query
-            message_ids = [m for m, in session.query(Segment.message_id)
-                           .filter(Segment.file_id.in_(file_ids)).all()]
+                removed = (0, 0)
+                if ids:
+                    removed = self._purge_elsewhere(
+                        session, ids, group_database)
 
-            for ids in chunked(message_ids):
-                removed = self._purge_elsewhere(session, ids, group_database)
+                    # (the last chunk is all that is left of the files)
+                    session.query(Segment).filter(
+                        Segment.message_id.in_(ids) if more
+                        else Segment.file_id.in_(file_ids))\
+                        .delete(synchronize_session=False)
+
+                session.commit()
                 headers += removed[0]
                 posts += removed[1]
-                articles_removed += len(ids)
+                articles += len(ids)
 
-        self._remove(session, collection.id)
+        # Its files (with nothing left in them) and details
+        self.lock(session)
+        self._remove(session, collection_id)
         session.commit()
 
         # Forget everything read before now; some of it no longer exists
         session.expunge_all()
-        self.purged = Purged(headers, posts, articles_removed, files, 1)
-        return True
+        return Purged(headers, posts, articles, files, 1)
 
     @staticmethod
     def _file_pages(session, collection_id, size=IN_LIST_SIZE):
@@ -2711,24 +2780,42 @@ class NNTPIndexer:
           header caches are left alone without it
         - groups: more groups whose header caches they are taken out of
           (ie: the ones a search found them in)
+
+        If it fails, the chunk it was on is undone (the ones before it stay
+        removed).
         """
         session = self.session()
         totals = [0] * len(Purged._fields)
-        for ids in id_chunks(message_ids):
-            removed = self._purge_elsewhere(
-                session, ids, group_database, groups) \
-                if session is not None else self._purge_headers(
-                    group_database, set(groups), ids)
-            removed += self.forget_articles(ids)
-            totals = [total + count for total, count in zip(totals, removed)]
+        try:
+            for ids in id_chunks(message_ids):
+                if session is None:
+                    removed = self._purge_headers(
+                        group_database, set(groups), ids)
+
+                else:
+                    removed = self._purge_elsewhere(
+                        session, ids, group_database, groups)
+                    session.commit()
+
+                removed += self.forget_articles(ids)
+                totals = [
+                    total + count for total, count in zip(totals, removed)]
+
+        except BaseException:
+            if session is not None:
+                session.rollback()
+            raise
 
         return Purged(*totals)
 
     def _purge_elsewhere(self, session, ids, group_database, groups=()):
         """
-        Removes what is kept of articles outside of the index's files:
-        their cached headers, the posts the archive kept and their scores
-        and tags (committed); returns (headers, posts) removed
+        Removes what is kept of articles outside of the index's files;
+        returns (headers, posts) removed:
+
+        - their cached headers go first (they are in other databases)
+        - then the posts the archive kept, and their scores and tags (not
+          committed), so a stop in between finds them all again next time
         """
         # The groups they were in, read before what says so goes
         names = set(groups)
@@ -2738,13 +2825,12 @@ class NNTPIndexer:
         names.update(name for name, in session.query(ArchiveGroup.name)
                      .filter(ArchiveGroup.message_id.in_(ids)).distinct())
 
+        headers = self._purge_headers(group_database, names, ids)[0]
         posts = session.query(ArchivedPost)\
             .filter(ArchivedPost.message_id.in_(ids)).count()
         self.forget_posts(session, ids)
         NNTPArticleRanks.forget(session, ids)
-        session.commit()
-
-        return self._purge_headers(group_database, names, ids)[0], posts
+        return headers, posts
 
     @staticmethod
     def _purge_headers(group_database, names, ids):
@@ -2777,7 +2863,7 @@ class NNTPIndexer:
         Removes a collection's files and marks it as deleted (not committed)
         """
         values = {'id': collection_id}
-        cls._clear(session, collection_id)
+        cls._clear(session, [collection_id])
         session.execute(text(
             'DELETE FROM collection_meta WHERE collection_id = :id'), values)
 
@@ -2787,22 +2873,60 @@ class NNTPIndexer:
             'segments = 0, size = 0 WHERE id = :id'),
             dict(values, deleted=CollectionState.Deleted))
 
-    @staticmethod
-    def _clear(session, collection_id):
+    @classmethod
+    def _clear(cls, session, collection_ids):
         """
-        Removes a collection's files (and their articles and groups), not
-        committed
-        """
-        # The files of the collection
-        files = 'SELECT id FROM collection_file WHERE collection_id = :id'
-        values = {'id': collection_id}
+        Removes the files of the collections given (and their articles and
+        groups), not committed
 
-        session.execute(text(
-            'DELETE FROM file_group WHERE file_id IN (%s)' % files), values)
-        session.execute(text(
-            'DELETE FROM segment WHERE file_id IN (%s)' % files), values)
-        session.execute(text(
-            'DELETE FROM collection_file WHERE collection_id = :id'), values)
+        - collection_ids: a chunk of them (see IN_LIST_SIZE)
+
+        Only a page of files is removed at a time (see _paged()), and their
+        articles about ARTICLE_PAGE_SIZE at a time: removing many rows with
+        one statement makes SQLite hold every one of them in memory.
+        """
+        while True:
+            # (in no order: what is read is removed, so the next read finds
+            # the rest)
+            rows = session.query(CollectionFile.id, CollectionFile.segments)\
+                .filter(CollectionFile.collection_id.in_(collection_ids))\
+                .limit(IN_LIST_SIZE).all()
+            if not rows:
+                return
+
+            for ids in cls._paged(rows):
+                cls._clear_segments(session, ids)
+                session.query(FileGroup)\
+                    .filter(FileGroup.file_id.in_(ids))\
+                    .delete(synchronize_session=False)
+                session.query(CollectionFile)\
+                    .filter(CollectionFile.id.in_(ids))\
+                    .delete(synchronize_session=False)
+
+    @staticmethod
+    def _clear_segments(session, file_ids):
+        """
+        Removes the articles of the files given (a page of them), at most
+        ARTICLE_PAGE_SIZE with each statement; not committed
+        """
+        mine = Segment.file_id.in_(file_ids)
+        if session.get_bind().dialect.name == 'mysql':
+            # (MySQL can't limit a list read for IN (...), but it can
+            # limit what a DELETE removes)
+            statement = delete(Segment).where(mine)\
+                .with_dialect_options(mysql_limit=ARTICLE_PAGE_SIZE)
+
+        else:
+            statement = delete(Segment).where(Segment.message_id.in_(
+                select(Segment.message_id).where(mine)
+                .limit(ARTICLE_PAGE_SIZE)))
+
+        # Until a statement finds less than it could have removed
+        while session.execute(
+                statement, execution_options={
+                    'synchronize_session': False}).rowcount \
+                >= ARTICLE_PAGE_SIZE:
+            pass
 
     def forget_group(self, group, before=None):
         """
@@ -3043,13 +3167,15 @@ class NNTPIndexer:
         - left_out: the subjects of the first of them (LEFT_OUT_SAMPLES)
         - merging: True if it replaced collections we had (with merge)
         - merged / dropped: how many files that collection gained / lost
-        - replaced: the ids of the other collections it replaced (removed)
+        - replaced_count: how many other collections it replaced (removed)
+        - replaced: the ids of the first of them (ID_SAMPLES)
         """
         self.details = 0
         self.merging = False
         self.merged = 0
         self.dropped = 0
         self.replaced = []
+        self.replaced_count = 0
         self.left_out = []
         self.left_out_count = 0
 
@@ -3060,16 +3186,20 @@ class NNTPIndexer:
         if source is None:
             return None, False
 
-        # Every article it lists, once each, kept until we're done (on disk
+        # Every article it lists, once each, and the collections (from other
+        # NZB files) that have any of them, kept until we're done (on disk
         # once there are many of them)
-        spool = None
+        spools = []
         try:
-            spool = SpooledTemporaryFile(max_size=SPOOL_SIZE, dir=work_dir)
+            for _ in range(2):
+                spools.append(
+                    SpooledTemporaryFile(max_size=SPOOL_SIZE, dir=work_dir))
+
             return self._import_copy(
-                path, source, name, merge, work_dir, spool)
+                path, source, name, merge, work_dir, *spools)
 
         finally:
-            if spool is not None:
+            for spool in spools:
                 spool.close()
 
             try:
@@ -3103,13 +3233,16 @@ class NNTPIndexer:
             logger.warning("'%s' could not be read: %s" % (path, e))
             return None
 
-    def _import_copy(self, path, source, name, merge, work_dir, spool):
+    def _import_copy(self, path, source, name, merge, work_dir, spool,
+                     owners):
         """
         Imports an NZB file (see _import_nzb()) from our copy of it
 
         - path: the NZB file (its name and messages)
         - source: our copy of it (what is read)
         - spool: an empty file to keep its Message-IDs in
+        - owners: an empty file to keep the ids of the collections that
+          share them in
         """
         nzb = NNTPnzb(source)
         if not nzb.is_valid():
@@ -3127,17 +3260,7 @@ class NNTPIndexer:
 
         def message_ids():
             # Every article it lists, once each, as they were kept
-            where = 0
-            while True:
-                spool.seek(where)
-                try:
-                    message_id = marshal.load(spool)
-
-                except EOFError:
-                    return
-
-                where = spool.tell()
-                yield message_id
+            return self._replay(spool)
 
         first = next(posts(), None)
         if first is None:
@@ -3185,26 +3308,52 @@ class NNTPIndexer:
             # It was merged into (or replaced by) a collection before
             return existing, False
 
-        # The collections (from other NZB files) that have its articles
-        owners = self._owners(session, message_ids())
-        if existing is not None and existing.source == CollectionSource.Nzb:
-            owners.setdefault(existing.id, 0)
+        # The collections (from other NZB files) that have its articles.
+        # The one with its GID counts even if it has none of them; the
+        # others are kept in `owners` (by id) to be read again
+        mine = existing.id if existing is not None \
+            and existing.source == CollectionSource.Nzb else None
+        shared = others = 0
+        best = None
+        shown = [mine] if mine is not None else []
+        for collection_id, count in self._owners(
+                session, message_ids(), work_dir):
+            if collection_id == mine:
+                shared = count
+                continue
 
-        if owners and merge:
-            # It replaces them
+            marshal.dump(collection_id, owners)
+            others += 1
+
+            # The one sharing the most (the lowest id of those)
+            if best is None or count > best[1]:
+                best = (collection_id, count)
+
+            if len(shown) < ID_SAMPLES:
+                shown.append(collection_id)
+
+        if merge and (mine is not None or others):
+            # It replaces them: the one with its GID (else the one sharing
+            # the most) keeps its id
+            target = mine if mine is not None else best[0]
             return self._replace(
-                session, owners, existing, nzb, posts, gid, message_ids,
-                poster, work_dir)
+                session, target, lambda: (
+                    i for i in self._replay(owners) if i != target),
+                nzb, posts, gid, message_ids, poster, work_dir)
 
-        if len(owners) > 1:
-            logger.warning(
-                "'%s' shares articles with collections %s; it was not "
+        total = others + (mine is not None)
+        if total > 1:
+            more = ' and %d more' % (total - len(shown)) \
+                if total > len(shown) else ''
+            logger.error(
+                "'%s' shares articles with collections %s%s; it was not "
                 "imported (use --merge to replace them with it)." % (
-                    path, ', '.join('#%d' % i for i in sorted(owners))))
+                    path, ', '.join('#%d' % i for i in sorted(shown)), more))
             return None, False
 
-        if owners:
-            (collection_id, shared), = owners.items()
+        if total:
+            collection_id, shared = (mine, shared) if mine is not None \
+                else best
             return self._overlap(
                 session, session.get(Collection, collection_id), shared,
                 listed, nzb, posts, gid, path)
@@ -3264,22 +3413,65 @@ class NNTPIndexer:
 
         return list(meta)
 
-    @staticmethod
-    def _owners(session, message_ids):
+    @classmethod
+    def _owners(cls, session, message_ids, work_dir=None):
         """
-        Returns the collections (from NZB files) that have any of the
-        articles given: collection id -> how many of them it has
+        Yields (collection id, how many of the articles it has) for each
+        collection (from an NZB file) that has any of the articles given,
+        sorted by id; only a few are held at a time (see _summed())
 
         - message_ids: each one only once
         """
-        owners = {}
-        for ids in chunked(message_ids):
-            for _, _, collection_id, source in NNTPIndexer._holders(
-                    session, ids):
-                if source == CollectionSource.Nzb:
-                    owners[collection_id] = owners.get(collection_id, 0) + 1
+        def found():
+            # (collection id, how many it has) for each chunk
+            for ids in chunked(message_ids):
+                counts = {}
+                for _, _, collection_id, source in cls._holders(
+                        session, ids):
+                    if source == CollectionSource.Nzb:
+                        counts[collection_id] = \
+                            counts.get(collection_id, 0) + 1
 
-        return owners
+                yield from counts.items()
+
+        return cls._summed(found(), work_dir)
+
+    @staticmethod
+    def _summed(counts, work_dir=None):
+        """
+        Adds counts up: yields (id, its total) for each id once, sorted by
+        id (see sorted_in_runs(), which only holds a few at a time)
+
+        - counts: (id, count) for each, any id any number of times
+        """
+        last, total = None, 0
+        for key, count in sorted_in_runs(counts, work_dir=work_dir):
+            if key != last:
+                if last is not None:
+                    yield last, total
+                last, total = key, 0
+            total += count
+
+        if last is not None:
+            yield last, total
+
+    @staticmethod
+    def _replay(spool):
+        """
+        Yields what was kept in a spool (with marshal), in order; each
+        reader keeps its own place, so several can read it at once
+        """
+        where = 0
+        while True:
+            spool.seek(where)
+            try:
+                item = marshal.load(spool)
+
+            except EOFError:
+                return
+
+            where = spool.tell()
+            yield item
 
     @staticmethod
     def _holders(session, ids):
@@ -3405,7 +3597,7 @@ class NNTPIndexer:
         session.commit()
         return collection, False
 
-    def _replace(self, session, owners, existing, nzb, posts, gid,
+    def _replace(self, session, target, others, nzb, posts, gid,
                  message_ids, poster, work_dir=None):
         """
         Replaces the collections an NZB file shares articles with by it
@@ -3419,21 +3611,14 @@ class NNTPIndexer:
         - their articles the NZB file doesn't list are let go of; nothing
           points to the old NZB files any more
 
-        - owners: collection id -> how many of its articles the NZB file
-          lists
+        - target: the id of the collection that becomes it
+        - others: returns the ids of the others (sorted, each once) each
+          time it is called; only a chunk of them is held at a time
         - posts / message_ids: read the NZB file's files / Message-IDs
           (see import_nzb())
         - poster: who posted it
         - work_dir: where long lists are kept while they're sorted
         """
-        if existing is not None and existing.id in owners:
-            # The one with its GID
-            target = existing.id
-
-        else:
-            target = sorted(owners, key=lambda i: (-owners[i], i))[0]
-
-        others = [i for i in sorted(owners) if i != target]
         self.merging = True
 
         # The files it had (to report what changed), sorted (see
@@ -3443,48 +3628,52 @@ class NNTPIndexer:
             self._file_keys(session, target), work_dir=work_dir)
         before = chain(list(islice(before, 1)), before)
 
-        # Every detail: ours, then what the others had, then the NZB file's
-        for other in others:
+        # Every detail: ours, then what the others had (a chunk of them at
+        # a time, in order), then the NZB file's
+        for chunk in chunked(others()):
             self._merge_meta(session, target, [
                 (key, value) for key, value in session.query(
                     CollectionMeta.type, CollectionMeta.value)
-                .filter(CollectionMeta.collection_id == other)
-                .order_by(CollectionMeta.id)])
+                .filter(CollectionMeta.collection_id.in_(chunk))
+                .order_by(CollectionMeta.collection_id, CollectionMeta.id)])
 
         self._merge_meta(session, target, self._meta(nzb), replace=True)
 
-        # What they had is let go of; the NZB file lists what it is now
-        self._clear(session, target)
-        for other in others:
-            self._remove(session, other)
+        # What it had is let go of; the NZB file lists what it is now
+        self._clear(session, [target])
+        self._aliases(session, target, [
+            old for old, in session.query(Collection.gid)
+            .filter(Collection.id == target)], gid)
 
-        old_gids = {
-            gid_ for gid_, in session.query(Collection.gid)
-            .filter(Collection.id.in_([target, *others]))
-            .filter(Collection.gid.isnot(None))}
+        # The others go, a chunk at a time
+        for chunk in chunked(others()):
+            old_gids = [old for old, in session.query(Collection.gid)
+                        .filter(Collection.id.in_(chunk))]
 
-        if others:
-            # Anything that found the others finds ours now
+            self._clear(session, chunk)
+            session.query(CollectionMeta)\
+                .filter(CollectionMeta.collection_id.in_(chunk))\
+                .delete(synchronize_session=False)
+
+            # Anything that found them finds ours now
             session.query(CollectionAlias)\
-                .filter(CollectionAlias.collection_id.in_(others))\
+                .filter(CollectionAlias.collection_id.in_(chunk))\
                 .update({CollectionAlias.collection_id: target},
                         synchronize_session=False)
 
             session.query(Collection)\
-                .filter(Collection.id.in_(others))\
+                .filter(Collection.id.in_(chunk))\
                 .delete(synchronize_session=False)
 
-        # Our old GIDs (and the others') find it from now on; its own GID
-        # is its own
+            self._aliases(session, target, old_gids, gid)
+
+            self.replaced_count += len(chunk)
+            self.replaced.extend(chunk[:ID_SAMPLES - len(self.replaced)])
+
+        # Its own GID is its own
         session.query(CollectionAlias)\
             .filter(CollectionAlias.gid == gid)\
             .delete(synchronize_session=False)
-
-        known = {alias for alias, in session.query(CollectionAlias.gid)
-                 .filter(CollectionAlias.gid.in_(list(old_gids)))}
-        session.add_all(
-            CollectionAlias(gid=old, collection_id=target)
-            for old in sorted(old_gids - known - {gid}))
         session.flush()
 
         # Take its articles from the scanned collections that have them
@@ -3509,10 +3698,30 @@ class NNTPIndexer:
         self.merged, self.dropped = self._differences(
             before, sorted_in_runs(
                 self._file_keys(session, target), work_dir=work_dir))
-        self.replaced = others
 
         self._formed(session, collection)
         return collection, True
+
+    @staticmethod
+    def _aliases(session, target, gids, gid):
+        """
+        Lets the GIDs given (a chunk of them) find a collection from now on
+        (not committed); its own GID, and a GID that already finds one, are
+        left alone
+
+        - target: the collection's id
+        - gid: its own GID
+        """
+        gids = set(gids) - {gid, None}
+        if not gids:
+            return
+
+        known = {alias for alias, in session.query(CollectionAlias.gid)
+                 .filter(CollectionAlias.gid.in_(list(gids)))}
+        session.add_all(
+            CollectionAlias(gid=old, collection_id=target)
+            for old in sorted(gids - known))
+        session.flush()
 
     def _merge_meta(self, session, collection_id, meta, replace=False):
         """
@@ -3739,25 +3948,12 @@ class NNTPIndexer:
 
                 yield from lost.items()
 
-        def totals():
-            # Each collection that lost articles, once, with how many it
-            # lost in all: sorted by collection (see sorted_in_runs()),
-            # which only holds a few at a time
-            last, lost = None, 0
-            for collection_id, some in sorted_in_runs(
-                    taken(), work_dir=work_dir):
-                if collection_id != last:
-                    if last is not None:
-                        yield last, lost
-                    last, lost = collection_id, 0
-                lost += some
-
-            if last is not None:
-                yield last, lost
-
         # The collection kept, as (not preferred, -lost, id): the lowest wins
         kept = None
-        for chunk in chunked(totals()):
+
+        # Each collection that lost articles, once, with how many it lost in
+        # all (see _summed())
+        for chunk in chunked(self._summed(taken(), work_dir)):
             lost = dict(chunk)
             self._recount(session, [], lost)
 
@@ -3771,18 +3967,25 @@ class NNTPIndexer:
             # Anything read before now is out of date
             session.expire_all()
 
-            for collection_id, in session.query(Collection.id)\
-                    .filter(Collection.id.in_(list(lost)))\
-                    .filter(Collection.files == 0).all():
-                # Nothing is left of it; it was all a part of this post
-                found = (collection_id != prefer, -lost[collection_id],
-                         collection_id)
-                if kept is None or found < kept:
-                    kept, found = found, kept
+            # The ones left with nothing (they were all a part of this
+            # post), and the one kept so far
+            emptied = [
+                (collection_id != prefer, -lost[collection_id], collection_id)
+                for collection_id, in session.query(Collection.id)
+                .filter(Collection.id.in_(list(lost)))
+                .filter(Collection.files == 0)]
+            if not emptied:
+                continue
 
-                if found is not None:
-                    session.query(Collection)\
-                        .filter(Collection.id == found[2]).delete()
+            if kept is not None:
+                emptied.append(kept)
+
+            # All but the one kept go, with one statement
+            kept = min(emptied)
+            session.query(Collection)\
+                .filter(Collection.id.in_(
+                    [found[2] for found in emptied if found != kept]))\
+                .delete()
 
         return kept[2] if kept is not None else None
 

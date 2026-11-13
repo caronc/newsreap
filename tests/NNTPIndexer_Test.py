@@ -44,6 +44,7 @@ from newsreap.objects.index.Collection import Collection
 from newsreap.objects.index.Collection import CollectionSource
 from newsreap.objects.index.ObjectBase import ObjectBase as IndexBase
 from newsreap.objects.index.Collection import CollectionState
+from newsreap.objects.index.Segment import Segment
 
 from tests.FakeNNTPServer import FakeNNTPServer
 from tests.SearchPlan import search_plan
@@ -1479,6 +1480,187 @@ def test_index_and_save_from_the_command_line(tmp_path, caplog,
         assert nr('nzb', 'import', nzb_file).exit_code == 1
 
 
+def test_status_names_deletes_that_were_not_finished(tmp_path, monkeypatch):
+    """
+    nr db status counts the collections a stopped delete left part way and
+    says how to finish them (naming the first few)
+    """
+    from newsreap.cli import cli
+    from newsreap.NNTPSettings import NNTPSettings
+    from newsreap import NNTPIndexer as module
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000008 0000000001 y\n' % GROUP)
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        for no, (subject, poster, message_id) in enumerate([
+                *release('Holiday.Photos', files=2, segments=2),
+                *release('Garden.Photos', files=2, segments=2)], 1):
+            server.add_overview(
+                GROUP, no, subject, poster, POSTED + timedelta(minutes=no),
+                message_id, size=1000)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args):
+            return runner.invoke(cli, ['--config', config, *args], obj={})
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+        assert nr('update', GROUP).exit_code == 0
+        assert 'Not fully deleted' not in nr('db', 'status').output
+
+        # Both marked as deleted with their files still there (as a delete
+        # that stopped part way leaves them)
+        indexer = NNTPIndexer(NNTPSettings(cfg_file=config).index_database())
+        try:
+            session = indexer.session()
+            ids = sorted(i for i, in session.query(Collection.id))
+            assert len(ids) == 2
+            session.query(Collection).update(
+                {Collection.state: CollectionState.Deleted})
+            session.commit()
+
+        finally:
+            indexer.close()
+
+        result = nr('db', 'status')
+        assert result.exit_code == 0
+        assert 'Not fully deleted: 2 (to finish: nr delete %d %d)' % tuple(
+            ids) in ' '.join(result.output.split())
+
+        monkeypatch.setattr(module, 'ID_SAMPLES', 1)
+        assert 'Not fully deleted: 2 (to finish: nr delete %d ...)' % ids[0] \
+            in ' '.join(nr('db', 'status').output.split())
+
+        # Running the delete again finishes them
+        result = nr('-y', 'delete', *(str(i) for i in ids))
+        assert result.exit_code == 0, result.output
+        assert 'Not fully deleted' not in nr('db', 'status').output
+
+
+def test_removing_carries_on_past_a_collection_that_fails(
+        tmp_path, caplog, monkeypatch):
+    """
+    nr delete and nr search --delete report a collection (or a chunk of
+    articles) they couldn't remove and go on with the rest; an id and a
+    GID of the same collection count as one
+    """
+    from sqlalchemy.exc import OperationalError
+    from newsreap.cli import cli
+    from newsreap.NNTPSettings import NNTPSettings
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000016 0000000001 y\n' % GROUP)
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        for no, (subject, poster, message_id) in enumerate([
+                *release('Holiday.Photos', files=2, segments=2),
+                *release('Holiday.Videos', files=2, segments=2),
+                *release('Garden.Photos', files=2, segments=2),
+                *release('Beach.Trip', files=2, segments=2)], 1):
+            server.add_overview(
+                GROUP, no, subject, poster, POSTED + timedelta(minutes=no),
+                message_id, size=1000)
+
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args):
+            return runner.invoke(cli, ['--config', config, *args], obj={})
+
+        assert nr('db', 'init').exit_code == 0
+        assert nr('group', 'refresh').exit_code == 0
+        assert nr('update', GROUP).exit_code == 0
+
+        indexer = NNTPIndexer(NNTPSettings(cfg_file=config).index_database())
+        try:
+            found = {c.name: (c.id, c.gid) for c in indexer.find()}
+
+        finally:
+            indexer.close()
+
+        photos, videos = found['Holiday.Photos'], found['Holiday.Videos']
+        garden = found['Garden.Photos']
+        assert garden[1] is not None
+
+        # The first one asked for fails; the other is still removed (a
+        # database error is shown without its SQL)
+        real = NNTPIndexer._delete
+        failures = {
+            photos[0]: OperationalError(
+                'DELETE', {}, Exception('database or disk is full')),
+            videos[0]: OSError(28, 'No space left on device')}
+
+        def failing(self, session, collection_id, *args):
+            if collection_id in failures:
+                raise failures.pop(collection_id)
+            return real(self, session, collection_id, *args)
+
+        monkeypatch.setattr(NNTPIndexer, '_delete', failing)
+        caplog.clear()
+        result = nr('-y', 'delete', str(photos[0]), str(garden[0]))
+        assert result.exit_code == 1
+        assert 'Removed [%d] Garden.Photos' % garden[0] in result.output
+        assert "Could not remove collection %d (database or disk is " \
+            "full); run 'nr delete %d' again to finish it." % (
+                photos[0], photos[0]) in caplog.text
+
+        # The same through a search
+        caplog.clear()
+        result = nr('-y', 'search', 'holiday', '--delete')
+        assert result.exit_code == 1
+        assert "Could not remove collection %d ([Errno 28] No space left " \
+            "on device); run 'nr delete %d' to finish it." % (
+                videos[0], videos[0]) in caplog.text
+
+        # (it failed before anything was done, so it is still there)
+        assert nr('search', 'holiday', '-q').output.split() == [
+            str(videos[0])]
+
+        # Once it works: its id and its GID are the same collection
+        result = nr('-y', 'delete', str(videos[0]), videos[1])
+        assert result.exit_code == 0, result.output
+        assert result.output.count('Removed [%d]' % videos[0]) == 1
+
+        # An id that isn't a collection still fails
+        assert nr('-y', 'delete', '999').exit_code == 1
+
+        # Articles a search found that can't be removed are reported
+        def no_room(*args, **kwargs):
+            raise OSError(28, 'No space left on device')
+
+        monkeypatch.setattr(NNTPIndexer, 'forget_articles', no_room)
+        caplog.clear()
+        result = nr('-y', 'search', '--articles', '-g', GROUP, 'beach',
+                    '--delete')
+        assert result.exit_code == 1
+        assert 'Could not remove 4 article(s) ([Errno 28] No space left ' \
+            'on device).' in caplog.text
+
+
+def test_a_failed_purge_lets_go_of_the_index(paths, monkeypatch):
+    """
+    purge() undoes the chunk it failed on, so other workers can carry on
+    """
+    cache(paths[GROUP], list(release('Holiday', files=1, segments=2)))
+    indexer = indexed(paths, GROUP)
+    try:
+        def no_room(ids):
+            indexer.lock(indexer.session())
+            raise OSError(28, 'No space left on device')
+
+        monkeypatch.setattr(indexer, 'forget_articles', no_room)
+        with pytest.raises(OSError):
+            indexer.purge(['holiday.1.1@example.com'])
+
+        assert not indexer.session().in_transaction()
+
+    finally:
+        indexer.close()
+
+
 def test_fetched_headers_can_be_searched_right_away(tmp_path):
     """
     nr update indexes what it fetched; nr db status shows what is
@@ -1999,6 +2181,175 @@ def test_deleting_a_collection_reads_its_articles_a_page_at_a_time(paths):
             headers=80, posts=0, articles=80, files=40, collections=1)
         assert len(reads) < 10
         assert cached_ids(paths[GROUP]) == set()
+
+    finally:
+        indexer.close()
+
+
+def test_deleting_a_collection_removes_its_articles_a_chunk_at_a_time(
+        paths, monkeypatch):
+    """
+    delete() removes a chunk of articles at a time, each with what is
+    kept of them elsewhere, and needs no temporary files to do it
+    """
+    from newsreap import NNTPIndexer as module
+
+    cache(paths[GROUP], list(release('Holiday', files=2, segments=5)))
+    indexer = indexed(paths, GROUP)
+    try:
+        collection = next(c for c in indexer.find() if c.name == 'Holiday')
+        session = indexer.session()
+
+        # Two articles to a chunk; no temporary files can be made
+        monkeypatch.setattr(module, 'IN_LIST_SIZE', 2)
+        monkeypatch.setattr(module, 'SORT_RUN_SIZE', 2)
+
+        def no_room(*args, **kwargs):
+            raise OSError(28, 'No space left on device')
+
+        monkeypatch.setattr(module, 'mkdtemp', no_room)
+
+        found, done = statements(session.get_bind(), 'DELETE FROM segment')
+        try:
+            assert indexer.delete(collection.id, group_database=paths.get)
+
+        finally:
+            done()
+
+        removed = [rows for _, rows in found]
+        assert sum(removed) == 10
+        assert max(removed) <= 2
+        assert indexer.purged.articles == 10
+        assert cached_ids(paths[GROUP]) == set()
+
+    finally:
+        indexer.close()
+
+
+def test_a_collection_being_deleted_is_hidden_and_gets_nothing_new(paths):
+    """
+    A collection is marked as deleted before its articles go, so while it
+    is removed:
+
+    - get() and searches no longer find it
+    - articles indexed meanwhile that belong to it are left out
+    """
+    cache(paths[GROUP], list(release('Holiday', files=3, only=(1, 2))))
+    indexer = indexed(paths, GROUP)
+    other = NNTPIndexer(paths['index'])
+    try:
+        collection_id = indexer.find(['holiday'])[0].id
+        session = indexer.session()
+        pages = indexer._file_pages
+        seen = []
+
+        def paged(session, collection_id):
+            # One file to a page; the other worker looks in between
+            for page in pages(session, collection_id, size=1):
+                yield page
+                if not seen:
+                    seen.append(other.get(collection_id))
+                    seen.append(other.find(['holiday']))
+                    cache(paths[GROUP], list(release(
+                        'Holiday', files=3, only=(3, ))), start=100)
+                    other.index(GROUP, paths[GROUP])
+
+        indexer._file_pages = paged
+        assert indexer.delete(collection_id, group_database=paths.get)
+
+        assert seen == [None, []]
+        assert session.query(CollectionFile).filter(
+            CollectionFile.collection_id == collection_id).count() == 0
+        assert session.get(Collection, collection_id).state == \
+            CollectionState.Deleted
+
+    finally:
+        other.close()
+        indexer.close()
+
+
+def test_an_indexer_leaves_out_a_collection_deleted_during_its_run(paths):
+    """
+    An indexer that already looked at a collection asks again before
+    adding to it, so one deleted while it runs gets nothing new
+    """
+    cache(paths[GROUP], list(release('Holiday', files=2, segments=2)))
+    caught_up(paths[GROUP], LATER)
+
+    # Two articles (one file) at a time
+    indexer = NNTPIndexer(paths['index'], chunk_size=2)
+    other = NNTPIndexer(paths['index'])
+    try:
+        real = indexer._index_rows
+        deleted = []
+
+        def index_rows(session, *args):
+            found = real(session, *args)
+            if not deleted:
+                # Removed by another worker after the first file
+                collection_id = session.query(Collection.id).scalar()
+                assert other.delete(collection_id) is True
+                deleted.append(collection_id)
+            return found
+
+        indexer._index_rows = index_rows
+        indexer.index(GROUP, paths[GROUP])
+
+        session = indexer.session()
+        assert session.query(CollectionFile).filter(
+            CollectionFile.collection_id == deleted[0]).count() == 0
+        assert session.query(Segment).count() == 0
+
+    finally:
+        other.close()
+        indexer.close()
+
+
+def test_a_stopped_delete_is_finished_by_running_it_again(paths,
+                                                          monkeypatch):
+    """
+    A delete that fails part way undoes only the chunk it was on: the
+    collection stays hidden, get(unfinished=True) still finds it, and
+    deleting it again removes what is left (with what is kept of it)
+    """
+    from newsreap import NNTPIndexer as module
+
+    cache(paths[GROUP], list(release('Holiday', files=1, segments=4)))
+    indexer = indexed(paths, GROUP)
+    try:
+        collection_id = indexer.find(['holiday'])[0].id
+        session = indexer.session()
+
+        # Two articles to a chunk; the second chunk's headers can't be
+        # removed
+        monkeypatch.setattr(module, 'IN_LIST_SIZE', 2)
+        real = indexer._purge_headers
+        calls = []
+
+        def failing(*args):
+            calls.append(args)
+            if len(calls) == 2:
+                raise OSError(5, 'Input/output error')
+            return real(*args)
+
+        indexer._purge_headers = failing
+        with pytest.raises(OSError):
+            indexer.delete(collection_id, group_database=paths.get)
+
+        # (the index is let go of, so other workers can carry on)
+        assert not session.in_transaction()
+        assert len(cached_ids(paths[GROUP])) == 2
+        assert session.query(Segment).count() == 2
+        assert indexer.get(collection_id) is None
+        assert indexer.get(collection_id, unfinished=True).id == \
+            collection_id
+
+        del indexer._purge_headers
+        assert indexer.delete(collection_id, group_database=paths.get)
+        assert indexer.purged.articles == 2
+        assert cached_ids(paths[GROUP]) == set()
+        assert session.query(Segment).count() == 0
+        assert indexer.get(collection_id, unfinished=True) is None
 
     finally:
         indexer.close()
@@ -2620,7 +2971,7 @@ def test_merging_compares_the_files_a_few_at_a_time(paths, tmp_path,
 
         def note(conn, cursor, statement, *args):
             if statement.lstrip().upper().startswith('SELECT') and \
-                    re.search(r'collection_file\."?key\b', statement) and \
+                    re.search(r'collection_file\.\W?key\b', statement) and \
                     'collection_file.collection_id =' in statement:
                 reads.append(statement)
 
@@ -2644,3 +2995,318 @@ def test_merging_compares_the_files_a_few_at_a_time(paths, tmp_path,
 
     finally:
         indexer.close()
+
+
+def test_a_collections_files_are_removed_a_chunk_at_a_time(paths, tmp_path,
+                                                          monkeypatch):
+    """
+    Clearing a collection's files (a copy of one deleted, or one replaced)
+    lets go of them a chunk at a time, never with one statement for all
+    """
+    from sqlalchemy import event
+    from newsreap import NNTPIndexer as module
+    from newsreap.objects.index.Segment import Segment
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        path = nzb_file(tmp_path / 'five.nzb', 'Five', range(1, 6), total=5)
+        collection_id = indexer.import_nzb(path)[0].id
+
+        # Two files at a time
+        monkeypatch.setattr(module, 'IN_LIST_SIZE', 2)
+
+        deletes = []
+
+        def note(conn, cursor, statement, *args):
+            if statement.lstrip().upper().startswith('DELETE FROM SEGMENT'):
+                deletes.append(statement)
+
+        session = indexer.session()
+        engine = session.get_bind()
+        event.listen(engine, 'before_cursor_execute', note)
+        try:
+            indexer._remove(session, collection_id)
+            session.commit()
+
+        finally:
+            event.remove(engine, 'before_cursor_execute', note)
+
+        # (each removes a page of files it was given, never every file of
+        # the collection)
+        assert len(deletes) == 3
+        assert not [d for d in deletes if 'COLLECTION_FILE' in d.upper()]
+        assert session.query(CollectionFile).filter(
+            CollectionFile.collection_id == collection_id).count() == 0
+        assert session.query(Segment).count() == 0
+
+    finally:
+        indexer.close()
+
+
+def statements(engine, starts):
+    """
+    Notes (statement, rows it changed) for each statement sent to the
+    database that starts with `starts`, until the listener returned is
+    removed (call it)
+    """
+    from sqlalchemy import event
+
+    found = []
+
+    def note(conn, cursor, statement, *args):
+        if statement.lstrip().upper().startswith(starts.upper()):
+            found.append((statement, cursor.rowcount))
+
+    event.listen(engine, 'after_cursor_execute', note)
+    return found, lambda: event.remove(engine, 'after_cursor_execute', note)
+
+
+def test_scanned_collections_left_with_nothing_are_removed_together(
+        paths, tmp_path):
+    """
+    The scanned collections an NZB file leaves with nothing are removed
+    with one statement (all but the one that becomes it)
+    """
+    names = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Omega']
+    cache(paths[GROUP], [
+        article for name in names
+        for article in release(name, files=1, segments=2)])
+    indexer = indexed(paths)
+    try:
+        scanned = {c.name: c.id for c in indexer.find()}
+        assert sorted(scanned) == sorted(names)
+
+        # One NZB file of all of them
+        nzb = NNTPnzb()
+        for name in names:
+            path = str(tmp_path / ('%s.nzb' % name))
+            assert indexer.nzb(scanned[name], path) is True
+            for post in NNTPnzb(path):
+                nzb.add(post)
+
+        path = str(tmp_path / 'all.nzb')
+        assert nzb.save(path) is True
+
+        session = indexer.session()
+        found, done = statements(session.get_bind(), 'DELETE FROM collection ')
+        try:
+            collection, added = indexer.import_nzb(path)
+
+        finally:
+            done()
+
+        assert added is True
+        assert len(found) == 1
+        assert found[0][1] == 4
+        assert [c.id for c in indexer.find(forming=True)] == [collection.id]
+        assert (collection.files, collection.segments) == (5, 10)
+
+    finally:
+        indexer.close()
+
+
+def test_merging_many_collections_works_a_chunk_at_a_time(
+        paths, tmp_path, monkeypatch, caplog):
+    """
+    An NZB file sharing articles with many collections (from other NZB
+    files) only holds a chunk of them at a time:
+    - refused, it names the first few and counts the rest
+    - merged, they are replaced a chunk at a time (no list sent to the
+      database is longer than a chunk), and only the first few are named
+    """
+    from newsreap import NNTPIndexer as module
+
+    # Two at a time
+    chunked = module.chunked
+    monkeypatch.setattr(module, 'chunked', lambda items, size=2: chunked(
+        items, 2))
+    monkeypatch.setattr(module, 'IN_LIST_SIZE', 2)
+    monkeypatch.setattr(module, 'SORT_RUN_SIZE', 2)
+    monkeypatch.setattr(module, 'ID_SAMPLES', 2)
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        ids = [indexer.import_nzb(nzb_file(
+            tmp_path / ('%d.nzb' % f), 'Many', (f, ), total=6,
+            meta=(('password', 'p%d' % f), )))[0].id for f in range(1, 6)]
+        gids = [indexer.get(i).gid for i in ids]
+
+        # All of them, and one more
+        whole = nzb_file(tmp_path / 'whole.nzb', 'Many', range(1, 7),
+                         total=6)
+
+        caplog.clear()
+        assert indexer.import_nzb(whole) == (None, False)
+        assert 'shares articles with collections #%d, #%d and 3 more' % (
+            ids[0], ids[1]) in caplog.text
+
+        session = indexer.session()
+        found, done = statements(session.get_bind(), '')
+        try:
+            collection, added = indexer.import_nzb(whole, merge=True)
+
+        finally:
+            done()
+
+        # It has the first one's GID, so it keeps that one's id
+        assert (collection.id, added) == (ids[0], True)
+        assert (indexer.replaced, indexer.replaced_count) == (ids[1:3], 4)
+        assert (indexer.merged, indexer.dropped) == (5, 0)
+        assert (collection.files, collection.files_expected) == (6, 6)
+
+        # No list sent to the database was longer than a chunk
+        lists = [part.count('?') for statement, _ in found
+                 for part in re.findall(r'\bIN \(([^()]*)\)', statement)]
+        assert lists
+        assert max(lists) <= 2
+
+        # Nothing else is left; every old GID finds it, and every detail
+        # they had is kept
+        assert [c.id for c in indexer.find(forming=True)] == [ids[0]]
+        for gid in gids:
+            assert indexer.get(gid).id == ids[0]
+
+        path = str(tmp_path / 'saved.nzb')
+        assert indexer.nzb(ids[0], path) is True
+        assert NNTPnzb(path).meta['password'] == [
+            'p1', 'p2', 'p3', 'p4', 'p5']
+
+    finally:
+        indexer.close()
+
+
+def test_a_files_articles_are_removed_a_page_at_a_time(
+        paths, tmp_path, monkeypatch):
+    """
+    A file with more articles than a page holds has them removed a page
+    at a time when its collection's files are cleared
+    """
+    from newsreap import NNTPIndexer as module
+
+    indexer = NNTPIndexer(paths['index'])
+    try:
+        path = nzb_file(tmp_path / 'big.nzb', 'Big', (1, 2), total=2,
+                        segments=8)
+        collection_id = indexer.import_nzb(path)[0].id
+
+        # Three articles to a page
+        monkeypatch.setattr(module, 'ARTICLE_PAGE_SIZE', 3)
+
+        session = indexer.session()
+        found, done = statements(session.get_bind(), 'DELETE FROM segment')
+        try:
+            indexer._remove(session, collection_id)
+            session.commit()
+
+        finally:
+            done()
+
+        removed = [rows for _, rows in found]
+        assert sum(removed) == 16
+        assert max(removed) <= 3
+        assert session.query(module.Segment).count() == 0
+        assert session.query(CollectionFile).count() == 0
+
+    finally:
+        indexer.close()
+
+
+def test_importing_keeps_temporary_files_in_the_work_directory(
+        tmp_path, monkeypatch):
+    """
+    nr nzb import makes its temporary files in the configured work
+    directory, not the system's temporary folder
+    """
+    from newsreap.cli import cli
+    from newsreap.NNTPSettings import NNTPSettings
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000001 0000000001 y\n' % GROUP)
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        config = config_for(server, tmp_path / 'config.yaml')
+        work_dir = NNTPSettings(cfg_file=config).work_dir
+        runner = CliRunner()
+        assert runner.invoke(
+            cli, ['--config', config, 'db', 'init'], obj={}).exit_code == 0
+
+        real = NNTPIndexer._copy_nzb
+        used = []
+
+        def copy(path, work_dir=None):
+            used.append(work_dir)
+            return real(path, work_dir)
+
+        monkeypatch.setattr(NNTPIndexer, '_copy_nzb', staticmethod(copy))
+        path = nzb_file(tmp_path / 'one.nzb', 'One', (1, ))
+        result = runner.invoke(
+            cli, ['--config', config, 'nzb', 'import', path], obj={})
+        assert result.exit_code == 0
+
+        assert used == [work_dir]
+
+
+def test_importing_carries_on_past_a_file_that_fails(tmp_path, caplog,
+                                                     monkeypatch):
+    """
+    nr nzb import reports an NZB file it couldn't import (ie: no room for
+    its temporary files) and goes on with the next; a merge names the
+    first few collections it replaced and counts the rest
+    """
+    from sqlalchemy.exc import OperationalError
+    from newsreap.cli import cli
+    from newsreap import NNTPIndexer as module
+
+    group_list = tmp_path / 'group.list'
+    group_list.write_text('%s 0000000001 0000000001 y\n' % GROUP)
+
+    with FakeNNTPServer(group_list=str(group_list)) as server:
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args):
+            return runner.invoke(cli, ['--config', config, *args], obj={})
+
+        assert nr('db', 'init').exit_code == 0
+
+        first, second, third = (
+            nzb_file(tmp_path / ('%d.nzb' % f), 'Mix', (f, ), total=4)
+            for f in (1, 2, 3))
+
+        failures = {
+            second: OSError(28, 'No space left on device'),
+            third: OperationalError(
+                'INSERT', {}, Exception('database or disk is full'))}
+        real = NNTPIndexer._import_copy
+
+        def failing(self, path, *args):
+            if path in failures:
+                raise failures[path]
+            return real(self, path, *args)
+
+        monkeypatch.setattr(NNTPIndexer, '_import_copy', failing)
+
+        caplog.clear()
+        result = nr('nzb', 'import', second, first, third)
+        assert result.exit_code == 1
+        assert '[     1] 1 (imported)' in result.output
+        assert "Could not import '%s': [Errno 28] No space left" % second \
+            in caplog.text
+        assert "Could not import '%s': database or disk is full" % third \
+            in caplog.text
+
+        # Nothing was left of them; they import once there is room
+        monkeypatch.setattr(NNTPIndexer, '_import_copy', real)
+        result = nr('nzb', 'import', second, third)
+        assert result.exit_code == 0
+        assert '[     2] 2 (imported)' in result.output
+        assert '[     3] 3 (imported)' in result.output
+
+        # Merged, only the first collection it replaced is named
+        monkeypatch.setattr(module, 'ID_SAMPLES', 1)
+        whole = nzb_file(tmp_path / 'whole.nzb', 'Mix', (1, 2, 3, 4),
+                         total=4)
+        result = nr('nzb', 'import', whole, '--merge')
+        assert result.exit_code == 0
+        assert '[     1] 1 (merged: 3 file(s) added, 0 dropped; ' \
+            'replaced #2 and 1 more)' in result.output

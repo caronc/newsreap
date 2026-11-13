@@ -31,6 +31,7 @@ from os.path import dirname
 from os.path import exists
 from os.path import isdir
 from os.path import join
+from sqlalchemy.exc import SQLAlchemyError
 
 try:
     from newsreap.Logging import NEWSREAP_CLI
@@ -244,7 +245,20 @@ def nzb_import(ctx, paths, name, merge):
     indexer = open_index(ctx)
     try:
         for path in paths:
-            entry, added = indexer.import_nzb(path, name=name, merge=merge)
+            try:
+                entry, added = indexer.import_nzb(
+                    path, name=name, merge=merge,
+                    work_dir=ctx['NNTPSettings'].work_dir)
+
+            except (OSError, SQLAlchemyError) as e:
+                # (ie: no room left for its temporary files); what it did
+                # was undone, and the next one is tried.  A database error
+                # is shown as the database gave it (without the SQL)
+                logger.error("Could not import '%s': %s" % (
+                    path, getattr(e, 'orig', None) or e))
+                failed += 1
+                continue
+
             if entry is None:
                 logger.error("Could not import '%s'." % path)
                 failed += 1
@@ -256,6 +270,9 @@ def nzb_import(ctx, paths, name, merge):
                 if indexer.replaced:
                     status += '; replaced %s' % ', '.join(
                         '#%d' % i for i in indexer.replaced)
+                    if indexer.replaced_count > len(indexer.replaced):
+                        status += ' and %d more' % (
+                            indexer.replaced_count - len(indexer.replaced))
 
             elif added:
                 status = 'imported'

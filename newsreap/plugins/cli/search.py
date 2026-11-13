@@ -54,6 +54,7 @@ from sqlalchemy import and_
 from sqlalchemy import or_
 from sqlalchemy import func
 from sqlalchemy import literal
+from sqlalchemy.exc import SQLAlchemyError
 
 from newsreap.NNTPArchiver import DEFAULT_ARCHIVE_MAX_SIZE
 from newsreap.NNTPArchiver import NNTPArchiver
@@ -1151,8 +1152,21 @@ def forget(ctx, found):
     indexer = NNTPIndexer(settings.index_database())
     try:
         for entry in found.entries('collection'):
-            if not indexer.delete(
-                    entry.key, group_database=settings.group_database):
+            # One that fails (ie: no room left) doesn't stop the others; the
+            # chunk it was on was undone
+            try:
+                done = indexer.delete(
+                    entry.key, group_database=settings.group_database)
+
+            except (OSError, SQLAlchemyError) as e:
+                logger.error(
+                    "Could not remove collection %s (%s); run 'nr delete "
+                    "%s' to finish it." % (
+                        entry.key, getattr(e, 'orig', None) or e, entry.key))
+                failed += 1
+                continue
+
+            if not done:
                 logger.error('Could not remove collection %s.' % entry.key)
                 failed += 1
                 continue
@@ -1164,11 +1178,19 @@ def forget(ctx, found):
 
         for kind in ('post', 'article'):
             for chunk in found.chunks(kind):
-                removed = indexer.purge(
-                    [entry.key for entry in chunk],
-                    group_database=settings.group_database,
-                    groups={entry.data.get('group') for entry in chunk
-                            if entry.data.get('group')})
+                try:
+                    removed = indexer.purge(
+                        [entry.key for entry in chunk],
+                        group_database=settings.group_database,
+                        groups={entry.data.get('group') for entry in chunk
+                                if entry.data.get('group')})
+
+                except (OSError, SQLAlchemyError) as e:
+                    # Searching again finds what is left of them
+                    logger.error('Could not remove %d %s(s) (%s).' % (
+                        len(chunk), kind, getattr(e, 'orig', None) or e))
+                    failed += len(chunk)
+                    continue
 
                 # A post found is the post kept, and an article found its
                 # header in the group it was found in

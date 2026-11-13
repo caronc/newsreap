@@ -218,6 +218,13 @@ def show_index(index, gpg=None, retries=0):
            ' (articles still arriving)')
     detail('Deleted', count(states.get(CollectionState.Deleted)) +
            ' (with nr delete; they stay away)')
+    if totals['unfinished']:
+        # A delete that stopped part way; running it again finishes it
+        detail('Not fully deleted', '%s (to finish: nr delete %s%s)' % (
+            count(totals['unfinished']),
+            ' '.join(str(i) for i in totals['unfinished_ids']),
+            ' ...' if totals['unfinished'] > len(totals['unfinished_ids'])
+            else ''))
 
     detail('Obfuscated', count(totals['obfuscated']) +
            ' (put together from how they were posted)')
