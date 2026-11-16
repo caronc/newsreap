@@ -341,10 +341,50 @@ def test_nr_get_carries_on_a_download_a_search_started(
     assert len(list((tmp_path / 'cache' / 'downloads').iterdir())) == 1
 
     before = len(server.commands())
-    nr('get', '1')
+    nr('get', '1', '--output', str(tmp_path / 'got'))
     assert {c.split('<', 1)[1].rstrip('>') for c in server.commands()[before:]
             if c.startswith('ARTICLE <')} == {
         'notes.txt.2@example.com', CHATTER_ID}
+
+
+def test_a_finished_search_download_keeps_what_another_download_left(
+        tmp_path, indexed):
+    """
+    -d of a collection that shares its staging directory with an unfinished
+    nr get listing more never removes it once it is done; nr get carries on
+    there, fetching only what is still missing
+    """
+    server, nr = indexed
+    extra = post(server, tmp_path, 'extra.bin', b'x' * 3000)
+    server.on(r'^ARTICLE <extra.bin.1@example.com>$',
+              Reply('430 No such article'), once=True)
+    (tmp_path / 'more').mkdir()
+    more = write_nzb(tmp_path / 'more' / 'release.nzb', [
+        ('notes.txt', [(no, 'notes.txt.%d@example.com' % no)
+                       for no in (1, 2, 3)]),
+        ('readme.nfo', [(1, 'readme.nfo.1@example.com')]),
+        ('chatter', [(1, CHATTER_ID)]), extra])
+
+    # (the text article is never a whole file to nr get, so it never
+    # finishes; what matters is where it carries on)
+    got = str(tmp_path / 'got')
+    assert nr('get', more, '--retry-missing', '-o', got).exit_code == 1
+    downloads = tmp_path / 'cache' / 'downloads'
+    staging = list(downloads.iterdir())
+    assert len(staging) == 1
+
+    result = nr('-y', 'search', 'release', '-d', '-o', str(tmp_path / 'out'))
+    assert result.exit_code == 0, result.output
+    assert list(downloads.iterdir()) == staging
+
+    before = len(server.commands())
+    result = nr('get', more, '--retry-missing', '-o', got)
+    assert 'another download' not in result.output, result.output
+    assert {c.split('<', 1)[1].rstrip('>')
+            for c in server.commands()[before:]
+            if c.startswith('ARTICLE <')} == {
+        'extra.bin.1@example.com', CHATTER_ID}
+    assert os.path.isfile(os.path.join(got, 'release', 'extra.bin'))
 
 
 def test_an_nzb_file_is_saved_and_only_replaced_when_it_changes(

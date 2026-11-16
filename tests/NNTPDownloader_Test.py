@@ -285,6 +285,121 @@ def test_one_download_is_never_run_twice_at_once(tmp_path, usenet):
         assert second.staging != first.staging
 
 
+def test_another_download_of_the_same_name_is_refused_unless_forced(
+        tmp_path, usenet):
+    """
+    An NZB file of the same name and first article as an unfinished
+    download, but listing other articles, never uses (or removes) what that
+    download left; forced, it starts over in a staging directory emptied
+    for it and a download folder of its own
+    """
+    server, downloader = usenet
+    notes = post(server, tmp_path, 'notes.txt', NOTES, parts=2)
+    readme = post(server, tmp_path, 'readme.nfo', README)
+    extra = post(server, tmp_path, 'extra.bin', b'x' * 3000)
+    server.on(r'^ARTICLE <readme.nfo.1@example.com>$',
+              Reply('430 No such article'))
+    (tmp_path / 'a').mkdir()
+    (tmp_path / 'b').mkdir()
+    first = write_nzb(tmp_path / 'a' / 'release.nzb', [notes, readme])
+    other = write_nzb(tmp_path / 'b' / 'release.nzb', [notes, extra])
+
+    get = downloader()
+    assert get.download(first) is False
+    folder, staging = get.folder, get.staging
+    assert sorted(os.listdir(folder)) == ['notes.txt', 'readme.nfo.ERRORS']
+    left = sorted(os.listdir(os.path.join(staging, 'parts')))
+
+    # Refused: nothing is fetched, and nothing of the first is touched
+    before = len(server.commands())
+    assert get.download(other) is False
+    assert get.staging == staging and get.others == 1
+    assert 'holds another download of the same name' in get.problem
+    assert asked_since(server, before) == set()
+    assert sorted(os.listdir(folder)) == ['notes.txt', 'readme.nfo.ERRORS']
+    assert sorted(os.listdir(os.path.join(staging, 'parts'))) == left
+
+    # The first carries on as before
+    assert get.download(first) is False and get.others == 0
+    assert get.folder == folder and get.resumed == 2
+
+    # Forced: started over (everything fetched again), placed apart
+    before = len(server.commands())
+    assert get.download(other, force=True) is True, get.problem
+    assert asked_since(server, before) == {
+        'notes.txt.1@example.com', 'notes.txt.2@example.com',
+        'extra.bin.1@example.com'}
+    assert get.folder == str(tmp_path / 'Downloads' / 'release.2')
+    assert sorted(os.listdir(get.folder)) == ['extra.bin', 'notes.txt']
+    assert sorted(os.listdir(folder)) == ['notes.txt', 'readme.nfo.ERRORS']
+    assert not os.path.exists(staging)
+
+
+def test_a_download_that_grew_carries_on_where_it_left_off(tmp_path, usenet):
+    """
+    An NZB file listing everything an unfinished download listed, and
+    more (ie: a collection that grew), carries on with it: nothing is
+    fetched twice, and it finishes in the same folder
+    """
+    server, downloader = usenet
+    notes = post(server, tmp_path, 'notes.txt', NOTES, parts=2)
+    readme = post(server, tmp_path, 'readme.nfo', README)
+    server.on(r'^ARTICLE <readme.nfo.1@example.com>$',
+              Reply('430 No such article'), once=True)
+    (tmp_path / 'more').mkdir()
+    first = write_nzb(tmp_path / 'release.nzb', [notes, readme])
+    grown = write_nzb(tmp_path / 'more' / 'release.nzb', [
+        notes, readme, post(server, tmp_path, 'extra.bin', b'x' * 3000)])
+
+    get = downloader(retry_missing=True)
+    assert get.download(first) is False
+    folder = get.folder
+
+    before = len(server.commands())
+    assert get.download(grown) is True, get.problem
+    assert asked_since(server, before) == {
+        'readme.nfo.1@example.com', 'extra.bin.1@example.com'}
+    assert get.folder == folder
+    assert sorted(os.listdir(folder)) == [
+        'extra.bin', 'notes.txt', 'readme.nfo']
+
+
+def test_a_download_refused_on_the_command_line_says_how_to_force_it(
+        tmp_path):
+    """
+    nr get says how to start over a download whose staging directory
+    holds another download (and exits 1); --force does
+    """
+    from newsreap.cli import cli
+
+    with FakeNNTPServer(join_group=False) as server:
+        notes = post(server, tmp_path, 'notes.txt', NOTES)
+        readme = post(server, tmp_path, 'readme.nfo', README)
+        server.on(r'^ARTICLE <readme.nfo.1@example.com>$',
+                  Reply('430 No such article'))
+        (tmp_path / 'a').mkdir()
+        (tmp_path / 'b').mkdir()
+        first = write_nzb(tmp_path / 'a' / 'release.nzb', [notes, readme])
+        other = write_nzb(tmp_path / 'b' / 'release.nzb', [notes])
+        config = config_for(server, tmp_path / 'config.yaml')
+        runner = CliRunner()
+
+        def nr(*args):
+            return runner.invoke(cli, ['--config', config, *args], obj={})
+
+        out = str(tmp_path / 'out')
+        assert nr('get', first, '--output', out).exit_code == 1
+
+        result = nr('get', other, '--output', out)
+        assert result.exit_code == 1
+        assert 'Run it again with --force to start it over' in result.output
+
+        result = nr('get', other, '--output', out, '-f')
+        assert result.exit_code == 0, result.output
+        assert 'Saved in %s' % os.path.join(out, 'release.2') in \
+            result.output
+
+
 def zipped(entries):
     """
     Returns a zip archive holding the files given (path -> bytes)

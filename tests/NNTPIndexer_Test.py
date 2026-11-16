@@ -1857,6 +1857,26 @@ def test_a_collection_to_download_comes_a_page_of_files_at_a_time(paths):
         indexer.close()
 
 
+def test_nothing_is_held_open_while_a_page_is_downloaded(paths):
+    """
+    fetch_file_pages() lets go of what it read before handing over each
+    page (a page can take hours to download)
+    """
+    cache(paths[GROUP], list(release('Holiday', files=3, segments=3)))
+    indexer = indexed(paths, GROUP)
+    try:
+        collection = indexer.find(['holiday'])[0]
+        session = indexer.session()
+        session.commit()
+
+        pages = indexer.fetch_file_pages(collection.id, size=3)
+        for _ in pages:
+            assert not session.in_transaction()
+
+    finally:
+        indexer.close()
+
+
 def test_forgetting_a_group_removes_a_big_file_a_page_at_a_time(
         paths, monkeypatch):
     """
@@ -1978,6 +1998,67 @@ def test_a_stopped_forget_group_is_finished_by_running_it_again(
         assert session.query(Segment).count() == 0
         assert session.query(CollectionFile).count() == 0
         assert session.query(Collection).count() == 0
+
+    finally:
+        indexer.close()
+
+
+def test_a_file_tagged_while_its_group_is_forgotten_is_counted_again(
+        paths, monkeypatch):
+    """
+    A file another indexer tags with its group while forget_group() is
+    part way through removing its articles stays, with its totals (and its
+    collection's) matching the articles it has left
+    """
+    from newsreap import NNTPIndexer as module
+    from newsreap.objects.index.FileGroup import FileGroup
+
+    cache(paths[GROUP], list(release('Holiday', files=1, segments=8)))
+    indexer = indexed(paths, GROUP)
+    try:
+        session = indexer.session()
+
+        # Three articles to a page
+        monkeypatch.setattr(module, 'ARTICLE_PAGE_SIZE', 3)
+
+        # Once the first page is gone, another indexer finds one of the
+        # articles left in its own group (a crosspost) and tags the file
+        real_lock = indexer.lock
+        passes = []
+
+        def lock(session):
+            passes.append(True)
+            if len(passes) == 3:
+                left = session.query(Segment.message_id).first()[0]
+                assert session.query(Segment).count() == 5
+                session.commit()
+
+                cache(paths[OTHER], [
+                    entry for entry in release('Holiday', files=1, segments=8)
+                    if entry[2] == left])
+                other = NNTPIndexer(paths['index'])
+                try:
+                    other.index(OTHER, paths[OTHER])
+
+                finally:
+                    other.close()
+
+            return real_lock(session)
+
+        monkeypatch.setattr(indexer, 'lock', lock)
+        assert indexer.forget_group(GROUP) == (0, 0, 0)
+
+        # The file stays (in the other group only), counted as it is now
+        entry = session.query(CollectionFile).one()
+        assert [name for name, in session.query(FileGroup.name)] == [OTHER]
+        left = session.query(Segment).filter(
+            Segment.file_id == entry.id).all()
+        assert len(left) == 5
+        assert entry.segments == 5
+        assert entry.size == sum(segment.size for segment in left)
+
+        collection = session.query(Collection).one()
+        assert (collection.segments, collection.size) == (5, entry.size)
 
     finally:
         indexer.close()
@@ -2134,6 +2215,23 @@ def test_contended_errors_are_told_apart(orig, expected):
     assert contended(error) is expected
 
 
+def test_failures_are_worded_without_the_sql():
+    """
+    A database error reads as the database gave it (not the SQL statement
+    SQLAlchemy adds); any other error reads as it is
+    """
+    from sqlalchemy.exc import OperationalError
+    from newsreap.Database import failure
+
+    error = OperationalError(
+        'DELETE FROM segment WHERE file_id IN (1, 2)', {},
+        Exception('database or disk is full'))
+    assert 'DELETE' in str(error)
+    assert failure(error) == 'database or disk is full'
+    assert failure(OSError(28, 'No space left on device')) == \
+        '[Errno 28] No space left on device'
+
+
 def test_the_index_is_let_go_of_after_each_step(paths, tmp_path):
     """
     Indexing, settling and importing an NZB file leave nothing open, so
@@ -2278,6 +2376,28 @@ def kept_post(session, message_id, group):
     session.flush()
     session.add(ArchiveGroup(message_id=message_id, name=group))
     session.commit()
+
+
+def test_kept_posts_are_read_without_holding_the_archive_open(paths):
+    """
+    NNTPArchiver.posts() reads on a connection of its own, so its session
+    isn't left reading while the caller goes on (ie: downloads the rest)
+    """
+    cache(paths[GROUP], list(release('Holiday', files=1, segments=1)))
+    indexer = indexed(paths, GROUP)
+    archiver = NNTPArchiver(paths['index'])
+    try:
+        kept_post(indexer.session(), 'kept.1@example.com', GROUP)
+
+        posts = list(archiver.posts(
+            ['<kept.1@example.com>', 'unknown@example.com']))
+        assert [post.message_id for post in posts] == ['kept.1@example.com']
+        assert posts[0].subject == 'kept'
+        assert not archiver.session().in_transaction()
+
+    finally:
+        archiver.close()
+        indexer.close()
 
 
 def test_deleting_a_collection_takes_everything_kept_of_it(paths):

@@ -65,6 +65,7 @@ from os import remove
 from os import replace
 from os.path import basename
 from os.path import getsize
+from os.path import isdir
 from os.path import isfile
 from os.path import join
 from shutil import rmtree
@@ -76,9 +77,7 @@ from .NNTPArchivePost import sent
 from .NNTPArchiver import NNTPArchiver
 from .NNTPBinaryContent import NNTPBinaryContent
 from .NNTPDownloader import NNTPDownloader
-from .NNTPDownloader import STAGING_DATABASE
 from .NNTPDownloader import STAGING_PARTS
-from .NNTPDownloader import STAGING_FILES
 from .NNTPDownloader import STAGING_WORK
 from .NNTPDownloader import COMMIT_EVERY
 from .NNTPDownloader import safe_name
@@ -95,7 +94,6 @@ from .NNTPErrorsFile import PART_MISSING
 from .NNTPArticle import NNTPArticle
 from .Utils import utcnow
 from .NNTPEmptyContent import NNTPEmptyContent
-from .NNTPGetDatabase import NNTPGetDatabase
 from .NNTPIndexer import SegmentNote
 from .NNTPIndexer import parse_subject
 from .NNTPRetry import DEFAULT_RETRY_WINDOW
@@ -106,6 +104,7 @@ from .NNTPnzb import NZBSegmentNumber
 from .codecs.CodecUU import CodecUU
 from .codecs.CodecYenc import CodecYenc
 from .objects.get.DownloadedSegment import DownloadedSegment
+from .objects.get.ListedSegment import ListedSegment
 from .objects.index.ArchivedPost import ArchiveKind
 
 import logging
@@ -355,10 +354,7 @@ class NNTPFetcher(NNTPDownloader):
         self.folder = join(self.download_dir, tidy_name(name))
 
         # Known already; written as they are
-        for message_id, entry in texts.items():
-            self.write_text(message_id, entry['text'], **{
-                key: entry.get(key) for key in (
-                    'subject', 'poster', 'posted', 'groups')})
+        self._write_texts(texts)
 
         # What a run before remembers of the articles no server had
         for folder, wanted in ((TEXT_FOLDER, self.text),
@@ -385,9 +381,18 @@ class NNTPFetcher(NNTPDownloader):
                         self.learned_segments = {}
 
             if self._staged_db is not None and not self.incomplete:
-                # Still ours while it goes (another run can't take it up)
-                self._staged_db.close()
-                rmtree(self.staging, ignore_errors=True)
+                if ListedSegment.others(self._staged_db.session()):
+                    # Another download (of the same name and first article)
+                    # listed articles we didn't; what it has there stays
+                    logger.info(
+                        '%s is kept; another download is using it.' %
+                        self.staging)
+
+                else:
+                    # Still ours while it goes (another run can't take it
+                    # up)
+                    self._staged_db.close()
+                    rmtree(self.staging, ignore_errors=True)
 
         finally:
             if self._staged_db is not None:
@@ -441,10 +446,7 @@ class NNTPFetcher(NNTPDownloader):
                         'text': post.text, 'subject': post.subject,
                         'poster': post.poster, 'posted': post.posted}
 
-        for message_id, entry in kept.items():
-            self.write_text(message_id, entry['text'], **{
-                key: entry.get(key) for key in (
-                    'subject', 'poster', 'posted', 'groups')})
+        self._write_texts(kept)
 
         # What is still needed of each article ('file', 'text', 'article')
         needed = {}
@@ -484,28 +486,36 @@ class NNTPFetcher(NNTPDownloader):
                     else:
                         needed.setdefault(message_id, set()).add('text')
 
+        # The staging directory: opened by the first page that puts files
+        # together and kept for the rest, or by the first page at all when
+        # a run before left one (so it notes every page; see ListedSegment)
+        staging = join(self.staging_dir, '%s-%s' % (tidy_name(name), key))
+        wanted = bool(needed and assemble)
+        if self._staged_db is None and (wanted or isdir(staging)):
+            self.staging = staging
+            opened = self._open_staging(name)
+            if opened is None:
+                if wanted:
+                    # Another run has it
+                    self.unfinished.update(needed)
+                    self.incomplete += len(needed)
+                    return False
+
+                # Not needed for this page; tried again with the next
+                self.staging, self.problem = None, ''
+
+            else:
+                self._staged_db, self._staged_lock = opened
+                ListedSegment.begin(self._staged_db.session())
+
+        if self._staged_db is not None:
+            # What this page lists
+            ListedSegment.add(self._staged_db.session(), self.covered)
+            self._staged_db.session().commit()
+
         if not needed:
             self._note_unsaved()
             return True
-
-        if assemble and self._staged_db is None:
-            # Opened by the first page that puts files together, and kept
-            # for the rest
-            self.staging = join(self.staging_dir, '%s-%s' % (
-                tidy_name(name), key))
-            for folder in (STAGING_PARTS, STAGING_FILES, STAGING_WORK):
-                makedirs(join(self.staging, folder), exist_ok=True)
-
-            self._staged_lock = self._lock()
-            if self._staged_lock is None:
-                self.problem = '%s is already being downloaded (%s)' % (
-                    name, self.staging)
-                self.unfinished.update(needed)
-                self.incomplete += len(needed)
-                return False
-
-            self._staged_db = NNTPGetDatabase(engine='sqlite:///%s' % join(
-                self.staging, STAGING_DATABASE), reset=False)
 
         session = self._staged_db.session() if assemble else None
         self._step('download', lambda: self._grab(
@@ -518,6 +528,19 @@ class NNTPFetcher(NNTPDownloader):
         self._note_unsaved()
         self.incomplete += len(self.unfinished)
         return True
+
+    def _write_texts(self, texts):
+        """
+        Writes the text of articles that is known already, as it is (see
+        write_text())
+
+        - texts: {message_id: {'text', 'subject', 'poster', 'posted',
+          'groups'}} (any but 'text' may be left out)
+        """
+        for message_id, entry in texts.items():
+            self.write_text(message_id, entry['text'], **{
+                field: entry.get(field) for field in (
+                    'subject', 'poster', 'posted', 'groups')})
 
     def _note_unsaved(self):
         """

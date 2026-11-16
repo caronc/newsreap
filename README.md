@@ -221,7 +221,12 @@ What happens:
   `~/.cache/newsreap/downloads/`), so several downloads never get in each
   other's way.
 - Stopped part way?  Run it again: what was fetched is kept, and only what
-  is missing or was cut short is fetched again.
+  is missing or was cut short is fetched again.  An NZB file listing more
+  of the same post (ie: a collection that grew) carries on there too.
+- The staging directory is named after the download and its first
+  article.  If another download comes to the same one (it doesn't list
+  everything the first one did), it is refused and nothing of either is
+  touched; `nr get --force` starts it over (what is there is removed).
 - Damaged files are repaired with their par2 files, fetching only the
   recovery volumes the repair needs.
 - Archives (rar, 7z, zip) are extracted, keeping the directories they hold;

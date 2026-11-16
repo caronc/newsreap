@@ -69,6 +69,18 @@ def connect_to(server, **kwargs):
     return NNTPConnection(**options)
 
 
+@pytest.fixture(autouse=True)
+def downloads_stay_in_the_test(tmp_path_factory, monkeypatch):
+    """
+    Every test's Downloads directory (where a download goes when nothing
+    says where) is a temporary one of its own, never yours
+    """
+    xdg = tmp_path_factory.mktemp('xdg')
+    (xdg / 'user-dirs.dirs').write_text(
+        'XDG_DOWNLOAD_DIR="%s"\n' % (xdg / 'Downloads'))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(xdg))
+
+
 @pytest.fixture
 def nntp_server():
     """

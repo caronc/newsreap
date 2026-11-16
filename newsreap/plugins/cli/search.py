@@ -37,6 +37,7 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
+from newsreap.Database import failure
 from newsreap.objects.group.Article import Article
 from newsreap.objects.index.Collection import Collection
 from newsreap.objects.index.ArchiveGroup import ArchiveGroup
@@ -1165,7 +1166,7 @@ def forget(ctx, found):
                 logger.error(
                     "Could not remove collection %s (%s); run 'nr delete "
                     "%s' to finish it." % (
-                        entry.key, getattr(e, 'orig', None) or e, entry.key))
+                        entry.key, failure(e), entry.key))
                 failed += 1
                 continue
 
@@ -1191,7 +1192,7 @@ def forget(ctx, found):
                 except (OSError, SQLAlchemyError) as e:
                     # Searching again finds what is left of them
                     logger.error('Could not remove %d %s(s) (%s).' % (
-                        len(chunk), kind, getattr(e, 'orig', None) or e))
+                        len(chunk), kind, failure(e)))
                     failed += len(chunk)
                     continue
 

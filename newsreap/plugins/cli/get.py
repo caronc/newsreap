@@ -77,9 +77,13 @@ NEWSREAP_CLI_PLUGINS = 'get'
                    "can't have arrived since (they are otherwise only asked "
                    'for again while the post is new, or once you add a '
                    'server).')
+@click.option('--force', '-f', is_flag=True,
+              help='Start over a download whose staging directory holds '
+                   'another download of the same name (what is there is '
+                   'removed).')
 @click.argument('sources', nargs=-1)
 def get(ctx, sources, hooks, output, password, repair, extract, cleanup,
-        retry_missing):
+        retry_missing, force):
     """
     Download what NZB files (or indexed collections) hold.
 
@@ -101,6 +105,12 @@ def get(ctx, sources, hooks, output, password, repair, extract, cleanup,
     par2 couldn't fix), the files put together are placed for you to look
     at and nothing is removed.
 
+    \b
+    A staging directory is named after the download and its first
+    article.  Another download that comes to the same one (it lists
+    articles this one doesn't) is refused, so neither spoils the other's
+    work; --force starts it over instead.
+
     One article is fetched by its Message-ID with 'nr fetch' ('nr show'
     tells you about it).
     """
@@ -117,12 +127,12 @@ def get(ctx, sources, hooks, output, password, repair, extract, cleanup,
 
     failed = download(ctx, [s for s in sources if s not in unknown], hooks,
                       output, password, repair, extract, cleanup,
-                      retry_missing)
+                      retry_missing, force)
     exit(1 if failed or unknown else 0)
 
 
 def download(ctx, sources, hooks, output, password, repair, extract,
-             cleanup, retry_missing=False):
+             cleanup, retry_missing=False, force=False):
     """
     Downloads NZB files (or indexed collections, by their id) with an
     NNTPDownloader; returns how many didn't work out
@@ -154,7 +164,7 @@ def download(ctx, sources, hooks, output, password, repair, extract,
                 continue
 
         try:
-            done = downloader.download(nzb_file, name=name)
+            done = downloader.download(nzb_file, name=name, force=force)
 
         except KeyboardInterrupt:
             # What came is kept in the staging directory
@@ -169,6 +179,12 @@ def download(ctx, sources, hooks, output, password, repair, extract,
         failed += 1
         logger.error('%s: %s.' % (name or basename(source),
                                   downloader.problem))
+        if downloader.others:
+            # Nothing was done; the other download's work is left alone
+            click.echo("Run it again with --force to start it over (what is "
+                       'in %s is removed).' % downloader.staging)
+            continue
+
         if downloader.folder:
             click.echo('What could be put together is in %s' % (
                 downloader.folder))

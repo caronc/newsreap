@@ -2549,6 +2549,8 @@ class NNTPIndexer:
           file with more than that is a page of its own)
         - the files come in the order an NZB file lists them, so the first
           article of the first page is what its GID comes from
+        - the session is committed before each page is handed over, so
+          nothing is held open while it is downloaded
 
         Nothing is yielded when there is no such collection.
         """
@@ -2616,7 +2618,11 @@ class NNTPIndexer:
                     continue
 
                 if files and held + len(segments) > size:
-                    # Full; this file starts the next page
+                    # Full; this file starts the next page.  What was read
+                    # is let go of first: the page can take hours to
+                    # download, and an open read keeps SQLite's journal
+                    # growing (and a database server's old rows) meanwhile
+                    session.commit()
                     yield files, known
                     files, known, held = [], {}, 0
 
@@ -2629,6 +2635,8 @@ class NNTPIndexer:
                     'segments': segments, 'partial': partial})
                 held += len(segments)
 
+        # (let go of first too; see above)
+        session.commit()
         if files:
             yield files, known
 
@@ -3084,7 +3092,12 @@ class NNTPIndexer:
             # counted again (and go if that leaves them empty)
             changed = sorted({c for c, in session.query(
                 CollectionFile.collection_id)
-                .filter(CollectionFile.id.in_(lost))})
+                .filter(CollectionFile.id.in_(ids))})
+
+            # The files another group has too stay, but are counted again:
+            # an indexer may have tagged one with its group while an earlier
+            # pass (or a run that stopped) was removing its articles
+            kept = [file_id for file_id in ids if file_id in others]
             session.query(FileGroup)\
                 .filter(FileGroup.name == group)\
                 .filter(FileGroup.file_id.in_(ids))\
@@ -3094,7 +3107,7 @@ class NNTPIndexer:
                 .delete(synchronize_session=False)
             files += len(lost)
 
-            self._recount(session, (), changed)
+            self._recount(session, kept, changed)
             emptied = [c for c, in session.query(Collection.id)
                        .filter(Collection.id.in_(changed))
                        .filter(Collection.files == 0)
@@ -4051,10 +4064,11 @@ class NNTPIndexer:
 
             # All but the one kept go, with one statement
             kept = min(emptied)
-            session.query(Collection)\
-                .filter(Collection.id.in_(
-                    [found[2] for found in emptied if found != kept]))\
-                .delete()
+            gone = [found[2] for found in emptied if found != kept]
+            if gone:
+                session.query(Collection)\
+                    .filter(Collection.id.in_(gone))\
+                    .delete(synchronize_session=False)
 
         return kept[2] if kept is not None else None
 

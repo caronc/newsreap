@@ -18,6 +18,7 @@
 from .objects.get.ObjectBase import ObjectBase
 from .objects.get.Vsp import Vsp
 from .objects.get.DownloadedSegment import DownloadedSegment  # noqa: F401
+from .objects.get.ListedSegment import ListedSegment  # noqa: F401
 from .Database import Database
 
 

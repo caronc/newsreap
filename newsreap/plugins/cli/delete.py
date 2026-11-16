@@ -37,6 +37,7 @@ except ImportError:
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from newsreap.Database import failure
 from newsreap.CliOptions import confirmed
 from newsreap.NNTPIndexer import NNTPIndexer
 from newsreap.NNTPIndexer import Purged
@@ -104,7 +105,7 @@ def delete(ctx, ids):
                 logger.error(
                     "Could not remove collection %d (%s); run 'nr delete "
                     "%d' again to finish it." % (
-                        collection_id, getattr(e, 'orig', None) or e,
+                        collection_id, failure(e),
                         collection_id))
                 continue
 

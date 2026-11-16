@@ -40,6 +40,7 @@ except ImportError:
     sys.path.insert(0, dirname(dirname(dirname(dirname(abspath(__file__))))))
     from newsreap.Logging import NEWSREAP_CLI
 
+from newsreap.Database import failure
 from newsreap.Database import DatabaseUnavailable
 from newsreap.NNTPDatabase import UnknownGroups
 from newsreap.CliOptions import matching
@@ -255,7 +256,7 @@ def nzb_import(ctx, paths, name, merge):
                 # was undone, and the next one is tried.  A database error
                 # is shown as the database gave it (without the SQL)
                 logger.error("Could not import '%s': %s" % (
-                    path, getattr(e, 'orig', None) or e))
+                    path, failure(e)))
                 failed += 1
                 continue
 

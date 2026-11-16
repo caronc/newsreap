@@ -117,6 +117,15 @@ def contended(error):
     return 'database is locked' in text or 'database is busy' in text
 
 
+def failure(error):
+    """
+    Returns what went wrong, worded for a person: a database error as the
+    database gave it (without the SQL statement SQLAlchemy adds to it),
+    anything else (ie: no room left on the disk) as it is
+    """
+    return str(getattr(error, 'orig', None) or error)
+
+
 def database_size(url_or_path):
     """
     Returns the size of a database: its file's (SQLite; 0 if it isn't

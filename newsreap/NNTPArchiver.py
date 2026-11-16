@@ -1158,14 +1158,19 @@ class NNTPArchiver:
     def posts(self, message_ids):
         """
         Yields the kept posts of the Message-IDs given (the ones we have)
+
+        They are read on a connection of their own that is let go of as
+        soon as each chunk is read (see streamed()), so nothing is held
+        open while the caller works on them (ie: downloads the rest).
+        Being their own, they are only what was committed.
         """
         session = self.session()
         if session is None:
             return
 
         for ids in chunked(m.strip().strip('<>') for m in message_ids):
-            yield from session.query(ArchivedPost)\
-                .filter(ArchivedPost.message_id.in_(ids))
+            yield from streamed(session.query(ArchivedPost)
+                                .filter(ArchivedPost.message_id.in_(ids)))
 
     def files(self, message_id):
         """

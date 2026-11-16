@@ -18,7 +18,10 @@ Downloads what an NZB file lists and puts it back together:
    NZB and the GID of its first article (see staging_key()).  Running the
    same NZB again carries on where it stopped, and so does 'nr search
    --download' of the collection it came from (the two share it).  A lock
-   keeps two runs of it apart.
+   keeps two runs of it apart.  What each run lists is noted there (see
+   ListedSegment): an NZB listing everything listed before (ie: the same
+   post with more files) carries on, while another download that comes to
+   the same name is refused rather than mixed in (force starts it over).
 2. The data files (and the small par2 index files) are fetched first, two
    articles for each connection at a time.  Each decoded part is written
    under a temporary name, renamed once it is whole and only then noted
@@ -68,6 +71,7 @@ from os.path import getmtime
 from os.path import exists
 from os.path import isdir
 from os.path import isfile
+from os.path import islink
 from os.path import join
 from shutil import copyfile
 from shutil import rmtree
@@ -101,6 +105,7 @@ from .codecs.CodecPar import ParReturnCode
 from .codecs.CodecRar import CodecRar
 from .codecs.CodecZip import CodecZip
 from .objects.get.DownloadedSegment import DownloadedSegment
+from .objects.get.ListedSegment import ListedSegment
 
 import logging
 from newsreap.Logging import NEWSREAP_ENGINE
@@ -416,7 +421,12 @@ class NNTPDownloader:
         # Why it didn't all work (empty when it did)
         self.problem = ''
 
-    def download(self, nzb_file, name=None):
+        # How many articles another download (of the same name and first
+        # article) listed in our staging directory that ours doesn't, when
+        # it was refused for that (see download()'s force)
+        self.others = 0
+
+    def download(self, nzb_file, name=None, force=False):
         """
         Downloads what an NZB file lists; returns True once it is all put
         together and placed in the download directory (see folder).  When
@@ -424,6 +434,10 @@ class NNTPDownloader:
         instead and the staging directory is kept.
 
         - name: what to call it (the NZB file's name by default)
+        - force: start over when its staging directory holds another
+          download (one of the same name and first article that listed
+          articles this one doesn't); what is there is removed.  Without
+          it, such a download is refused (see problem).
         """
         self.reset()
         files, passwords, title = self.read(nzb_file)
@@ -437,19 +451,39 @@ class NNTPDownloader:
         # Named after what it downloads, so running it again carries on
         self.staging = join(self.staging_dir, '%s-%s' % (
             name, staging_key(files)))
-        for folder in (STAGING_PARTS, STAGING_FILES, STAGING_WORK):
-            makedirs(join(self.staging, folder), exist_ok=True)
-
-        lock = self._lock()
-        if lock is None:
-            self.problem = '%s is already being downloaded (%s)' % (
-                name, self.staging)
+        opened = self._open_staging(name)
+        if opened is None:
             return False
 
-        db = NNTPGetDatabase(
-            engine='sqlite:///%s' % join(self.staging, STAGING_DATABASE),
-            reset=False)
+        def listed():
+            # Every article it lists
+            return (message_id for f in files
+                    for _, message_id in f['segments'])
+
+        db, lock = opened
         try:
+            # What it lists (all of it in one transaction, undone if it
+            # turns out to be another download's directory)
+            session = db.session()
+            ListedSegment.begin(session)
+            ListedSegment.add(session, listed())
+            others = ListedSegment.others(session)
+            if others:
+                session.rollback()
+                if not force:
+                    self.others = others
+                    self.problem = (
+                        '%s holds another download of the same name (%d of '
+                        'the articles it listed are not in this one)' % (
+                            self.staging, others))
+                    return False
+
+                # Nothing of the other one is used (or kept)
+                db = self._start_over(db)
+                session = db.session()
+                ListedSegment.add(session, listed())
+            session.commit()
+
             self._recall()
             for folder in (STAGING_PARTS, STAGING_FILES):
                 # Left by a run that was stopped
@@ -514,6 +548,58 @@ class NNTPDownloader:
             if entry.endswith(ERRORS_EXTENSION):
                 self.memory.update(NNTPErrorsFile(join(
                     folder, entry[:-len(ERRORS_EXTENSION)])).load().parts)
+
+    def _open_staging(self, name):
+        """
+        Opens our staging directory (see staging), making it if need be;
+        returns (its database, its lock), or None when another run has it
+        (see problem).  The lock is held until it is closed.
+        """
+        for folder in (STAGING_PARTS, STAGING_FILES, STAGING_WORK):
+            makedirs(join(self.staging, folder), exist_ok=True)
+
+        lock = self._lock()
+        if lock is None:
+            self.problem = '%s is already being downloaded (%s)' % (
+                name, self.staging)
+            return None
+
+        try:
+            return NNTPGetDatabase(engine='sqlite:///%s' % join(
+                self.staging, STAGING_DATABASE), reset=False), lock
+
+        except BaseException:
+            # (ie: a database that can't be read); the lock is let go of
+            lock.close()
+            raise
+
+    def _start_over(self, db):
+        """
+        Empties our staging directory (we hold its lock, which stays) and
+        returns its database, opened again with nothing in it
+        """
+        db.close()
+        for entry in listdir(self.staging):
+            if entry == STAGING_LOCK:
+                continue
+
+            path = join(self.staging, entry)
+            if isdir(path) and not islink(path):
+                rmtree(path, ignore_errors=True)
+                continue
+
+            try:
+                remove(path)
+
+            except FileNotFoundError:
+                # Gone already
+                pass
+
+        for folder in (STAGING_PARTS, STAGING_FILES, STAGING_WORK):
+            makedirs(join(self.staging, folder), exist_ok=True)
+
+        return NNTPGetDatabase(engine='sqlite:///%s' % join(
+            self.staging, STAGING_DATABASE), reset=False)
 
     def _lock(self):
         """
